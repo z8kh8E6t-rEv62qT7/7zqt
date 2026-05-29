@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/z7/i18n">
+    <file>../../resources/z7_strings_en.json</file>
+    <file>../../resources/z7_strings_zh-CN.json</file>
+  </qresource>
+</RCC>

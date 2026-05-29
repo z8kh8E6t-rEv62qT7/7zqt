@@ -1,0 +1,6 @@
+add_subdirectory(common)
+add_subdirectory(archive_support)
+add_subdirectory(runtime_support)
+add_subdirectory(widgets)
+add_subdirectory(filemanager)
+add_subdirectory(gui)

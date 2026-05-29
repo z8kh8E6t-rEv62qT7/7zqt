@@ -1,0 +1,143 @@
+{
+  "locale": "zh-CN",
+  "shell": {
+    "actions": {
+      "open": "打开",
+      "open_as_menu": "打开方式",
+      "extract_files": "解压文件...",
+      "extract_here": "解压到当前目录",
+      "extract_to": "解压到 \"{0}\"",
+      "test_archive": "测试",
+      "add_to_archive": "添加到压缩包...",
+      "add_to_7z": "添加到 \"{0}\"",
+      "add_to_zip": "添加到 \"{0}\"",
+      "crc_sha_menu": "CRC SHA",
+      "generate_sha256": "SHA-256 -> {0}",
+      "checksum_test": "校验文件测试"
+    }
+  },
+  "quicklook": {
+    "title": "7-Zip Quick Look",
+    "back": "返回",
+    "extract_selected": "解压选中",
+    "button_ok": "确定",
+    "banner_action_label": "操作",
+    "banner_protected_label": "受保护",
+    "column_name": "名称",
+    "column_size": "大小",
+    "column_modified": "修改时间",
+    "preview_load_failed": "无法加载压缩包预览。",
+    "unknown_list_error": "未知列表错误",
+    "no_items_selected": "未选择任何项目。",
+    "info_selected_count": "已选择 {0} 个项目",
+    "info_selected_one": "已选择 1 个项目",
+    "info_archive_ready": "压缩包已就绪",
+    "info_browsing": "正在浏览 {0}",
+    "quicklook_loading": "正在加载预览",
+    "quicklook_root_item": "压缩包根目录",
+    "quicklook_nested_archive": "嵌套压缩包",
+    "quicklook_folder_item": "文件夹",
+    "quicklook_list_start_failed": "无法启动 Quick Look 列表请求。",
+    "quicklook_export_failed": "无法导出压缩包条目。",
+    "quicklook_exporting": "正在解压选中项",
+    "quicklook_export_success_title": "解压完成",
+    "quicklook_export_success_summary": "已解压 {0} 个项目。",
+    "quicklook_export_failure_title": "解压失败",
+    "quicklook_export_done": "完成",
+    "nested_open_failed_title": "无法打开嵌套压缩包",
+    "nested_open_failed_back": "返回",
+    "nested_depth_exceeded": "预览最多支持 5 层嵌套，请用主窗口打开更深层。",
+    "folder_export_limited_message": "选中的导出内容超出 Quick Look 限制，请使用主窗口解压。",
+    "password_title": "此压缩包已加密",
+    "password_wrong_title": "密码不正确",
+    "password_subtitle_top": "{0}",
+    "password_subtitle_nested": "第 {0} 层嵌套：{1}",
+    "password_retry": "上次输入的密码不正确。",
+    "password_placeholder": "密码",
+    "password_ok": "解锁",
+    "password_read_clipboard": "读取剪贴板",
+    "password_cancel": "取消"
+  },
+  "ui": {
+    "options": {
+      "qt_startup": {
+        "group_title": "Qt 启动",
+        "preferred_style_label": "首选样式：",
+        "hidpi_policy_label": "HiDPI 圆整策略：",
+        "restart_hint": "注意：HiDPI 圆整策略需在重启后生效；样式会立即生效。"
+      },
+      "buttons": {
+        "apply": "应用"
+      }
+    },
+    "archive": {
+      "add_sources": {
+        "prompt": "选择要添加的文件或文件夹。",
+        "target_folder": "添加到压缩包文件夹：{0}",
+        "browse_folder": "浏览文件夹"
+      },
+      "open_outside": {
+        "failed_launch": "无法启动外部打开。",
+        "failed_launch_for_paths": "无法启动外部打开：\n{0}",
+        "no_external_paths": "没有可用于外部打开的路径。"
+      }
+    },
+    "navigation": {
+      "task_ipc": {
+        "worker_program_missing": "找不到 7zG 可执行文件路径。",
+        "no_input_paths": "未选择输入路径。",
+        "no_archive_path": "未选择压缩包路径。",
+        "no_archive_entries": "未选择压缩包条目。",
+        "dispatch_failed": "派发 7zG 任务失败。",
+        "open_requires_one_target": "打开命令必须且只能指定一个目标路径。",
+        "launch_7zfm_failed": "启动 7zFM 失败。",
+        "task_failed_exit_code": "7zG 任务失败（退出码 {0}）。"
+      }
+    },
+    "drag_drop": {
+      "archive_warning": {
+        "native_start_failed": "7zFM 无法启动 macOS 压缩包拖拽会话。",
+        "session_timeout": "macOS 压缩包拖拽会话在完成前超时。",
+        "target_did_not_request_promise": "放置目标未向 7zFM 请求压缩包数据。",
+        "promise_requested_but_no_write": "放置目标已接受压缩包拖拽，但 7zFM 未完成所有 promised file 写入。",
+        "direct_export_failed": "放置目标已请求压缩包数据，但 7zFM 在直接导出压缩包内容时失败。",
+        "materialization_failed": "放置目标已请求压缩包数据，但 7zFM 在为拖拽生成临时文件时失败。",
+        "canceled": "放置目标请求压缩包数据后，拖出操作被取消。",
+        "not_accepted": "放置目标未接受来自 7zFM 的压缩包拖出。"
+      }
+    },
+    "state": {
+      "operation_stage": {
+        "prepare": "准备中",
+        "running": "进行中",
+        "finalizing": "收尾中",
+        "completed": "已完成"
+      },
+      "basename_validation": {
+        "empty": "名称不能为空。",
+        "absolute_path": "请输入文件名，而不是绝对路径。",
+        "dot_or_dotdot": "'.' 和 '..' 不是有效名称。",
+        "contains_path_separator": "请输入单个文件名，而不是路径。",
+        "invalid": "请输入有效的文件名。"
+      },
+      "favorites": {
+        "no_filesystem_folder": "没有可添加到收藏夹的文件系统文件夹。",
+        "folder_missing": "收藏夹文件夹已不存在：\n{0}"
+      }
+    },
+    "benchmark": {
+      "memory_limit_exceeded": "所选基准设置的内存占用过高。"
+    },
+    "password_prompt": {
+      "wrong_password_title": "密码不正确",
+      "wrong_password_retry": "请重新输入密码。"
+    },
+    "about": {
+      "qt_edition": "7zFM Qt 版本"
+    },
+    "view": {
+      "crc_menu_title": "CRC",
+      "time_utc": "UTC"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+---
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  modernize-*,
+  readability-*,
+  misc-*,
+  -bugprone-easily-swappable-parameters,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -modernize-use-trailing-return-type
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(apps|include|src|tests)/'
+FormatStyle: none
+CheckOptions:
+  - key: readability-function-cognitive-complexity.Threshold
+    value: '40'
+  - key: readability-function-size.LineThreshold
+    value: '600'
+  - key: readability-function-size.StatementThreshold
+    value: '200'

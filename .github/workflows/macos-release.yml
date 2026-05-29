@@ -1,0 +1,142 @@
+name: macOS Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "GitHub release tag to create or update"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-release-${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build macOS release bundle
+    runs-on: macos-15
+    env:
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+      PRERELEASE: ${{ inputs.prerelease || false }}
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          brew install cmake ninja qt llvm lld sevenzip xcodegen
+
+          llvm_prefix="$(brew --prefix llvm)"
+          test -x "$llvm_prefix/bin/clang"
+          test -x "$llvm_prefix/bin/clang++"
+          test -f "$llvm_prefix/lib/c++/libc++.1.dylib"
+          test -f "$llvm_prefix/lib/c++/libc++abi.1.dylib"
+          test -f "$llvm_prefix/lib/unwind/libunwind.1.dylib"
+
+          echo "$llvm_prefix/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix qt)/bin" >> "$GITHUB_PATH"
+          echo "QT_ROOT=$(brew --prefix qt)" >> "$GITHUB_ENV"
+          echo "CC=$llvm_prefix/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$llvm_prefix/bin/clang++" >> "$GITHUB_ENV"
+
+      - name: Show tool versions
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          cmake --version
+          ninja --version
+          clang --version
+          7zz i
+          xcodegen --version
+          qmake -v
+
+      - name: Configure release
+        run: |
+          set -euo pipefail
+          cmake --preset release -DZ7_QT_ROOT="$QT_ROOT"
+
+      - name: Build deploy app
+        run: |
+          set -euo pipefail
+          cmake --build --preset release --target deploy_macos --parallel
+
+      - name: Build macOS integration extensions
+        run: |
+          set -euo pipefail
+          bash src/macos_integration/xcode_project/scripts/build.sh release
+
+      - name: Copy extensions into deploy app
+        run: |
+          set -euo pipefail
+          bash packaging/macos/copy_xcode_extensions.sh
+
+          test -d build/release/deploy/7zFM.app/Contents/PlugIns/MacOSIntegrationFinderSyncExtension.appex
+          test -d build/release/deploy/7zFM.app/Contents/PlugIns/MacOSIntegrationQuickLookExtension.appex
+          codesign --verify --deep --strict build/release/deploy/7zFM.app
+
+      - name: Package release app with extensions
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (
+            cd build/release/deploy
+            7zz a "$GITHUB_WORKSPACE/dist/7zqt-macos.arm64.zip" 7zFM.app
+          )
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: 7zFM-macos-release-${{ env.RELEASE_TAG }}
+          path: |
+            dist/*.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          title="7zFM Qt Edition ${RELEASE_TAG}"
+          notes="Automated macOS release build from ${GITHUB_SHA}."
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$title" \
+              --notes "$notes"
+            gh release upload "$RELEASE_TAG" dist/*.zip --clobber
+            exit 0
+          fi
+
+          create_args=(
+            release create "$RELEASE_TAG"
+            dist/*.zip
+            --title "$title"
+            --notes "$notes"
+          )
+
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            create_args+=(--target "$GITHUB_SHA")
+          fi
+
+          if [ "$PRERELEASE" = "true" ]; then
+            create_args+=(--prerelease)
+          fi
+
+          gh "${create_args[@]}"

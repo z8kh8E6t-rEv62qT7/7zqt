@@ -1,0 +1,146 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "release",
+      "displayName": "Release (Qt)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "15.0",
+        "Z7_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Dev (Qt)",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "Z7_BUILD_TESTS": "ON",
+        "Z7_MACOS_RELEASE_TUNING": "OFF"
+      }
+    },
+    {
+      "name": "release-native",
+      "displayName": "Release Native (Qt)",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/release-native",
+      "cacheVariables": {
+        "Z7_MACOS_HOST_NATIVE_OPT": "ON"
+      }
+    },
+    {
+      "name": "analysis-static",
+      "displayName": "Static Analysis (Qt)",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/analysis-static",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_FLAGS": "-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wunused -Wunused-parameter -Wunused-variable -Wunused-function -Wunused-value -Wunused-label -Wunused-result -Wunused-but-set-variable -Wunused-but-set-parameter",
+        "CMAKE_CXX_FLAGS": "-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wunused -Wunused-parameter -Wunused-variable -Wunused-function -Wunused-value -Wunused-label -Wunused-result -Wunused-but-set-variable -Wunused-but-set-parameter",
+        "CMAKE_C_CLANG_TIDY": "clang-tidy;--config-file=${sourceDir}/.clang-tidy",
+        "CMAKE_CXX_CLANG_TIDY": "clang-tidy;--config-file=${sourceDir}/.clang-tidy"
+      }
+    },
+    {
+      "name": "coverage",
+      "displayName": "Coverage (LLVM)",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/coverage",
+      "cacheVariables": {
+        "Z7_ENABLE_LLVM_COVERAGE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "release-native",
+      "configurePreset": "release-native"
+    },
+    {
+      "name": "analysis-static",
+      "configurePreset": "analysis-static"
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage"
+    },
+    {
+      "name": "coverage-reset",
+      "configurePreset": "coverage",
+      "targets": [
+        "coverage-reset"
+      ]
+    },
+    {
+      "name": "coverage-report",
+      "configurePreset": "coverage",
+      "targets": [
+        "coverage-report"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
+      "environment": {
+        "LLVM_PROFILE_FILE": "${sourceDir}/build/coverage/profiles/%p.profraw"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "coverage",
+      "displayName": "Coverage (LLVM)",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "coverage"
+        },
+        {
+          "type": "build",
+          "name": "coverage"
+        },
+        {
+          "type": "build",
+          "name": "coverage-reset"
+        },
+        {
+          "type": "test",
+          "name": "coverage"
+        },
+        {
+          "type": "build",
+          "name": "coverage-report"
+        }
+      ]
+    }
+  ]
+}

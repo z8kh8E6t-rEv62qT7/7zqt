@@ -1,0 +1,175 @@
+这份代码任何人都可以使用、修改、分发、再发布，也可以拿去商用。
+不要求署名，也不要求保留作者名字或版权说明。
+但不能把这份代码，或者其中有实质内容的部分，改成 GPL、LGPL 或 AGPL 来发布。
+分发时，请在每个源代码文件头部保留这个许可证链接：
+https://gist.githubusercontent.com/z8kh8E6t-rEv62qT7/aa642a26fc0e002b4605230294e6ffcd/raw/LICENSE
+
+This code may be freely used, modified, distributed, and used commercially.
+No attribution is required.
+However, it may not be relicensed or distributed under GPL, LGPL, or AGPL.
+Please keep this license link in the header of each source code file:
+https://gist.githubusercontent.com/z8kh8E6t-rEv62qT7/aa642a26fc0e002b4605230294e6ffcd/raw/LICENSE
+
+See the full license text below.
+
+English:
+
+Non-GPL Permissive License 1.0
+
+The copyright holder may assert copyright at their discretion, but this License does not require any recipient to retain the author's name, copyright notice, attribution notice, or acknowledgment.
+
+Permission is hereby granted, free of charge, to any person or entity obtaining a copy of this software and associated source code files (the "Software"), to use, copy, modify, create derivative works of, compile, run, publish, distribute, sublicense, and sell the Software and copies thereof, subject to the following conditions:
+
+1. Definitions
+
+   "Source Form" means the form of the Software preferred for making modifications.
+
+   "Executable Form" means any form of the Software other than Source Form.
+
+   "Prohibited Copyleft Licenses" means the GNU General Public License (GPL),
+   the GNU Lesser General Public License (LGPL), and the GNU Affero General
+   Public License (AGPL), including any later versions of those licenses.
+
+   "License URL" means the uniform resource locator (URL) designated by the original licensor to identify the full text of this License.
+
+2. Grant of Rights
+
+   Subject to the terms of this License, you may:
+
+   (a) use, copy, modify, and distribute the Software;
+   (b) create derivative works based on the Software;
+   (c) distribute the Software or derivative works thereof in Source Form or Executable Form;
+   (d) combine, link, package, distribute, or use the Software together with other software as part of a larger work or system;
+   (e) distribute the Software or derivative works thereof under terms of your choice; and
+   (f) sell the Software, copies of the Software, or products and services based on the Software.
+
+3. License Notice
+
+   If you distribute the Software or any identifiable substantial portion of it, whether modified or unmodified, you must:
+
+   (a) retain the License URL in the header of each source code file; or
+   (b) for forms of distribution where a file header is not reasonably applicable, provide the License URL in a clear and reasonably visible manner.
+
+   This License does not require you to retain the author's name, copyright notice, attribution notice, or acknowledgment.
+
+4. No Relicensing Under the GPL Family
+
+   You may not:
+
+   (a) distribute the Software or any substantial portion of it under any Prohibited Copyleft License;
+   (b) relicense the Software or any substantial portion of it under any Prohibited Copyleft License; or
+   (c) incorporate the Software or any substantial portion of it into any work in a manner that causes the Software or such portion itself to be governed exclusively by any Prohibited Copyleft License.
+
+   For clarity, you may use, combine, link, package, or distribute the Software together with software under other licenses, provided that the Software itself is not relicensed, converted, or represented as being governed by any Prohibited Copyleft License.
+
+5. No Misrepresentation of License Status
+
+   You may not state that the Software or any substantial portion of it is licensed under any Prohibited Copyleft License, nor otherwise describe its legal status in a way that would reasonably cause a recipient to believe that it is governed by any such license.
+
+6. Disclaimer of Warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+   INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+   PURPOSE, AND NONINFRINGEMENT.
+
+7. Limitation of Liability
+
+   IN NO EVENT SHALL THE AUTHOR, ORIGINAL LICENSOR, OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+   DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+   OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+8. Termination
+
+   Any attempt to distribute or relicense the Software in violation of this License shall automatically terminate the rights granted to you under this License.
+
+9. Reinstatement
+
+   If you cease all violations of this License, your rights shall be reinstated provisionally unless and until the author, original licensor, or copyright holder explicitly and finally terminates your rights in writing.
+
+10. Rule of Interpretation
+
+   This License shall be interpreted so as to maximize permission to use, modify, distribute, and commercialize the Software, provided that the Software may not be relicensed under any Prohibited Copyleft License.
+
+中文：
+
+非 GPL 宽松许可证 1.0
+
+版权所有人可依其意愿主张版权，但本许可证不要求任何接收者保留作者姓名、版权声明、署名声明或鸣谢信息。
+
+现免费授予任何获得本软件及相关源代码文件（以下简称“软件”）副本的个人或实体如下许可：
+在遵守本许可证条件的前提下，可以使用、复制、修改、基于其创作衍生作品、编译、运行、发布、分发、再许可和销售本软件及其副本。
+
+1. 定义
+
+   “源码形式”是指对软件进行修改时的首选形式。
+
+   “可执行形式”是指除源码形式以外的任何软件形式。
+
+   “被禁止的 Copyleft 许可证”是指 GNU General Public License（GPL）、
+   GNU Lesser General Public License（LGPL）以及 GNU Affero General Public License（AGPL），
+   包括这些许可证的后续版本。
+
+   “许可证 URL”是指原始许可人为标识本许可证全文而指定的统一资源定位符（URL）。
+
+2. 权利授予
+
+   在遵守本许可证的前提下，你可以：
+
+   (a) 使用、复制、修改和分发本软件；
+   (b) 基于本软件创作衍生作品；
+   (c) 以源码形式或可执行形式分发本软件或其衍生作品；
+   (d) 将本软件与其他软件组合、链接、打包、共同分发或作为其组成部分使用；
+   (e) 按你自行选择的条款分发本软件或其衍生作品；以及
+   (f) 销售本软件、本软件的副本，或基于本软件的产品与服务。
+
+3. 许可证告知
+
+   如果你分发本软件或其可识别的实质性部分，无论是否经过修改，你必须：
+
+   (a) 在每个源代码文件的文件头部保留许可证 URL；或
+   (b) 对于不适合添加文件头部声明的分发形式，以清晰且合理可见的方式提供许可证 URL。
+
+   本许可证不要求你保留作者姓名、版权声明、署名声明或鸣谢信息。
+
+4. 禁止 GPL 家族再许可
+
+   你不得：
+
+   (a) 依据任何被禁止的 Copyleft 许可证分发本软件或其任何实质性部分；
+   (b) 依据任何被禁止的 Copyleft 许可证重新许可本软件或其任何实质性部分；或
+   (c) 以任何方式将本软件或其任何实质性部分纳入某一作品之中，使得本软件或其该等部分
+       本身必须仅受任何被禁止的 Copyleft 许可证约束。
+
+   为避免疑义，你可以将本软件与采用其他许可证的软件共同使用、组合、链接、打包或分发，
+   但前提是本软件本身不得被重新许可、转换，或被表述为受任何被禁止的 Copyleft 许可证约束。
+
+5. 不得虚假表述许可状态
+
+   你不得声称本软件或其任何实质性部分系依据任何被禁止的 Copyleft 许可证授权，
+   亦不得以其他方式表述其法律效果足以使接收者合理认为其受该等许可证约束。
+
+6. 免责担保声明
+
+   本软件按“现状”提供，不附带任何形式的明示或默示担保，
+   包括但不限于关于适销性、特定用途适用性以及不侵权的担保。
+
+7. 责任限制
+
+   在任何情况下，无论是基于合同、侵权行为或其他法律依据，
+   作者、原始许可人或版权所有人均不对因本软件、对本软件的使用或其他处置所引起、
+   产生于或与之相关的任何索赔、损害或其他责任承担责任。
+
+8. 终止
+
+   任何试图以违反本许可证的方式分发或重新许可本软件的行为，
+   将自动终止本许可证授予你的权利。
+
+9. 权利恢复
+
+   如果你停止所有违反本许可证的行为，则你的权利将暂时恢复，
+   除非且直到作者、原始许可人或版权所有人以书面形式明确且最终终止你的权利。
+
+10. 解释原则
+
+   对本许可证的解释，应以最大程度允许本软件被使用、修改、分发和商业化为原则，
+   但不得将本软件重新许可为任何被禁止的 Copyleft 许可证。

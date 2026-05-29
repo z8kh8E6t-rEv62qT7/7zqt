@@ -1,0 +1,143 @@
+{
+  "locale": "en",
+  "shell": {
+    "actions": {
+      "open": "Open",
+      "open_as_menu": "Open As",
+      "extract_files": "Extract Files...",
+      "extract_here": "Extract Here",
+      "extract_to": "Extract To \"{0}\"",
+      "test_archive": "Test",
+      "add_to_archive": "Add to Archive...",
+      "add_to_7z": "Add to \"{0}\"",
+      "add_to_zip": "Add to \"{0}\"",
+      "crc_sha_menu": "CRC SHA",
+      "generate_sha256": "SHA-256 -> {0}",
+      "checksum_test": "Checksum : Test"
+    }
+  },
+  "quicklook": {
+    "title": "7-Zip Quick Look",
+    "back": "Back",
+    "extract_selected": "Extract Selected",
+    "button_ok": "OK",
+    "banner_action_label": "Action",
+    "banner_protected_label": "Protected",
+    "column_name": "Name",
+    "column_size": "Size",
+    "column_modified": "Modified",
+    "preview_load_failed": "Cannot load archive preview.",
+    "unknown_list_error": "Unknown list error",
+    "no_items_selected": "No items selected.",
+    "info_selected_count": "{0} items selected",
+    "info_selected_one": "1 item selected",
+    "info_archive_ready": "Archive ready",
+    "info_browsing": "Browsing {0}",
+    "quicklook_loading": "Loading Preview",
+    "quicklook_root_item": "Archive root",
+    "quicklook_nested_archive": "Nested archive",
+    "quicklook_folder_item": "Folder",
+    "quicklook_list_start_failed": "Cannot start quicklook list request.",
+    "quicklook_export_failed": "Failed to export archive item.",
+    "quicklook_exporting": "Extracting Selected",
+    "quicklook_export_success_title": "Extraction Complete",
+    "quicklook_export_success_summary": "{0} items extracted.",
+    "quicklook_export_failure_title": "Extraction Failed",
+    "quicklook_export_done": "Done",
+    "nested_open_failed_title": "Cannot Open Nested Archive",
+    "nested_open_failed_back": "Back",
+    "nested_depth_exceeded": "Preview supports up to 5 nested archive levels. Use the main window to open deeper layers.",
+    "folder_export_limited_message": "The selected export exceeds Quick Look limits. Use the main window to extract it.",
+    "password_title": "This Archive Is Encrypted",
+    "password_wrong_title": "Incorrect Password",
+    "password_subtitle_top": "{0}",
+    "password_subtitle_nested": "Nested level {0}: {1}",
+    "password_retry": "The previous password was incorrect.",
+    "password_placeholder": "Password",
+    "password_ok": "Unlock",
+    "password_read_clipboard": "Read Clipboard",
+    "password_cancel": "Cancel"
+  },
+  "ui": {
+    "options": {
+      "qt_startup": {
+        "group_title": "Qt Startup",
+        "preferred_style_label": "Preferred style:",
+        "hidpi_policy_label": "HiDPI rounding policy:",
+        "restart_hint": "Note: HiDPI rounding policy takes effect after restart; style applies immediately."
+      },
+      "buttons": {
+        "apply": "Apply"
+      }
+    },
+    "archive": {
+      "add_sources": {
+        "prompt": "Select files or folders to add.",
+        "target_folder": "Add to archive folder: {0}",
+        "browse_folder": "Browse for a folder"
+      },
+      "open_outside": {
+        "failed_launch": "Failed to launch Open outside.",
+        "failed_launch_for_paths": "Failed to launch Open outside for:\n{0}",
+        "no_external_paths": "No external paths available for Open outside."
+      }
+    },
+    "navigation": {
+      "task_ipc": {
+        "worker_program_missing": "Cannot find 7zG executable path.",
+        "no_input_paths": "No input paths were selected.",
+        "no_archive_path": "No archive path was selected.",
+        "no_archive_entries": "No archive entries were selected.",
+        "dispatch_failed": "Failed to dispatch 7zG task.",
+        "open_requires_one_target": "Open command requires exactly one target path.",
+        "launch_7zfm_failed": "Failed to launch 7zFM.",
+        "task_failed_exit_code": "7zG task failed (exit code {0})."
+      }
+    },
+    "drag_drop": {
+      "archive_warning": {
+        "native_start_failed": "7zFM failed to start the macOS archive drag session.",
+        "session_timeout": "The macOS archive drag session timed out before completion.",
+        "target_did_not_request_promise": "The drop target did not request archive data from 7zFM.",
+        "promise_requested_but_no_write": "The drop target accepted the archive drag, but 7zFM did not complete every promised file write.",
+        "direct_export_failed": "The drop target requested archive data, but 7zFM failed while directly exporting archive content.",
+        "materialization_failed": "The drop target requested archive data, but 7zFM failed while materializing temporary files for the drag.",
+        "canceled": "The archive drag-out was canceled after the drop target requested archive data.",
+        "not_accepted": "The drop target did not accept archive drag-out from 7zFM."
+      }
+    },
+    "state": {
+      "operation_stage": {
+        "prepare": "Preparing",
+        "running": "Running",
+        "finalizing": "Finalizing",
+        "completed": "Completed"
+      },
+      "basename_validation": {
+        "empty": "Name cannot be empty.",
+        "absolute_path": "Please enter a file name, not an absolute path.",
+        "dot_or_dotdot": "'.' and '..' are not valid names.",
+        "contains_path_separator": "Please enter a single file name, not a path.",
+        "invalid": "Please enter a valid file name."
+      },
+      "favorites": {
+        "no_filesystem_folder": "No filesystem folder can be added to favorites.",
+        "folder_missing": "Favorite folder no longer exists:\n{0}"
+      }
+    },
+    "benchmark": {
+      "memory_limit_exceeded": "Memory usage is too high for selected benchmark settings."
+    },
+    "password_prompt": {
+      "wrong_password_title": "Incorrect password",
+      "wrong_password_retry": "Please try again."
+    },
+    "about": {
+      "qt_edition": "7zFM Qt Edition"
+    },
+    "view": {
+      "crc_menu_title": "CRC",
+      "time_utc": "UTC"
+    }
+  }
+}

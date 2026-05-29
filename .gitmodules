@@ -1,0 +1,4 @@
+[submodule "src/third_party/original_7zip"]
+	path = src/third_party/original_7zip
+	url = git@github.com:z8kh8E6t-rEv62qT7/7zip.git
+	shallow = true

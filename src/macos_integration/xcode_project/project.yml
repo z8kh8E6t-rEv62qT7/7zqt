@@ -1,0 +1,229 @@
+name: Z7MacOSIntegration
+
+options:
+  bundleIdPrefix: app.sevenzip
+  deploymentTarget:
+    macOS: "15.0"
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    PRODUCT_NAME: $(TARGET_NAME)
+    SWIFT_VERSION: "5.9"
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    CLANG_CXX_LIBRARY: libc++
+    CLANG_ENABLE_OBJC_ARC: YES
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    "EXCLUDED_ARCHS[sdk=macosx*]": x86_64
+    OTHER_LDFLAGS:
+      - $(inherited)
+      - -Wl,-headerpad_max_install_names
+  configs:
+    debug:
+      Z7_CMAKE_BUILD_ROOT: $(SRCROOT)/../../../build/dev
+    release:
+      Z7_CMAKE_BUILD_ROOT: $(SRCROOT)/../../../build/release
+
+targets:
+  MacOSIntegrationHostApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: host_app/Sources
+    info:
+      path: host_app/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: "$(DEVELOPMENT_LANGUAGE)"
+        CFBundleExecutable: "$(EXECUTABLE_NAME)"
+        CFBundleIdentifier: "$(PRODUCT_BUNDLE_IDENTIFIER)"
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: "$(PRODUCT_NAME)"
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSHumanReadableCopyright: ""
+    dependencies:
+      - target: MacOSIntegrationFinderSyncExtension
+        embed: true
+      - target: MacOSIntegrationQuickLookExtension
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.sevenzip
+        PRODUCT_NAME: MacOSIntegrationHostApp
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+    postBuildScripts:
+      - name: Embed Shared Runtime
+        shell: /bin/bash
+        inputFiles:
+          - $(Z7_CMAKE_BUILD_ROOT)/lib/libz7_shared_runtime.dylib
+          - $(Z7_CMAKE_BUILD_ROOT)/lib/libz7_third_party.dylib
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libz7_shared_runtime.dylib
+          - $(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libz7_third_party.dylib
+        script: |
+          set -euo pipefail
+          frameworks_dir="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
+          mkdir -p "${frameworks_dir}"
+          ditto "${Z7_CMAKE_BUILD_ROOT}/lib/libz7_shared_runtime.dylib" \
+            "${frameworks_dir}/libz7_shared_runtime.dylib"
+          ditto "${Z7_CMAKE_BUILD_ROOT}/lib/libz7_third_party.dylib" \
+            "${frameworks_dir}/libz7_third_party.dylib"
+
+  MacOSIntegrationFinderSyncExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: finder_sync/Sources
+      - path: Shared/BrokerClient.h
+      - path: Shared/BrokerClient.mm
+      - path: Shared/BrokerMenuDTO.h
+      - path: Shared/BrokerMenuDTO.mm
+      - path: Shared/BrokerPasswordDTO.h
+      - path: Shared/BrokerPasswordDTO.mm
+      - path: Shared/BrokerQuickLookDTO.h
+      - path: Shared/BrokerQuickLookDTO.mm
+      - path: Shared/BrokerXPCProtocol.h
+      - path: Shared/BrokerXPCProtocol.mm
+    dependencies:
+      - target: BrokerService
+        embed: true
+    settings:
+      base:
+        INFOPLIST_FILE: finder_sync/Resources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: app.sevenzip.extension
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_ENTITLEMENTS: finder_sync/Resources/MacOSIntegrationFinderSyncExtension.entitlements
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SWIFT_OBJC_BRIDGING_HEADER: finder_sync/Sources/MacOSIntegrationBridgingHeader.h
+    postBuildScripts:
+      - name: Copy Shared I18N
+        shell: /bin/bash
+        inputFiles:
+          - $(SRCROOT)/../../i18n/resources/z7_strings_en.json
+          - $(SRCROOT)/../../i18n/resources/z7_strings_zh-CN.json
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/i18n/z7_strings_en.json
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/i18n/z7_strings_zh-CN.json
+        script: |
+          set -euo pipefail
+          resources_dir="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/i18n"
+          mkdir -p "${resources_dir}"
+          ditto "${SRCROOT}/../../i18n/resources/z7_strings_en.json" \
+            "${resources_dir}/z7_strings_en.json"
+          ditto "${SRCROOT}/../../i18n/resources/z7_strings_zh-CN.json" \
+            "${resources_dir}/z7_strings_zh-CN.json"
+
+  MacOSIntegrationQuickLookExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: quick_look/Sources
+      - path: Shared/BrokerClient.h
+      - path: Shared/BrokerClient.mm
+      - path: Shared/BrokerMenuDTO.h
+      - path: Shared/BrokerMenuDTO.mm
+      - path: Shared/BrokerPasswordDTO.h
+      - path: Shared/BrokerPasswordDTO.mm
+      - path: Shared/BrokerQuickLookDTO.h
+      - path: Shared/BrokerQuickLookDTO.mm
+      - path: Shared/BrokerXPCProtocol.h
+      - path: Shared/BrokerXPCProtocol.mm
+    dependencies:
+      - target: BrokerService
+        embed: true
+    settings:
+      base:
+        INFOPLIST_FILE: quick_look/Resources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: app.sevenzip.quicklook
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_ENTITLEMENTS: quick_look/Resources/MacOSIntegrationQuickLookExtension.entitlements
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SWIFT_OBJC_BRIDGING_HEADER: quick_look/Sources/MacOSIntegrationQuickLookBridgingHeader.h
+    postBuildScripts:
+      - name: Copy Shared I18N
+        shell: /bin/bash
+        inputFiles:
+          - $(SRCROOT)/../../i18n/resources/z7_strings_en.json
+          - $(SRCROOT)/../../i18n/resources/z7_strings_zh-CN.json
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/i18n/z7_strings_en.json
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/i18n/z7_strings_zh-CN.json
+        script: |
+          set -euo pipefail
+          resources_dir="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/i18n"
+          mkdir -p "${resources_dir}"
+          ditto "${SRCROOT}/../../i18n/resources/z7_strings_en.json" \
+            "${resources_dir}/z7_strings_en.json"
+          ditto "${SRCROOT}/../../i18n/resources/z7_strings_zh-CN.json" \
+            "${resources_dir}/z7_strings_zh-CN.json"
+  BrokerService:
+    type: xpc-service
+    platform: macOS
+    sources:
+      - path: BrokerService
+      - path: Shared/BrokerMenuDTO.h
+      - path: Shared/BrokerMenuDTO.mm
+      - path: Shared/BrokerPasswordDTO.h
+      - path: Shared/BrokerPasswordDTO.mm
+      - path: Shared/BrokerQuickLookDTO.h
+      - path: Shared/BrokerQuickLookDTO.mm
+      - path: Shared/BrokerXPCProtocol.h
+      - path: Shared/BrokerXPCProtocol.mm
+    info:
+      path: BrokerService/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: "$(DEVELOPMENT_LANGUAGE)"
+        CFBundleExecutable: "$(EXECUTABLE_NAME)"
+        CFBundleIdentifier: "$(PRODUCT_BUNDLE_IDENTIFIER)"
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: "$(PRODUCT_NAME)"
+        CFBundlePackageType: XPC!
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        XPCService:
+          ServiceType: Application
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.sevenzip.broker
+        PRODUCT_NAME: BrokerService
+        SKIP_INSTALL: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/../include
+          - $(SRCROOT)/../../task_ipc_runtime/include
+          - /opt/homebrew/lib/QtCore.framework/Headers
+        FRAMEWORK_SEARCH_PATHS:
+          - /opt/homebrew/lib
+        LIBRARY_SEARCH_PATHS:
+          - $(Z7_CMAKE_BUILD_ROOT)/lib
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@loader_path/../../../../../../../Frameworks"
+          - $(Z7_CMAKE_BUILD_ROOT)/lib
+          - /opt/homebrew/lib
+        OTHER_LDFLAGS: >-
+          $(inherited)
+          -lz7_shared_runtime
+          -framework QtCore
+          -framework Foundation
+          -framework CoreFoundation
+
+aggregateTargets:
+  MacOSIntegrationExtensions:
+    targets:
+      - MacOSIntegrationHostApp
+    scheme: {}
