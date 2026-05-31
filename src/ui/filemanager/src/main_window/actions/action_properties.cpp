@@ -6,11 +6,7 @@
 
 #include <QDirIterator>
 
-#include <memory>
 #include <optional>
-
-#include "archive_delegate_qt.h"
-#include "large_pages_settings.h"
 
 namespace z7::ui::filemanager {
 
@@ -252,78 +248,51 @@ void MainWindow::show_properties_dialog() {
     }
     selected_entries.removeDuplicates();
 
-    z7::app::ArchivePropertiesRequest request;
-    request.archive_path = z7::ui::archive_support::to_native_string(panel.archive.source_archive);
-    request.entries.reserve(selected_entries.size());
-    for (const QString& entry : selected_entries) {
-      request.entries.push_back(z7::ui::archive_support::to_utf8_string(entry));
-    }
-    request.directory = z7::ui::archive_support::to_utf8_string(panel.archive.virtual_dir);
-    request.flat_view = panel.model->flat_view();
-    request.archive_type_hint = z7::ui::archive_support::to_utf8_string(panel.archive.type_hint.trimmed());
-    if (panel.archive.current_token.is_valid()) {
-      request.session_token = panel.archive.current_token;
-    }
-
     QPointer<MainWindow> main_window(this);
-    const QString warning_caption = localized_text(541);
-    struct AsyncArchiveTaskState final {
-      z7::app::ArchiveEngine engine;
-      z7::app::ArchiveSession session;
-      std::shared_ptr<z7::app::IArchiveDelegate> delegate;
-    };
-    auto async_task = std::make_shared<AsyncArchiveTaskState>();
-    auto completion_delegate =
-        std::make_shared<z7::ui::archive_support::OutcomeRelayDelegate>(
-            this,
-            [main_window,
-             async_task,
-             title,
-             warning_caption,
-             append_archive_properties_rows](const z7::app::OperationOutcome& outcome) {
-          async_task->session = z7::app::ArchiveSession{};
-          async_task->delegate.reset();
-          if (main_window.isNull()) {
+    const QString source_archive = panel.archive.source_archive;
+    const QString virtual_dir = panel.archive.virtual_dir;
+    const bool flat_view = panel.model->flat_view();
+    const QString type_hint = panel.archive.type_hint;
+    const z7::app::ArchiveSessionToken session_token =
+        panel.archive.current_token;
+    start_task_with_runner(
+        title,
+        localized_text(541),
+        [source_archive,
+         selected_entries,
+         virtual_dir,
+         flat_view,
+         type_hint,
+         session_token](ArchiveProcessRunner* runner) {
+          return runner != nullptr &&
+                 runner->start_archive_properties(source_archive,
+                                                  selected_entries,
+                                                  virtual_dir,
+                                                  flat_view,
+                                                  type_hint,
+                                                  session_token);
+        },
+        [main_window,
+         title,
+         append_archive_properties_rows](bool ok,
+                                         int,
+                                         int,
+                                         const QString&,
+                                         const z7::app::OperationOutcome& outcome) {
+          if (main_window.isNull() || !ok) {
             return;
           }
           const auto properties_result =
               z7::app::outcome_payload_as<z7::app::ArchivePropertiesResult>(outcome);
-          if (!properties_result.has_value()) {
-            QMessageBox::warning(
-                main_window,
-                warning_caption,
-                stable_error_message(static_cast<int>(outcome.error_domain)));
-            return;
-          }
-          if (!properties_result->ok) {
-            QMessageBox::warning(
-                main_window,
-                warning_caption,
-                stable_error_message(static_cast<int>(properties_result->error.domain)));
+          if (!properties_result.has_value() || !properties_result->ok) {
             return;
           }
 
           QVector<PropertiesDialogRow> rows_for_dialog;
           append_archive_properties_rows(*properties_result, &rows_for_dialog);
-
           main_window->show_properties_table(title, rows_for_dialog);
-            },
-            nullptr,
-            z7::ui::archive_support::MissingTargetPolicy::kInvokeDirect);
-    async_task->delegate = completion_delegate;
-
-    z7::ui::runtime_support::apply_configured_large_pages_mode();
-    async_task->session = async_task->engine.start(
-        z7::app::ArchiveRequest{std::move(request)},
-        completion_delegate);
-    if (!async_task->session.valid()) {
-      const z7::app::OperationOutcome outcome = z7::app::make_backend_unavailable_outcome();
-      QMessageBox::warning(
-          this,
-          warning_caption,
-          stable_error_message(static_cast<int>(outcome.error_domain)));
-      async_task->delegate.reset();
-    }
+        },
+        RunnerTaskUiMode::kSilent);
     return;
   }
 

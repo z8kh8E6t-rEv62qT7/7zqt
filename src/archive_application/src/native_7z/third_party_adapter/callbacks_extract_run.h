@@ -153,6 +153,7 @@ class NativeExtractCallback final : public IArchiveExtractCallback,
   bool ratio_output_size_known_ = false;
   uint64_t ratio_output_size_ = 0;
   bool password_requested_ = false;
+  bool password_defined_ = false;
   bool wrong_password_ = false;
   bool io_error_ = false;
   bool ask_mode_notice_emitted_ = false;

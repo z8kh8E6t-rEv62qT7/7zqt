@@ -11,9 +11,13 @@
 #include <QLineEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QVariant>
+
+#include <cstdlib>
+#include <string>
 
 #include "archive_string_codec_qt.h"
 #include "custom_localization.h"
@@ -59,11 +63,64 @@ void center_dialog_on_parent(QDialog* dialog, QWidget* parent) {
   dialog->move(dialog_geometry.topLeft());
 }
 
+#ifdef Z7_TESTING
+struct ScriptedPasswordPromptReply {
+  bool active = false;
+  bool accepted = false;
+  QString password;
+};
+
+ScriptedPasswordPromptReply take_scripted_password_prompt_reply() {
+  const char* raw_script =
+      std::getenv("Z7_TEST_PASSWORD_PROMPT_RESPONSES");
+  if (raw_script == nullptr) {
+    return {};
+  }
+
+  static std::string active_script;
+  static QStringList responses;
+  static qsizetype index = 0;
+
+  const std::string script(raw_script);
+  if (script != active_script) {
+    active_script = script;
+    responses = QString::fromUtf8(raw_script).split(
+        QStringLiteral("||"), Qt::KeepEmptyParts);
+    index = 0;
+  }
+
+  ScriptedPasswordPromptReply reply;
+  reply.active = true;
+  if (index >= responses.size()) {
+    return reply;
+  }
+
+  const QString token = responses.at(index++);
+  if (token == QStringLiteral("<CANCEL>")) {
+    return reply;
+  }
+  reply.accepted = true;
+  reply.password = token;
+  return reply;
+}
+#endif
+
 }  // namespace
 
 std::optional<QString> show_password_prompt_dialog(
     QWidget* parent,
     const z7::app::PasswordPrompt& prompt) {
+#ifdef Z7_TESTING
+  const ScriptedPasswordPromptReply scripted =
+      take_scripted_password_prompt_reply();
+  if (scripted.active) {
+    if (!scripted.accepted) {
+      return std::nullopt;
+    }
+    return scripted.password;
+  }
+#endif
+
   if (parent == nullptr) {
     parent = QApplication::activeModalWidget();
   }

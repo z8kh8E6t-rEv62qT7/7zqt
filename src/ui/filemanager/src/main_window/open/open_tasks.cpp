@@ -254,7 +254,8 @@ void MainWindow::on_test_requested() {
     const QStringList entries =
         archive_test_entries_for_panel(active_panel_index_);
     z7::task_ipc_runtime::TaskIpcOpenPayload open_payload;
-    if (!build_archive_scoped_open_payload_for_panel(active_panel_index_,
+    if (entries.isEmpty() ||
+        !build_archive_scoped_open_payload_for_panel(active_panel_index_,
                                                      &open_payload)) {
       QMessageBox::information(this, z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(7202)), z7::ui::runtime_support::L(3014));
       return;
@@ -295,10 +296,14 @@ void MainWindow::on_hash_with_method_requested(const QString& method) {
     payload.refresh_after_finish = false;
     payload.hash = z7::task_ipc_runtime::TaskIpcHashPayload{};
     payload.hash->hash_method = method.trimmed();
-    payload.hash->input_paths = active_panel_controller().oper_smart_real_item_paths();
+    payload.hash->input_paths =
+        active_panel_controller().oper_smart_real_item_paths();
+    if (payload.hash->input_paths.isEmpty()) {
+      return;
+    }
     (void)launch_gui_subprocess_task(
         z7::ui::runtime_support::strip_mnemonic(
-            z7::ui::runtime_support::L(7501)),
+            z7::ui::runtime_support::L(7500)),
         payload);
     return;
   }
@@ -315,7 +320,7 @@ void MainWindow::on_hash_with_method_requested(const QString& method) {
 
   const QString caption =
       z7::ui::runtime_support::strip_mnemonic(
-          z7::ui::runtime_support::L(7501));
+          z7::ui::runtime_support::L(7500));
   z7::task_ipc_runtime::TaskIpcPayload payload;
   payload.command = z7::task_ipc_runtime::TaskIpcCommandKind::kHash;
   payload.refresh_after_finish = false;

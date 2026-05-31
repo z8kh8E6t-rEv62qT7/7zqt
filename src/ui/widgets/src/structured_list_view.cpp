@@ -203,6 +203,7 @@ void StructuredListView::mousePressEvent(QMouseEvent* event) {
     return;
   }
 
+  setFocus(Qt::MouseFocusReason);
   left_pressed_ = true;
   press_viewport_pos_ = pos;
   defer_single_collapse_ = false;

@@ -127,6 +127,13 @@ if(Z7_MACOS_DEPLOY_RUNNER)
   endfunction()
 
   function(_z7_macos_deploy_rewrite_runtime_loads binary_path otool_output)
+    _z7_macos_deploy_is_sfx_module(
+      _z7_macos_deploy_skip_runtime_rewrite
+      "${binary_path}")
+    if(_z7_macos_deploy_skip_runtime_rewrite)
+      return()
+    endif()
+
     _z7_macos_deploy_loader_path_to_frameworks(
       _z7_macos_deploy_frameworks_loader_path
       "${binary_path}")
@@ -185,6 +192,205 @@ if(Z7_MACOS_DEPLOY_RUNNER)
         "${Z7_INSTALL_NAME_TOOL_EXECUTABLE}"
         ${_z7_macos_deploy_change_args}
         "${binary_path}")
+    endif()
+  endfunction()
+
+  function(_z7_macos_deploy_is_sfx_module output_variable binary_path)
+    set(${output_variable} FALSE PARENT_SCOPE)
+    if(NOT EXISTS "${binary_path}")
+      return()
+    endif()
+
+    get_filename_component(_z7_macos_deploy_binary_real
+      "${binary_path}"
+      REALPATH)
+    get_filename_component(_z7_macos_deploy_sfx_real
+      "${Z7_MACOS_DEPLOY_APP_CONTENTS}/MacOS/7z.sfx"
+      REALPATH)
+    if(_z7_macos_deploy_binary_real STREQUAL _z7_macos_deploy_sfx_real)
+      set(${output_variable} TRUE PARENT_SCOPE)
+    endif()
+  endfunction()
+
+  function(_z7_macos_deploy_qt_load_target output_variable load_path)
+    get_filename_component(_z7_macos_deploy_load_name "${load_path}" NAME)
+    if(_z7_macos_deploy_load_name STREQUAL "QtCore")
+      set(${output_variable} "${Z7_MACOS_DEPLOY_SFX_QT_CORE_LOAD}" PARENT_SCOPE)
+    elseif(_z7_macos_deploy_load_name STREQUAL "QtGui")
+      set(${output_variable} "${Z7_MACOS_DEPLOY_SFX_QT_GUI_LOAD}" PARENT_SCOPE)
+    elseif(_z7_macos_deploy_load_name STREQUAL "QtWidgets")
+      set(${output_variable} "${Z7_MACOS_DEPLOY_SFX_QT_WIDGETS_LOAD}" PARENT_SCOPE)
+    else()
+      set(${output_variable} "" PARENT_SCOPE)
+    endif()
+  endfunction()
+
+  function(_z7_macos_deploy_sfx_load_output output_variable)
+    _z7_macos_deploy_find_required_program(
+      Z7_OTOOL_EXECUTABLE
+      otool)
+    set(_z7_macos_deploy_sfx_path
+      "${Z7_MACOS_DEPLOY_APP_CONTENTS}/MacOS/7z.sfx")
+    execute_process(
+      COMMAND
+        "${Z7_OTOOL_EXECUTABLE}"
+        -L
+        "${_z7_macos_deploy_sfx_path}"
+      RESULT_VARIABLE _z7_macos_deploy_sfx_otool_result
+      OUTPUT_VARIABLE _z7_macos_deploy_sfx_otool_output
+      ERROR_VARIABLE _z7_macos_deploy_sfx_otool_error)
+    if(NOT _z7_macos_deploy_sfx_otool_result EQUAL 0)
+      message(FATAL_ERROR
+        "otool -L failed for ${_z7_macos_deploy_sfx_path}:\n"
+        "${_z7_macos_deploy_sfx_otool_error}")
+    endif()
+    set(${output_variable}
+      "${_z7_macos_deploy_sfx_otool_output}"
+      PARENT_SCOPE)
+  endfunction()
+
+  function(_z7_macos_deploy_restore_sfx_absolute_loads)
+    _z7_macos_deploy_require(Z7_MACOS_DEPLOY_SFX_QT_CORE_LOAD)
+    _z7_macos_deploy_require(Z7_MACOS_DEPLOY_SFX_QT_GUI_LOAD)
+    _z7_macos_deploy_require(Z7_MACOS_DEPLOY_SFX_QT_WIDGETS_LOAD)
+    _z7_macos_deploy_find_required_program(
+      Z7_INSTALL_NAME_TOOL_EXECUTABLE
+      install_name_tool)
+
+    set(_z7_macos_deploy_sfx_path
+      "${Z7_MACOS_DEPLOY_APP_CONTENTS}/MacOS/7z.sfx")
+    if(NOT EXISTS "${_z7_macos_deploy_sfx_path}")
+      message(FATAL_ERROR "SFX module is missing: ${_z7_macos_deploy_sfx_path}")
+    endif()
+
+    _z7_macos_deploy_sfx_load_output(_z7_macos_deploy_sfx_otool_output)
+    set(_z7_macos_deploy_change_args "")
+    string(REPLACE "\n" ";" _z7_macos_deploy_otool_lines
+      "${_z7_macos_deploy_sfx_otool_output}")
+    foreach(_z7_macos_deploy_otool_line IN LISTS _z7_macos_deploy_otool_lines)
+      string(STRIP
+        "${_z7_macos_deploy_otool_line}"
+        _z7_macos_deploy_otool_line)
+      if(_z7_macos_deploy_otool_line STREQUAL "" OR
+         _z7_macos_deploy_otool_line MATCHES ":$")
+        continue()
+      endif()
+
+      string(REGEX REPLACE
+        " \\(.*$"
+        ""
+        _z7_macos_deploy_old_load
+        "${_z7_macos_deploy_otool_line}")
+      _z7_macos_deploy_qt_load_target(
+        _z7_macos_deploy_new_load
+        "${_z7_macos_deploy_old_load}")
+      if(NOT _z7_macos_deploy_new_load STREQUAL "")
+        _z7_macos_deploy_append_runtime_change(
+          _z7_macos_deploy_change_args
+          "${_z7_macos_deploy_old_load}"
+          "${_z7_macos_deploy_new_load}")
+      endif()
+    endforeach()
+
+    if(_z7_macos_deploy_change_args)
+      _z7_macos_deploy_run_process(
+        "restoring absolute Homebrew Qt loads in ${_z7_macos_deploy_sfx_path}"
+        "${Z7_INSTALL_NAME_TOOL_EXECUTABLE}"
+        ${_z7_macos_deploy_change_args}
+        "${_z7_macos_deploy_sfx_path}")
+    endif()
+  endfunction()
+
+  function(_z7_macos_deploy_verify_sfx_absolute_loads)
+    set(_z7_macos_deploy_sfx_path
+      "${Z7_MACOS_DEPLOY_APP_CONTENTS}/MacOS/7z.sfx")
+    foreach(_z7_macos_deploy_required_qt IN ITEMS
+        "${Z7_MACOS_DEPLOY_SFX_QT_CORE_LOAD}"
+        "${Z7_MACOS_DEPLOY_SFX_QT_GUI_LOAD}"
+        "${Z7_MACOS_DEPLOY_SFX_QT_WIDGETS_LOAD}")
+      if(NOT EXISTS "${_z7_macos_deploy_required_qt}")
+        message(FATAL_ERROR
+          "SFX Qt dependency is missing: ${_z7_macos_deploy_required_qt}")
+      endif()
+    endforeach()
+
+    _z7_macos_deploy_sfx_load_output(_z7_macos_deploy_sfx_otool_output)
+    string(REPLACE "\n" ";" _z7_macos_deploy_otool_lines
+      "${_z7_macos_deploy_sfx_otool_output}")
+    set(_z7_macos_deploy_seen_widgets FALSE)
+    foreach(_z7_macos_deploy_otool_line IN LISTS _z7_macos_deploy_otool_lines)
+      string(STRIP
+        "${_z7_macos_deploy_otool_line}"
+        _z7_macos_deploy_otool_line)
+      if(_z7_macos_deploy_otool_line STREQUAL "" OR
+         _z7_macos_deploy_otool_line MATCHES ":$")
+        continue()
+      endif()
+
+      string(REGEX REPLACE
+        " \\(.*$"
+        ""
+        _z7_macos_deploy_load
+        "${_z7_macos_deploy_otool_line}")
+      get_filename_component(
+        _z7_macos_deploy_load_name
+        "${_z7_macos_deploy_load}"
+        NAME)
+      if(_z7_macos_deploy_load MATCHES "^(@loader_path|@rpath)/.*Qt[^/]+\\.framework/")
+        message(FATAL_ERROR
+          "SFX must use absolute Homebrew Qt loads, not app-relative Qt:\n"
+          "  ${_z7_macos_deploy_load}\n"
+          "${_z7_macos_deploy_sfx_otool_output}")
+      endif()
+      if(_z7_macos_deploy_load MATCHES "/Contents/Frameworks/")
+        message(FATAL_ERROR
+          "SFX must not depend on the app bundle Frameworks directory:\n"
+          "  ${_z7_macos_deploy_load}\n"
+          "${_z7_macos_deploy_sfx_otool_output}")
+      endif()
+
+      _z7_macos_deploy_qt_load_target(
+        _z7_macos_deploy_expected_qt_load
+        "${_z7_macos_deploy_load}")
+      if(NOT _z7_macos_deploy_expected_qt_load STREQUAL "")
+        if(NOT _z7_macos_deploy_load STREQUAL _z7_macos_deploy_expected_qt_load)
+          message(FATAL_ERROR
+            "SFX Qt load is not the configured Homebrew Qt path:\n"
+            "  load: ${_z7_macos_deploy_load}\n"
+            "  expected: ${_z7_macos_deploy_expected_qt_load}\n"
+            "${_z7_macos_deploy_sfx_otool_output}")
+        endif()
+        if(_z7_macos_deploy_load_name STREQUAL "QtWidgets")
+          set(_z7_macos_deploy_seen_widgets TRUE)
+        endif()
+      endif()
+
+      if(_z7_macos_deploy_load_name STREQUAL "libz7_shared_runtime.dylib" OR
+         _z7_macos_deploy_load_name STREQUAL "libz7_third_party.dylib")
+        message(FATAL_ERROR
+          "SFX must stay independent from app shared libraries:\n"
+          "  ${_z7_macos_deploy_load}\n"
+          "${_z7_macos_deploy_sfx_otool_output}")
+      endif()
+
+      if(_z7_macos_deploy_load_name STREQUAL "libc++.1.dylib" OR
+         _z7_macos_deploy_load_name STREQUAL "libc++abi.1.dylib" OR
+         _z7_macos_deploy_load_name STREQUAL "libc++abi.dylib" OR
+         _z7_macos_deploy_load_name STREQUAL "libunwind.1.dylib" OR
+         _z7_macos_deploy_load_name STREQUAL "libunwind.dylib")
+        if(NOT _z7_macos_deploy_load MATCHES "^/usr/lib/")
+          message(FATAL_ERROR
+            "SFX must use the system C++ runtime, not bundled/Homebrew runtime:\n"
+            "  ${_z7_macos_deploy_load}\n"
+            "${_z7_macos_deploy_sfx_otool_output}")
+        endif()
+      endif()
+    endforeach()
+
+    if(NOT _z7_macos_deploy_seen_widgets)
+      message(FATAL_ERROR
+        "SFX is missing a direct QtWidgets load:\n"
+        "${_z7_macos_deploy_sfx_otool_output}")
     endif()
   endfunction()
 
@@ -259,6 +465,9 @@ if(Z7_MACOS_DEPLOY_RUNNER)
   _z7_macos_deploy_require(Z7_MACOS_DEPLOY_HELPER_EXECUTABLE)
   _z7_macos_deploy_require(Z7_MACOS_DEPLOY_LIBPATHS)
   _z7_macos_deploy_require(Z7_MACOS_DEPLOY_ENFORCE_LLVM_RUNTIME)
+  _z7_macos_deploy_require(Z7_MACOS_DEPLOY_SFX_QT_CORE_LOAD)
+  _z7_macos_deploy_require(Z7_MACOS_DEPLOY_SFX_QT_GUI_LOAD)
+  _z7_macos_deploy_require(Z7_MACOS_DEPLOY_SFX_QT_WIDGETS_LOAD)
 
   string(REPLACE "|" ";" _z7_macos_deploy_libpaths
     "${Z7_MACOS_DEPLOY_LIBPATHS}")
@@ -294,6 +503,8 @@ if(Z7_MACOS_DEPLOY_RUNNER)
   if(Z7_MACOS_DEPLOY_ENFORCE_LLVM_RUNTIME)
     _z7_macos_deploy_copy_llvm_runtime()
     _z7_macos_deploy_rewrite_llvm_runtime()
+    _z7_macos_deploy_restore_sfx_absolute_loads()
+    _z7_macos_deploy_verify_sfx_absolute_loads()
     _z7_macos_deploy_verify_llvm_runtime()
   endif()
 
@@ -397,6 +608,67 @@ if(NOT Z7_MACDEPLOYQT_EXECUTABLE)
     "Z7_MACDEPLOYQT_EXECUTABLE to the macdeployqt executable.")
 endif()
 
+function(_z7_macos_deploy_qt_target_file output_variable target_name)
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" _z7_macos_deploy_config_upper)
+  set(_z7_macos_deploy_location_properties
+    "IMPORTED_LOCATION_${_z7_macos_deploy_config_upper}"
+    IMPORTED_LOCATION_RELEASE
+    IMPORTED_LOCATION_NOCONFIG
+    IMPORTED_LOCATION)
+
+  foreach(_z7_macos_deploy_location_property IN LISTS
+      _z7_macos_deploy_location_properties)
+    get_target_property(
+      _z7_macos_deploy_qt_location
+      "${target_name}"
+      "${_z7_macos_deploy_location_property}")
+    if(NOT _z7_macos_deploy_qt_location OR
+       _z7_macos_deploy_qt_location MATCHES "-NOTFOUND$")
+      continue()
+    endif()
+
+    if(IS_DIRECTORY "${_z7_macos_deploy_qt_location}" AND
+       _z7_macos_deploy_qt_location MATCHES "\\.framework$")
+      get_filename_component(
+        _z7_macos_deploy_framework_name
+        "${_z7_macos_deploy_qt_location}"
+        NAME_WE)
+      if(EXISTS
+         "${_z7_macos_deploy_qt_location}/${_z7_macos_deploy_framework_name}")
+        set(_z7_macos_deploy_qt_location
+          "${_z7_macos_deploy_qt_location}/${_z7_macos_deploy_framework_name}")
+      else()
+        set(_z7_macos_deploy_qt_location
+          "${_z7_macos_deploy_qt_location}/Versions/A/${_z7_macos_deploy_framework_name}")
+      endif()
+    endif()
+
+    if(NOT IS_ABSOLUTE "${_z7_macos_deploy_qt_location}")
+      message(FATAL_ERROR
+        "${target_name} resolved to a non-absolute framework path: "
+        "${_z7_macos_deploy_qt_location}")
+    endif()
+    set(${output_variable}
+      "${_z7_macos_deploy_qt_location}"
+      PARENT_SCOPE)
+    return()
+  endforeach()
+
+  message(FATAL_ERROR
+    "Could not resolve ${target_name} to a Qt framework binary. "
+    "Install Homebrew Qt or set Z7_QT_ROOT.")
+endfunction()
+
+_z7_macos_deploy_qt_target_file(
+  _z7_macos_deploy_sfx_qt_core_load
+  Qt6::Core)
+_z7_macos_deploy_qt_target_file(
+  _z7_macos_deploy_sfx_qt_gui_load
+  Qt6::Gui)
+_z7_macos_deploy_qt_target_file(
+  _z7_macos_deploy_sfx_qt_widgets_load
+  Qt6::Widgets)
+
 find_program(Z7_CODESIGN_EXECUTABLE
   NAMES codesign
   REQUIRED
@@ -451,6 +723,9 @@ add_custom_target(deploy_macos
       "-DZ7_MACOS_DEPLOY_LIBPATHS=${_z7_macos_deploy_macdeployqt_libpaths_arg}"
       "-DZ7_MACOS_DEPLOY_ENFORCE_LLVM_RUNTIME=$<CONFIG:Release>"
       "-DZ7_MACOS_DEPLOY_LLVM_ROOT=${Z7_MACOS_LLVM_ROOT}"
+      "-DZ7_MACOS_DEPLOY_SFX_QT_CORE_LOAD=${_z7_macos_deploy_sfx_qt_core_load}"
+      "-DZ7_MACOS_DEPLOY_SFX_QT_GUI_LOAD=${_z7_macos_deploy_sfx_qt_gui_load}"
+      "-DZ7_MACOS_DEPLOY_SFX_QT_WIDGETS_LOAD=${_z7_macos_deploy_sfx_qt_widgets_load}"
       -P "${CMAKE_CURRENT_LIST_FILE}"
   COMMENT "Deploying ${Z7_MACOS_DEPLOY_APP}"
   VERBATIM)

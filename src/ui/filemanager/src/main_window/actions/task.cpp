@@ -13,13 +13,28 @@ namespace {
 
 QString hash_caption_text() {
   return z7::ui::runtime_support::strip_mnemonic(
-      z7::ui::runtime_support::L(7501));
+      z7::ui::runtime_support::L(7500));
+}
+
+bool has_original_split_sequence_name(const QString& file_name) {
+  return file_name.size() >= 2 &&
+         file_name.at(file_name.size() - 1) == QLatin1Char('1') &&
+         file_name.at(file_name.size() - 2) == QLatin1Char('0');
 }
 
 }  // namespace
 
 void MainWindow::start_combine_task(const QString& source_part_path,
                                     const QString& output_dir) {
+  if (!has_original_split_sequence_name(QFileInfo(source_part_path).fileName())) {
+    QMessageBox::warning(
+        this,
+        z7::ui::runtime_support::strip_mnemonic(
+            z7::ui::runtime_support::L(550)),
+        z7::ui::runtime_support::L(7404));
+    return;
+  }
+
   start_task_with_runner(
       QStringLiteral("%1: %2").arg(z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(550)), source_part_path),
       z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(550)),
@@ -100,6 +115,10 @@ void MainWindow::start_hash_task(const QStringList& inputs,
                                  const QString& hash_method,
                                  bool recursive_dirs) {
   Q_UNUSED(recursive_dirs);
+
+  if (inputs.isEmpty()) {
+    return;
+  }
 
   z7::task_ipc_runtime::TaskIpcPayload payload;
   payload.command = z7::task_ipc_runtime::TaskIpcCommandKind::kHash;

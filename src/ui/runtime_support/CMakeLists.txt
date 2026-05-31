@@ -53,6 +53,7 @@ add_custom_command(
   VERBATIM)
 
 add_library(z7_ui_runtime_support STATIC
+  include/archive_failure_messages.h
   include/extract_memory_settings.h
   include/custom_localization.h
   include/large_pages_settings.h
@@ -60,6 +61,7 @@ add_library(z7_ui_runtime_support STATIC
   include/official_lang_catalog.h
   include/password_prompt_dialog.h
   include/task_progress_dialog_base.h
+  src/archive_failure_messages.cpp
   src/extract_memory_settings.cpp
   src/json_localization.cpp
   src/large_pages_settings.cpp
@@ -93,3 +95,9 @@ target_link_libraries(z7_ui_runtime_support
     z7_app_logic)
 
 z7_set_default_target_options(z7_ui_runtime_support)
+
+if(Z7_BUILD_TESTS)
+  target_compile_definitions(z7_ui_runtime_support
+    PUBLIC
+      Z7_TESTING)
+endif()

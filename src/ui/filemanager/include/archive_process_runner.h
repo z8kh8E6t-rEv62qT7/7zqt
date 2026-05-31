@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "archive_session.h"
 
@@ -216,6 +217,12 @@ class ArchiveProcessRunner : public QObject {
                              const QString& entry_path,
                              z7::app::ArchiveSessionToken session_token,
                              const QString& comment);
+  bool start_archive_properties(const QString& archive_path,
+                                const QStringList& archive_entries,
+                                const QString& directory,
+                                bool flat_view,
+                                const QString& archive_type_hint,
+                                z7::app::ArchiveSessionToken session_token = {});
   bool start_filesystem_comment(const QString& directory_path,
                                 const QString& item_name,
                                 const QString& comment);
@@ -253,17 +260,20 @@ class ArchiveProcessRunner : public QObject {
                                  quint64 ratio_output_size,
                                  bool ratio_compressing_mode,
                                  const QString& current_path);
+  void failure_message(const QString& message);
   // Always emitted asynchronously after runner state has been fully cleaned up.
   void finished(bool ok, int exit_code, int error_domain, const QString& summary);
 
  private:
   bool start_operation(const QString& operation,
                        const QStringList& targets,
-                       const z7::app::ArchiveRequest& request,
+                       z7::app::ArchiveRequest request,
                        std::shared_ptr<std::optional<z7::app::ListResult>>
                            out_list_result = {},
                        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>>
                            out_session_result = {});
+  bool start_active_request_attempt();
+  void finalize_outcome(const z7::app::OperationOutcome& outcome);
   bool finish_immediately(const z7::app::OperationResult& result);
 
   z7::app::ArchiveEngine engine_;
@@ -273,11 +283,15 @@ class ArchiveProcessRunner : public QObject {
   z7::app::OperationResult last_result_;
   z7::app::OperationOutcome last_outcome_;
   QString last_operation_;
+  QStringList active_targets_;
   OverwritePromptHandler overwrite_prompt_handler_;
   PromptParentProvider prompt_parent_provider_;
   std::shared_ptr<z7::app::IArchiveDelegate> active_delegate_;
   std::shared_ptr<std::optional<z7::app::ListResult>> pending_list_result_;
   std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> pending_session_result_;
+  std::optional<z7::app::ArchiveRequest> active_request_;
+  std::optional<std::string> retry_next_password_;
+  bool password_prompt_canceled_ = false;
 };
 
 }  // namespace z7::ui::filemanager

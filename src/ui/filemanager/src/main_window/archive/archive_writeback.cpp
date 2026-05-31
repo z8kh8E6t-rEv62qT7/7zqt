@@ -58,6 +58,11 @@ QString resolve_archive_update_format(const QString& type_hint,
   return QStringLiteral("7z");
 }
 
+QString default_archive_writeback_copying_caption() {
+  return z7::ui::runtime_support::strip_mnemonic(
+      z7::ui::runtime_support::L(6004));
+}
+
 QStringList normalize_archive_add_input_paths(const QStringList& input_paths,
                                              const QString& blocked_archive_path) {
   QStringList out;
@@ -249,6 +254,10 @@ bool MainWindow::can_add_external_files_to_archive_preview(int panel_index) cons
   return build_archive_writeback_plan_for_panel(panel_index).is_valid();
 }
 
+QString MainWindow::archive_writeback_copying_caption() const {
+  return default_archive_writeback_copying_caption();
+}
+
 bool MainWindow::start_add_external_files_to_archive_preview(
     int panel_index,
     const QStringList& input_paths,
@@ -283,13 +292,9 @@ bool MainWindow::start_add_external_files_to_archive_preview(
       z7::ui::archive_support::normalize_virtual_dir(
           archive_destination_virtual_dir);
 
-  const QString trimmed_caption = caption.trimmed().isEmpty()
-                                      ? z7::ui::runtime_support::strip_mnemonic(
-                                            z7::ui::runtime_support::L(7200))
-                                      : caption.trimmed();
-  const QString header = QStringLiteral("%1: %2")
-                             .arg(trimmed_caption,
-                                  QDir::toNativeSeparators(options.archive_path));
+  Q_UNUSED(caption);
+  const QString trimmed_caption = archive_writeback_copying_caption();
+  const QString header = trimmed_caption;
   const QString archive_path = options.archive_path;
   const QString archive_display_source = plan.current_display_source();
   const z7::app::ArchiveSessionToken session_token = options.session_token;
@@ -345,13 +350,9 @@ bool MainWindow::start_add_mapped_files_to_archive_preview(
   options.session_token = session_token;
   options.input_items = normalized_input_items;
 
-  const QString trimmed_caption = caption.trimmed().isEmpty()
-                                      ? z7::ui::runtime_support::strip_mnemonic(
-                                            z7::ui::runtime_support::L(7200))
-                                      : caption.trimmed();
-  const QString header = QStringLiteral("%1: %2")
-                             .arg(trimmed_caption,
-                                  QDir::toNativeSeparators(options.archive_path));
+  Q_UNUSED(caption);
+  const QString trimmed_caption = archive_writeback_copying_caption();
+  const QString header = trimmed_caption;
   const QString archive_path = options.archive_path;
   const QString archive_display_source = plan.current_display_source();
   return start_task_with_runner(

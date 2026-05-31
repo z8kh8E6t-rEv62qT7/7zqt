@@ -6,10 +6,15 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
+#include <variant>
 
 #include <QEventLoop>
 
 #include "archive_delegate_qt.h"
+#include "archive_failure_messages.h"
+#include "archive_process_runner/core_prompts.h"
+#include "archive_session_helpers.h"
 #include "extract_memory_settings.h"
 #include "large_pages_settings.h"
 
@@ -30,39 +35,175 @@ QString archive_drag_extract_error_message(
   if (error_message.trimmed().isEmpty()) {
     error_message = fallback_message;
   }
-  return error_message.trimmed();
+  return z7::ui::runtime_support::localize_archive_failure_message(
+             error_message)
+      .trimmed();
+}
+
+bool is_password_failure(const z7::app::OperationOutcome& outcome) {
+  return outcome.status == z7::app::OperationStatus::kWrongPassword ||
+         outcome.error_domain == z7::app::ArchiveErrorDomain::kPassword ||
+         outcome.error.domain == z7::app::ArchiveErrorDomain::kPassword;
+}
+
+z7::app::OperationOutcome make_canceled_outcome() {
+  const z7::app::OperationResult result =
+      z7::app::make_immediate_result(5,
+                                     z7::app::ArchiveErrorDomain::kCanceled,
+                                     "Operation canceled.");
+  return z7::app::archive_session_helpers::make_outcome(
+      result,
+      z7::app::OperationPayload{std::monostate{}});
+}
+
+std::string password_prompt_archive_path(
+    const z7::app::ArchiveRequest& request,
+    const z7::app::OperationOutcome& outcome) {
+  if (const auto* extract =
+          std::get_if<z7::app::ExtractRequest>(&request.payload)) {
+    if (!extract->archive_path.empty()) {
+      return extract->archive_path;
+    }
+    if (!extract->archive_paths.empty()) {
+      return extract->archive_paths.front();
+    }
+  }
+  if (!outcome.summary.empty()) {
+    return outcome.summary;
+  }
+  return {};
+}
+
+bool store_retry_password_in_request(z7::app::ArchiveRequest* request,
+                                     std::string password) {
+  if (request == nullptr) {
+    return false;
+  }
+  if (auto* extract =
+          std::get_if<z7::app::ExtractRequest>(&request->payload)) {
+    extract->password = std::move(password);
+    return true;
+  }
+  return false;
+}
+
+class PasswordRetryRelayDelegate final
+    : public z7::ui::archive_support::OutcomeRelayDelegate {
+ public:
+  using PasswordPromptFn =
+      std::function<std::optional<z7::app::PasswordReply>(
+          const z7::app::PasswordPrompt&)>;
+
+  PasswordRetryRelayDelegate(QObject* owner,
+                             FinishedCallback finished_cb,
+                             PasswordPromptFn password_prompt)
+      : z7::ui::archive_support::OutcomeRelayDelegate(
+            owner,
+            std::move(finished_cb),
+            nullptr,
+            z7::ui::archive_support::MissingTargetPolicy::kInvokeDirect),
+        password_prompt_(std::move(password_prompt)) {}
+
+  std::optional<z7::app::PasswordReply> request_password(
+      const z7::app::PasswordPrompt& prompt) override {
+    if (!password_prompt_) {
+      return std::nullopt;
+    }
+    return password_prompt_(prompt);
+  }
+
+ private:
+  PasswordPromptFn password_prompt_;
+};
+
+z7::app::PasswordReply prompt_for_wrong_password(
+    MainWindow* owner,
+    const z7::app::ArchiveRequest& request,
+    const z7::app::OperationOutcome& outcome) {
+  z7::app::PasswordPrompt prompt;
+  prompt.archive_path = password_prompt_archive_path(request, outcome);
+  prompt.reason = "wrong_password";
+  prompt.reason_kind = z7::app::PasswordPromptReason::kWrongPassword;
+  return show_default_password_prompt(owner, prompt);
 }
 
 z7::app::OperationOutcome run_archive_drag_extract_request_blocking(
     MainWindow* owner,
     z7::app::ArchiveRequest request) {
-  QEventLoop wait_loop;
-  z7::app::OperationOutcome outcome = z7::app::make_backend_unavailable_outcome();
-  bool finished = false;
+  std::optional<std::string> retry_next_password;
+  bool prompt_canceled = false;
 
-  auto delegate = std::make_shared<z7::ui::archive_support::OutcomeRelayDelegate>(
-      owner,
-      [&outcome, &finished, &wait_loop](const z7::app::OperationOutcome& value) {
-        outcome = value;
-        finished = true;
-        if (wait_loop.isRunning()) {
-          wait_loop.quit();
-        }
-      },
-      nullptr,
-      z7::ui::archive_support::MissingTargetPolicy::kInvokeDirect);
+  for (;;) {
+    QEventLoop wait_loop;
+    z7::app::OperationOutcome outcome = z7::app::make_backend_unavailable_outcome();
+    bool finished = false;
 
-  z7::app::ArchiveEngine engine;
-  z7::ui::runtime_support::apply_configured_large_pages_mode();
-  const z7::app::ArchiveSession session = engine.start(std::move(request), delegate);
-  if (!session.valid()) {
-    return outcome;
+    auto password_prompt =
+        [owner, &retry_next_password, &prompt_canceled](
+            const z7::app::PasswordPrompt& prompt)
+        -> std::optional<z7::app::PasswordReply> {
+      return z7::ui::archive_support::call_on_target_blocking<
+          z7::app::PasswordReply>(
+          owner,
+          prompt,
+          z7::app::PasswordReply{},
+          [owner, &retry_next_password, &prompt_canceled](
+              const z7::app::PasswordPrompt& prompt_value) {
+            if (retry_next_password.has_value()) {
+              z7::app::PasswordReply retry_reply;
+              retry_reply.kind = z7::app::PasswordReplyKind::kProvide;
+              retry_reply.password = std::move(*retry_next_password);
+              retry_next_password.reset();
+              prompt_canceled = false;
+              return retry_reply;
+            }
+            z7::app::PasswordReply reply =
+                show_default_password_prompt(owner, prompt_value);
+            prompt_canceled =
+                reply.kind != z7::app::PasswordReplyKind::kProvide;
+            return reply;
+          });
+    };
+
+    auto delegate = std::make_shared<PasswordRetryRelayDelegate>(
+        owner,
+        [&outcome, &finished, &wait_loop](
+            const z7::app::OperationOutcome& value) {
+          outcome = value;
+          finished = true;
+          if (wait_loop.isRunning()) {
+            wait_loop.quit();
+          }
+        },
+        std::move(password_prompt));
+
+    z7::app::ArchiveEngine engine;
+    z7::ui::runtime_support::apply_configured_large_pages_mode();
+    const z7::app::ArchiveSession session = engine.start(request, delegate);
+    if (!session.valid()) {
+      return outcome;
+    }
+
+    if (!finished) {
+      wait_loop.exec();
+    }
+
+    if (!is_password_failure(outcome)) {
+      return outcome;
+    }
+    if (prompt_canceled) {
+      return make_canceled_outcome();
+    }
+    const z7::app::PasswordReply reply =
+        prompt_for_wrong_password(owner, request, outcome);
+    if (reply.kind != z7::app::PasswordReplyKind::kProvide) {
+      return make_canceled_outcome();
+    }
+    prompt_canceled = false;
+    if (!store_retry_password_in_request(&request, reply.password)) {
+      retry_next_password = reply.password;
+    }
   }
-
-  if (!finished) {
-    wait_loop.exec();
-  }
-  return outcome;
 }
 
 }  // namespace
@@ -182,18 +323,51 @@ void MainWindow::materialize_archive_drag_entries_for_panel(
     z7::app::ArchiveEngine engine;
     z7::app::ArchiveSession session;
     std::shared_ptr<z7::app::IArchiveDelegate> delegate;
+    z7::app::ArchiveRequest request;
+    std::optional<std::string> retry_next_password;
+    bool prompt_canceled = false;
 
-    void begin(z7::app::ArchiveRequest&& request) {
+    void begin(z7::app::ArchiveRequest&& initial_request) {
+      request = std::move(initial_request);
+      start_attempt();
+    }
+
+    void start_attempt() {
       auto self = shared_from_this();
-      delegate = std::make_shared<z7::ui::archive_support::OutcomeRelayDelegate>(
+      auto password_prompt =
+          [self](const z7::app::PasswordPrompt& prompt)
+          -> std::optional<z7::app::PasswordReply> {
+        return z7::ui::archive_support::call_on_target_blocking<
+            z7::app::PasswordReply>(
+            self->owner.data(),
+            prompt,
+            z7::app::PasswordReply{},
+            [self](const z7::app::PasswordPrompt& prompt_value) {
+              if (self->retry_next_password.has_value()) {
+                z7::app::PasswordReply retry_reply;
+                retry_reply.kind = z7::app::PasswordReplyKind::kProvide;
+                retry_reply.password =
+                    std::move(*self->retry_next_password);
+                self->retry_next_password.reset();
+                self->prompt_canceled = false;
+                return retry_reply;
+              }
+              z7::app::PasswordReply reply =
+                  show_default_password_prompt(self->owner.data(),
+                                               prompt_value);
+              self->prompt_canceled =
+                  reply.kind != z7::app::PasswordReplyKind::kProvide;
+              return reply;
+            });
+      };
+      delegate = std::make_shared<PasswordRetryRelayDelegate>(
           owner.data(),
           [self](const z7::app::OperationOutcome& outcome) {
             self->on_finished(outcome);
           },
-          nullptr,
-          z7::ui::archive_support::MissingTargetPolicy::kInvokeDirect);
+          std::move(password_prompt));
       z7::ui::runtime_support::apply_configured_large_pages_mode();
-      session = engine.start(std::move(request), delegate);
+      session = engine.start(request, delegate);
       if (!session.valid()) {
         const z7::app::OperationOutcome unavailable = z7::app::make_backend_unavailable_outcome();
         const QString error = z7::ui::archive_support::from_utf8_string(unavailable.summary);
@@ -204,6 +378,27 @@ void MainWindow::materialize_archive_drag_entries_for_panel(
     }
 
     void on_finished(const z7::app::OperationOutcome& outcome) {
+      if (is_password_failure(outcome)) {
+        session = z7::app::ArchiveSession{};
+        delegate.reset();
+        if (prompt_canceled || owner.isNull()) {
+          complete({}, QString());
+          return;
+        }
+        const z7::app::PasswordReply reply =
+            prompt_for_wrong_password(owner.data(), request, outcome);
+        if (reply.kind != z7::app::PasswordReplyKind::kProvide) {
+          complete({}, QString());
+          return;
+        }
+        prompt_canceled = false;
+        if (!store_retry_password_in_request(&request, reply.password)) {
+          retry_next_password = reply.password;
+        }
+        start_attempt();
+        return;
+      }
+
       const auto result = z7::app::outcome_payload_as<z7::app::ExtractResult>(outcome);
       if (!result.has_value() || !result->ok) {
         QString error_message;
@@ -216,7 +411,9 @@ void MainWindow::materialize_archive_drag_entries_for_panel(
         if (error_message.trimmed().isEmpty()) {
           error_message = QStringLiteral("Failed to materialize archive drag entries.");
         }
-        complete({}, error_message);
+        complete({},
+                 z7::ui::runtime_support::localize_archive_failure_message(
+                     error_message));
         return;
       }
 

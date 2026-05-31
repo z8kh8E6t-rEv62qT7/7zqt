@@ -6,6 +6,7 @@
 #include "archive_error.h"
 #include "portable_settings.h"
 #include "archive_delegate_qt.h"
+#include "archive_failure_messages.h"
 #include "archive_format.h"
 #include "archive_session_helpers.h"
 #include "archive_string_codec_qt.h"
@@ -13,6 +14,9 @@
 #include "official_lang_catalog.h"
 #include "core_prompts.h"
 #include "helpers.h"
+
+#include <utility>
+#include <variant>
 
 namespace z7::ui::filemanager {
 
@@ -33,7 +37,15 @@ void emit_stage_and_log(ArchiveProcessRunner* owner,
     emit owner->stage_changed(stage_text);
   }
   if (!log_line.isEmpty()) {
-    emit owner->log_line(log_line);
+    const QString display_log_line =
+        log.channel == z7::app::OutputChannel::kStdErr
+            ? z7::ui::runtime_support::localize_archive_failure_message(
+                  log_line)
+            : log_line;
+    if (log.channel == z7::app::OutputChannel::kStdErr) {
+      emit owner->failure_message(display_log_line);
+    }
+    emit owner->log_line(display_log_line);
   }
 }
 
@@ -97,6 +109,119 @@ void emit_finished_queued(ArchiveProcessRunner* owner,
         emit guarded_owner->finished(ok, exit_code, error_domain, summary);
       },
       Qt::QueuedConnection);
+}
+
+bool is_password_failure(const z7::app::OperationOutcome& outcome) {
+  return outcome.status == z7::app::OperationStatus::kWrongPassword ||
+         outcome.error_domain == z7::app::ArchiveErrorDomain::kPassword ||
+         outcome.error.domain == z7::app::ArchiveErrorDomain::kPassword;
+}
+
+z7::app::OperationOutcome make_canceled_outcome(std::string summary) {
+  if (summary.empty()) {
+    summary = "Operation canceled.";
+  }
+  const z7::app::OperationResult result =
+      z7::app::make_immediate_result(5,
+                                     z7::app::ArchiveErrorDomain::kCanceled,
+                                     summary);
+  z7::app::OperationOutcome outcome;
+  outcome.status = z7::app::OperationStatus::kCanceled;
+  outcome.error_domain = z7::app::ArchiveErrorDomain::kCanceled;
+  outcome.native_code = result.native_exit_code;
+  outcome.summary = result.summary;
+  outcome.error = result.error;
+  outcome.native_execution = result.native_execution;
+  outcome.ok = false;
+  outcome.payload = std::monostate{};
+  if (!summary.empty()) {
+    outcome.diagnostics.push_back(summary);
+  }
+  return outcome;
+}
+
+std::string password_prompt_archive_path(
+    const z7::app::ArchiveRequest& request,
+    const z7::app::OperationOutcome& outcome) {
+  if (const auto* extract =
+          std::get_if<z7::app::ExtractRequest>(&request.payload)) {
+    if (!extract->archive_path.empty()) {
+      return extract->archive_path;
+    }
+    if (!extract->archive_paths.empty()) {
+      return extract->archive_paths.front();
+    }
+  }
+  if (const auto* test = std::get_if<z7::app::TestRequest>(&request.payload)) {
+    if (!test->archive_path.empty()) {
+      return test->archive_path;
+    }
+    if (!test->archive_paths.empty()) {
+      return test->archive_paths.front();
+    }
+  }
+  if (const auto* add = std::get_if<z7::app::AddRequest>(&request.payload)) {
+    return add->archive_path;
+  }
+  if (const auto* del = std::get_if<z7::app::DeleteRequest>(&request.payload)) {
+    return del->archive_path;
+  }
+  if (const auto* props =
+          std::get_if<z7::app::ArchivePropertiesRequest>(&request.payload)) {
+    return props->archive_path;
+  }
+  if (const auto* open =
+          std::get_if<z7::app::OpenArchiveRequest>(&request.payload)) {
+    return open->archive_path;
+  }
+  if (const auto* open =
+          std::get_if<z7::app::OpenArchiveFromPathRequest>(&request.payload)) {
+    return open->archive_path;
+  }
+  if (const auto* open =
+          std::get_if<z7::app::OpenArchiveFromParentRequest>(&request.payload)) {
+    return open->display_path_hint;
+  }
+  if (const auto* list = std::get_if<z7::app::ListRequest>(&request.payload)) {
+    return list->archive_path;
+  }
+  if (const auto* rename =
+          std::get_if<z7::app::RenameRequest>(&request.payload)) {
+    return rename->archive_path;
+  }
+  if (const auto* comment =
+          std::get_if<z7::app::ArchiveCommentRequest>(&request.payload)) {
+    return comment->archive_path;
+  }
+  if (const auto* entry =
+          std::get_if<z7::app::GetEntryInfoRequest>(&request.payload)) {
+    return entry->archive_path;
+  }
+  if (!outcome.summary.empty()) {
+    return outcome.summary;
+  }
+  return {};
+}
+
+bool store_retry_password_in_request(z7::app::ArchiveRequest* request,
+                                     std::string password) {
+  if (request == nullptr) {
+    return false;
+  }
+  if (auto* extract =
+          std::get_if<z7::app::ExtractRequest>(&request->payload)) {
+    extract->password = std::move(password);
+    return true;
+  }
+  if (auto* add = std::get_if<z7::app::AddRequest>(&request->payload)) {
+    add->password = std::move(password);
+    return true;
+  }
+  if (auto* del = std::get_if<z7::app::DeleteRequest>(&request->payload)) {
+    del->password = std::move(password);
+    return true;
+  }
+  return false;
 }
 
 class RunnerDelegate final
@@ -261,6 +386,46 @@ void ArchiveProcessRunner::on_task_finished(const z7::app::OperationOutcome& out
   if (!running_) {
     return;
   }
+
+  if (is_password_failure(outcome) && active_request_.has_value() &&
+      !cancel_requested_) {
+    active_delegate_.reset();
+    active_task_ = z7::app::ArchiveSession();
+    running_ = false;
+
+    if (password_prompt_canceled_) {
+      finalize_outcome(make_canceled_outcome("Operation canceled."));
+      return;
+    }
+
+    z7::app::PasswordPrompt prompt;
+    prompt.archive_path = password_prompt_archive_path(*active_request_, outcome);
+    prompt.reason = "wrong_password";
+    prompt.reason_kind = z7::app::PasswordPromptReason::kWrongPassword;
+    QWidget* parent = nullptr;
+    if (prompt_parent_provider_) {
+      parent = prompt_parent_provider_();
+    }
+    const z7::app::PasswordReply reply =
+        show_default_password_prompt(parent, prompt);
+    if (reply.kind != z7::app::PasswordReplyKind::kProvide) {
+      finalize_outcome(make_canceled_outcome("Operation canceled."));
+      return;
+    }
+
+    password_prompt_canceled_ = false;
+    if (!store_retry_password_in_request(&*active_request_, reply.password)) {
+      retry_next_password_ = reply.password;
+    }
+    start_active_request_attempt();
+    return;
+  }
+
+  finalize_outcome(outcome);
+}
+
+void ArchiveProcessRunner::finalize_outcome(
+    const z7::app::OperationOutcome& outcome) {
   last_outcome_ = outcome;
   last_result_ = z7::app::operation_result_from_outcome(outcome);
 
@@ -292,6 +457,10 @@ void ArchiveProcessRunner::on_task_finished(const z7::app::OperationOutcome& out
   active_task_ = z7::app::ArchiveSession();
   pending_list_result_.reset();
   pending_session_result_.reset();
+  active_request_.reset();
+  active_targets_.clear();
+  retry_next_password_.reset();
+  password_prompt_canceled_ = false;
   cancel_requested_ = false;
 
   emit_finished_queued(this, ok, exit_code, error_domain, summary);
@@ -300,7 +469,7 @@ void ArchiveProcessRunner::on_task_finished(const z7::app::OperationOutcome& out
 bool ArchiveProcessRunner::start_operation(
     const QString& operation,
     const QStringList& targets,
-    const z7::app::ArchiveRequest& request,
+    z7::app::ArchiveRequest request,
     std::shared_ptr<std::optional<z7::app::ListResult>> out_list_result,
     std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result) {
   if (running_) {
@@ -308,10 +477,22 @@ bool ArchiveProcessRunner::start_operation(
   }
 
   cancel_requested_ = false;
+  password_prompt_canceled_ = false;
+  retry_next_password_.reset();
   last_operation_ = operation;
+  active_targets_ = targets;
+  active_request_ = std::move(request);
   pending_list_result_ = std::move(out_list_result);
   pending_session_result_ = std::move(out_session_result);
   z7::ui::runtime_support::apply_configured_large_pages_mode();
+
+  return start_active_request_attempt();
+}
+
+bool ArchiveProcessRunner::start_active_request_attempt() {
+  if (!active_request_.has_value()) {
+    return finish_immediately(z7::app::make_backend_unavailable_result());
+  }
 
   auto overwrite_prompt = [this](
                               const z7::app::OverwritePrompt& prompt)
@@ -337,11 +518,24 @@ bool ArchiveProcessRunner::start_operation(
         prompt,
         z7::app::PasswordReply{},
         [this](const z7::app::PasswordPrompt& prompt_value) {
+          if (retry_next_password_.has_value()) {
+            z7::app::PasswordReply retry_reply;
+            retry_reply.kind = z7::app::PasswordReplyKind::kProvide;
+            retry_reply.password = std::move(*retry_next_password_);
+            retry_next_password_.reset();
+            password_prompt_canceled_ = false;
+            return retry_reply;
+          }
+
           QWidget* parent = nullptr;
           if (prompt_parent_provider_) {
             parent = prompt_parent_provider_();
           }
-          return show_default_password_prompt(parent, prompt_value);
+          z7::app::PasswordReply reply =
+              show_default_password_prompt(parent, prompt_value);
+          password_prompt_canceled_ =
+              reply.kind != z7::app::PasswordReplyKind::kProvide;
+          return reply;
         });
   };
   auto choice_prompt = [this](
@@ -375,37 +569,22 @@ bool ArchiveProcessRunner::start_operation(
                                                        std::move(choice_prompt),
                                                        std::move(memory_limit_prompt));
   running_ = true;
-  active_task_ = engine_.start(request, active_delegate_);
+  active_task_ = engine_.start(*active_request_, active_delegate_);
   if (!active_task_.valid()) {
     running_ = false;
     active_delegate_.reset();
-    pending_list_result_.reset();
-    pending_session_result_.reset();
     return finish_immediately(z7::app::make_backend_unavailable_result());
   }
 
-  emit started(QStringLiteral("native_session"), operation, targets);
+  emit started(QStringLiteral("native_session"), last_operation_, active_targets_);
   emit progress_changed(-1);
   return true;
 }
 
 bool ArchiveProcessRunner::finish_immediately(const z7::app::OperationResult& result) {
-  last_result_ = result;
-  last_outcome_ = z7::app::archive_session_helpers::make_outcome(
+  finalize_outcome(z7::app::archive_session_helpers::make_outcome(
       result,
-      z7::app::OperationPayload{std::monostate{}});
-  const bool canceled = z7::app::is_operation_canceled(result.error);
-  const bool ok = result.ok && !canceled;
-  const int exit_code = result.native_exit_code;
-  const int error_domain = static_cast<int>(result.error.domain);
-  const QString summary = QString::fromStdString(result.summary);
-  running_ = false;
-  active_delegate_.reset();
-  active_task_ = z7::app::ArchiveSession();
-  pending_list_result_.reset();
-  pending_session_result_.reset();
-  cancel_requested_ = false;
-  emit_finished_queued(this, ok, exit_code, error_domain, summary);
+      z7::app::OperationPayload{std::monostate{}}));
   return true;
 }
 

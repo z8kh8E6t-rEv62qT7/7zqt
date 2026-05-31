@@ -225,9 +225,11 @@ std::optional<OperationResult> materialize_session_backing_file(
             2);
       }
 
+      const ArchiveBackendHooks parent_hooks =
+          make_session_password_hooks(*parent, hooks);
       auto* callback = new NativeExtractCallback(parent_arc->Archive,
                                                  dir,
-                                                 hooks,
+                                                 parent_hooks,
                                                  cancel_requested,
                                                  std::move(wait_while_paused),
                                                  parent->display_path(),
@@ -236,7 +238,9 @@ std::optional<OperationResult> materialize_session_backing_file(
                                                  ExtractPathMode::kNoPaths,
                                                  std::string{},
                                                  {},
-                                                 parent->password(),
+                                                 parent->password_defined()
+                                                     ? parent->password()
+                                                     : std::string{},
                                                  ExtractZoneIdMode::kNone,
                                                  false,
                                                  1);
@@ -389,7 +393,9 @@ std::optional<OperationResult> commit_archive_session_to_parent(
   request.session_token = parent->token();
   request.format = parent_format;
   request.update_mode = "update";
-  request.password = parent->password();
+  if (parent->password_defined()) {
+    request.password = parent->password();
+  }
   request.input_items.push_back(
       AddInputItem{state.temp_file->string(),
                    ArchiveOpenSessionNativeAccess::entry_path_from_parent(session)});
@@ -449,9 +455,9 @@ ArchiveBackendHooks make_session_password_hooks(
   hooks.ask_password = [&session, base = base_hooks.ask_password](
                            const PasswordPrompt& prompt) {
     if (prompt.reason_kind == PasswordPromptReason::kWrongPassword) {
-      session.set_password({});
+      session.clear_password();
     }
-    if (!session.password().empty()) {
+    if (session.password_defined()) {
       PasswordReply reply;
       reply.kind = PasswordReplyKind::kProvide;
       reply.password = session.password();
@@ -459,7 +465,7 @@ ArchiveBackendHooks make_session_password_hooks(
     }
     if (base) {
       const PasswordReply reply = base(prompt);
-      if (reply.kind == PasswordReplyKind::kProvide && !reply.password.empty()) {
+      if (reply.kind == PasswordReplyKind::kProvide) {
         session.set_password(reply.password);
       }
       return reply;
@@ -495,6 +501,12 @@ ArchiveOpenSession::~ArchiveOpenSession() {
 
 void ArchiveOpenSession::set_password(std::string value) {
   password_ = std::move(value);
+  password_defined_ = true;
+}
+
+void ArchiveOpenSession::clear_password() {
+  password_.clear();
+  password_defined_ = false;
 }
 
 size_t ArchiveOpenSession::depth() const {

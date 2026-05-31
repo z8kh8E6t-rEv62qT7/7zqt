@@ -93,7 +93,7 @@ PasswordReply ArchiveSessionInteractionBroker::request_password(
     cached_password_.reset();
   } else {
     std::lock_guard<std::mutex> lock(password_cache_mutex_);
-    if (cached_password_.has_value() && !cached_password_->empty()) {
+    if (cached_password_.has_value()) {
       PasswordReply cached_reply;
       cached_reply.kind = PasswordReplyKind::kProvide;
       cached_reply.password = *cached_password_;
@@ -116,7 +116,7 @@ PasswordReply ArchiveSessionInteractionBroker::request_password(
   }
 
   reply = *maybe_reply;
-  if (reply.kind == PasswordReplyKind::kProvide && !reply.password.empty()) {
+  if (reply.kind == PasswordReplyKind::kProvide) {
     std::lock_guard<std::mutex> lock(password_cache_mutex_);
     cached_password_ = reply.password;
   }

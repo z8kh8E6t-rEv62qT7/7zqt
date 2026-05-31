@@ -95,6 +95,7 @@ class NativeTestExtractCallback final : public IArchiveExtractCallback,
   uint64_t ratio_output_size_ = 0;
   std::string password_;
   bool password_requested_ = false;
+  bool password_defined_ = false;
   bool wrong_password_ = false;
   std::string diagnostic_message_;
 };

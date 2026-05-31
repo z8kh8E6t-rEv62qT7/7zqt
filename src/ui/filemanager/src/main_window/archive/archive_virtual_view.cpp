@@ -6,6 +6,8 @@
 
 #include <algorithm>
 
+#include "archive_failure_messages.h"
+
 namespace z7::ui::filemanager {
 
 QString MainWindow::archive_virtual_display_path_for_panel(int panel_index) const {
@@ -161,10 +163,15 @@ bool MainWindow::apply_archive_list_result_for_panel(
       summary = QStringLiteral("Archive list failed.");
     }
     if (list_result.error.domain != z7::app::ArchiveErrorDomain::kCanceled) {
+      const QString message =
+          z7::ui::runtime_support::localize_archive_failure_message(summary)
+              .trimmed();
       QMessageBox::warning(this,
                            z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)),
-                           stable_error_message(
-                               static_cast<int>(list_result.error.domain)));
+                           message.isEmpty()
+                               ? stable_error_message(
+                                     static_cast<int>(list_result.error.domain))
+                               : message);
     }
     return false;
   }

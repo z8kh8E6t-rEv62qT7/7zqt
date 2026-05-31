@@ -597,7 +597,9 @@ DeleteResult NativeArchiveBackend::remove(const DeleteRequest& request,
     DeleteRequest writable_request = request;
     writable_request.session_token.reset();
     writable_request.archive_path = state.temp_file->string();
-    writable_request.password = session->password();
+    if (session->password_defined()) {
+      writable_request.password = session->password();
+    }
 
     DeleteResult delete_result = remove(writable_request, hooks);
     if (!delete_result.ok) {

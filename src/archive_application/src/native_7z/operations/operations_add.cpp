@@ -250,7 +250,9 @@ AddResult NativeArchiveBackend::add(const AddRequest& request,
     AddRequest writable_request = request;
     writable_request.session_token.reset();
     writable_request.archive_path = state.temp_file->string();
-    writable_request.password = session->password();
+    if (session->password_defined()) {
+      writable_request.password = session->password();
+    }
     if (writable_request.format.empty()) {
       writable_request.format = session_format_token(*session);
     }

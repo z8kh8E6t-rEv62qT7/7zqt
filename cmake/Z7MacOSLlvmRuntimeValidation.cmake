@@ -485,10 +485,21 @@ function(z7_macos_validate_llvm_runtime_bundle contents_dir)
       "Bundle Contents directory is missing: ${contents_dir}")
   endif()
 
+  _z7_macos_runtime_normalize_path(
+    _z7_macos_runtime_sfx_module
+    "${contents_dir}/MacOS/7z.sfx")
   file(GLOB_RECURSE _z7_macos_runtime_bundle_files
     LIST_DIRECTORIES false
     "${contents_dir}/*")
   foreach(_z7_macos_runtime_bundle_file IN LISTS _z7_macos_runtime_bundle_files)
+    _z7_macos_runtime_normalize_path(
+      _z7_macos_runtime_bundle_file_normalized
+      "${_z7_macos_runtime_bundle_file}")
+    if(_z7_macos_runtime_bundle_file_normalized STREQUAL
+       _z7_macos_runtime_sfx_module)
+      continue()
+    endif()
+
     z7_macos_validate_llvm_runtime_file(
       "${_z7_macos_runtime_bundle_file}"
       FORBID_ABSOLUTE_HOMEBREW_RUNTIME

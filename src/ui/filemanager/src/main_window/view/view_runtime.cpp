@@ -291,6 +291,8 @@ void MainWindow::apply_runtime_settings() {
       apply_model_display_settings_to_panel(i);
     }
     if (panel.ui.details_view != nullptr) {
+      panel.ui.details_view->set_alternative_selection_mode(
+          display_settings_.alternative_selection_mode);
       // Primary-column-owned selection means we keep SelectItems at the view
       // layer; only the user-facing "alternative selection mode" still toggles
       // single/extended selection.
@@ -320,6 +322,11 @@ void MainWindow::apply_runtime_settings() {
       panel.ui.details_view->viewport()->update();
     }
     if (panel.ui.icon_list_view != nullptr) {
+      if (auto* icon_view =
+              dynamic_cast<DragAwareListView*>(panel.ui.icon_list_view)) {
+        icon_view->set_alternative_selection_mode(
+            display_settings_.alternative_selection_mode);
+      }
       panel.ui.icon_list_view->setSelectionMode(selection_mode);
     }
     if (should_reload_archive_view) {

@@ -14,14 +14,16 @@ STDMETHODIMP NativeExtractCallback::CryptoGetTextPassword(BSTR* password) throw(
   *password = nullptr;
 
   std::string password_value;
+  bool password_defined = false;
   bool wrong_password = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     password_value = password_;
+    password_defined = password_defined_;
     wrong_password = wrong_password_;
   }
 
-  if (password_value.empty() || wrong_password) {
+  if (!password_defined || wrong_password) {
     if (hooks_.ask_password) {
       PasswordPrompt prompt;
       prompt.archive_path = archive_path_;
@@ -30,10 +32,12 @@ STDMETHODIMP NativeExtractCallback::CryptoGetTextPassword(BSTR* password) throw(
                                : PasswordPromptReason::kPasswordRequired;
       prompt.reason = wrong_password ? "wrong_password" : "password_required";
       const PasswordReply reply = hooks_.ask_password(prompt);
-      if (reply.kind == PasswordReplyKind::kProvide && !reply.password.empty()) {
+      if (reply.kind == PasswordReplyKind::kProvide) {
         password_value = reply.password;
+        password_defined = true;
         std::lock_guard<std::mutex> lock(mutex_);
         password_ = password_value;
+        password_defined_ = true;
         wrong_password_ = false;
       } else {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -48,7 +52,7 @@ STDMETHODIMP NativeExtractCallback::CryptoGetTextPassword(BSTR* password) throw(
     }
   }
 
-  if (!password_value.empty()) {
+  if (password_defined) {
     const UString pass = utf8_to_ustring(password_value);
     const HRESULT pass_res = StringToBstr(pass, password);
     if (pass_res == S_OK && *password != nullptr) {

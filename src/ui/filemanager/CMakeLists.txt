@@ -160,6 +160,11 @@ z7_filemanager_configure_object_target(z7_ui_filemanager_options_objs)
 add_library(z7_ui_filemanager_dialogs_objs OBJECT
   ${Z7_UI_FILEMANAGER_DIALOGS_SOURCES})
 z7_filemanager_configure_object_target(z7_ui_filemanager_dialogs_objs)
+if(Z7_BUILD_TESTS)
+  target_compile_definitions(z7_ui_filemanager_dialogs_objs
+    PRIVATE
+      Z7_TESTING)
+endif()
 
 add_library(z7_ui_filemanager STATIC
   $<TARGET_OBJECTS:z7_ui_filemanager_runner_objs>

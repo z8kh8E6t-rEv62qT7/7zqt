@@ -57,11 +57,15 @@ class ArchiveOpenSession {
   const std::string& password() const {
     return password_;
   }
+  bool password_defined() const {
+    return password_defined_;
+  }
   bool dirty() const {
     return dirty_;
   }
   size_t depth() const;
   void set_password(std::string value);
+  void clear_password();
 
  private:
   friend class ArchiveSessionRegistry;
@@ -76,6 +80,7 @@ class ArchiveOpenSession {
   ArchiveSessionToken token_{};
   std::string display_path_;
   std::string password_;
+  bool password_defined_ = false;
   std::string source_archive_path_;
   std::string entry_path_from_parent_;
   bool dirty_ = false;

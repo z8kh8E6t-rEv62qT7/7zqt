@@ -141,6 +141,14 @@ endif()
 function(z7_set_default_target_options target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_20)
 
+  get_target_property(
+    _z7_skip_macos_release_llvm_runtime
+    "${target_name}"
+    Z7_SKIP_MACOS_RELEASE_LLVM_RUNTIME)
+  if(NOT _z7_skip_macos_release_llvm_runtime)
+    set(_z7_skip_macos_release_llvm_runtime FALSE)
+  endif()
+
   if(Z7_STRICT_WARNINGS)
     if(MSVC)
       target_compile_options(${target_name} PRIVATE /W4 /permissive-)
@@ -149,7 +157,8 @@ function(z7_set_default_target_options target_name)
     endif()
   endif()
 
-  if(APPLE AND Z7_MACOS_RELEASE_RUNTIME_ENFORCEMENT)
+  if(APPLE AND Z7_MACOS_RELEASE_RUNTIME_ENFORCEMENT AND
+     NOT _z7_skip_macos_release_llvm_runtime)
     target_compile_options(${target_name} PRIVATE
       "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C>>:-rtlib=compiler-rt>"
       "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:CXX>>:-rtlib=compiler-rt>"
@@ -203,6 +212,7 @@ function(z7_set_default_target_options target_name)
 
   get_target_property(_z7_target_type "${target_name}" TYPE)
   if(APPLE AND Z7_MACOS_RELEASE_RUNTIME_ENFORCEMENT AND
+     NOT _z7_skip_macos_release_llvm_runtime AND
      (_z7_target_type STREQUAL "EXECUTABLE" OR
       _z7_target_type STREQUAL "SHARED_LIBRARY" OR
       _z7_target_type STREQUAL "MODULE_LIBRARY"))

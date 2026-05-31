@@ -279,7 +279,7 @@
   void update_archive_entries_from_snapshots(
       const ArchiveTempSession& session,
       const QVector<ArchiveTempFileSnapshot>& changed_snapshots,
-      const std::function<void(bool, const QString&)>& finished_cb) const;
+      const std::function<void(bool, const QString&)>& finished_cb);
   ArchiveWritebackPlan build_archive_writeback_plan_for_panel(
       int panel_index) const;
   bool can_add_external_files_to_archive_preview(int panel_index) const;
@@ -309,6 +309,7 @@
                                const QString&,
                                const z7::app::OperationOutcome&)>&
           finished_cb = {});
+  QString archive_writeback_copying_caption() const;
   bool start_rename_archive_entry_in_preview(
       int panel_index,
       const QString& archive_entry,

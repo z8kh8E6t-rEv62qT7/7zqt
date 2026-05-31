@@ -18,7 +18,8 @@ NativeUpdateOperationCallback::NativeUpdateOperationCallback(
       hooks_(hooks),
       archive_path_(std::move(archive_path)),
       mode_(mode),
-      password_(std::move(initial_password)) {}
+      password_(std::move(initial_password)),
+      password_defined_(!password_.empty()) {}
 
 bool NativeUpdateOperationCallback::totals_known() const {
   std::lock_guard<std::mutex> lock(mutex_);

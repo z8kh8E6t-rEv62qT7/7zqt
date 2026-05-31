@@ -552,7 +552,7 @@ ExtractResult NativeArchiveBackend::extract(const ExtractRequest& request,
     ExtractRequest session_request = request;
     if (!session_request.password.empty()) {
       session->set_password(session_request.password);
-    } else {
+    } else if (session->password_defined()) {
       session_request.password = session->password();
     }
 
@@ -566,7 +566,7 @@ ExtractResult NativeArchiveBackend::extract(const ExtractRequest& request,
                            cancel_requested_,
                            [this]() { return this->wait_while_paused(); });
     if (!result.ok && result.error.domain == ArchiveErrorDomain::kPassword) {
-      session->set_password({});
+      session->clear_password();
     }
     return result;
   }

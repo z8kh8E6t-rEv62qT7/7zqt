@@ -130,6 +130,7 @@ class NativeUpdateOperationCallback final : public IUpdateCallbackUI2,
   bool ratio_output_size_known_ = false;
   uint64_t ratio_output_size_ = 0;
   std::string password_;
+  bool password_defined_ = false;
   bool password_requested_ = false;
   bool wrong_password_ = false;
 };

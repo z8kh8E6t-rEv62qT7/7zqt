@@ -12,10 +12,12 @@
 #include <QTimer>
 
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "archive_error.h"
 #include "archive_string_codec_qt.h"
@@ -82,6 +84,100 @@ QString default_member_title(ArchiveMemberRunKind run_kind) {
     default:
       return QStringLiteral("7zG Copy");
   }
+}
+
+bool is_password_failure(const z7::app::OperationOutcome& outcome) {
+  return outcome.status == z7::app::OperationStatus::kWrongPassword ||
+         outcome.error_domain == z7::app::ArchiveErrorDomain::kPassword ||
+         outcome.error.domain == z7::app::ArchiveErrorDomain::kPassword;
+}
+
+z7::app::OperationOutcome make_canceled_outcome(std::string summary) {
+  if (summary.empty()) {
+    summary = "Operation canceled.";
+  }
+  const z7::app::OperationResult result =
+      z7::app::make_immediate_result(5,
+                                     z7::app::ArchiveErrorDomain::kCanceled,
+                                     summary);
+  z7::app::OperationOutcome outcome;
+  outcome.status = z7::app::OperationStatus::kCanceled;
+  outcome.error_domain = z7::app::ArchiveErrorDomain::kCanceled;
+  outcome.native_code = result.native_exit_code;
+  outcome.summary = result.summary;
+  outcome.error = result.error;
+  outcome.native_execution = result.native_execution;
+  outcome.ok = false;
+  outcome.payload = std::monostate{};
+  if (!summary.empty()) {
+    outcome.diagnostics.push_back(summary);
+  }
+  return outcome;
+}
+
+std::string password_prompt_archive_path(
+    const z7::app::ArchiveRequest& request,
+    const z7::app::OperationOutcome& outcome) {
+  if (const auto* extract =
+          std::get_if<z7::app::ExtractRequest>(&request.payload)) {
+    if (!extract->archive_path.empty()) {
+      return extract->archive_path;
+    }
+    if (!extract->archive_paths.empty()) {
+      return extract->archive_paths.front();
+    }
+  }
+  if (const auto* test = std::get_if<z7::app::TestRequest>(&request.payload)) {
+    if (!test->archive_path.empty()) {
+      return test->archive_path;
+    }
+    if (!test->archive_paths.empty()) {
+      return test->archive_paths.front();
+    }
+  }
+  if (const auto* add = std::get_if<z7::app::AddRequest>(&request.payload)) {
+    return add->archive_path;
+  }
+  if (const auto* del = std::get_if<z7::app::DeleteRequest>(&request.payload)) {
+    return del->archive_path;
+  }
+  if (const auto* open =
+          std::get_if<z7::app::OpenArchiveRequest>(&request.payload)) {
+    return open->archive_path;
+  }
+  if (const auto* open =
+          std::get_if<z7::app::OpenArchiveFromPathRequest>(&request.payload)) {
+    return open->archive_path;
+  }
+  if (const auto* open =
+          std::get_if<z7::app::OpenArchiveFromParentRequest>(&request.payload)) {
+    return open->display_path_hint;
+  }
+  if (!outcome.summary.empty()) {
+    return outcome.summary;
+  }
+  return {};
+}
+
+bool store_retry_password_in_request(z7::app::ArchiveRequest* request,
+                                     std::string password) {
+  if (request == nullptr) {
+    return false;
+  }
+  if (auto* extract =
+          std::get_if<z7::app::ExtractRequest>(&request->payload)) {
+    extract->password = std::move(password);
+    return true;
+  }
+  if (auto* add = std::get_if<z7::app::AddRequest>(&request->payload)) {
+    add->password = std::move(password);
+    return true;
+  }
+  if (auto* del = std::get_if<z7::app::DeleteRequest>(&request->payload)) {
+    del->password = std::move(password);
+    return true;
+  }
+  return false;
 }
 
 class ArchiveTaskAsyncSequencer : public QObject {
@@ -212,19 +308,34 @@ class ArchiveTaskAsyncSequencer : public QObject {
 
   void start_request(const z7::app::ArchiveRequest& request,
                      CompletionHandler on_complete) {
+    auto request_copy = std::make_shared<z7::app::ArchiveRequest>(request);
+    auto completion =
+        std::make_shared<CompletionHandler>(std::move(on_complete));
+    start_request_attempt(std::move(request_copy), std::move(completion));
+  }
+
+  void start_request_attempt(
+      std::shared_ptr<z7::app::ArchiveRequest> request,
+      std::shared_ptr<CompletionHandler> on_complete) {
     if (finished_) {
       return;
     }
     if (dialog_.isNull()) {
-      CompletionHandler completion = std::move(on_complete);
-      if (completion) {
-        completion(this, z7::app::make_backend_unavailable_outcome());
+      if (on_complete && *on_complete) {
+        (*on_complete)(this, z7::app::make_backend_unavailable_outcome());
       }
       return;
     }
 
     release_active_request();
-    active_completion_ = std::move(on_complete);
+    active_completion_ =
+        [this, request,
+         on_complete](
+            ArchiveTaskAsyncSequencer*,
+            const z7::app::OperationOutcome& outcome) mutable {
+          handle_request_outcome(
+              std::move(request), std::move(on_complete), outcome);
+        };
     active_delegate_ = make_progress_dialog_delegate(
         dialog_.data(),
         &out_,
@@ -237,10 +348,11 @@ class ArchiveTaskAsyncSequencer : public QObject {
         },
         [this]() {
           return ensure_dialog_visible_for_password_prompt();
-        });
+        },
+        password_retry_state_);
 
     z7::ui::runtime_support::apply_configured_large_pages_mode();
-    active_session_ = active_engine_.start(request, active_delegate_);
+    active_session_ = active_engine_.start(*request, active_delegate_);
     if (!active_session_.valid()) {
       active_delegate_.reset();
       CompletionHandler completion = std::move(active_completion_);
@@ -360,6 +472,68 @@ class ArchiveTaskAsyncSequencer : public QObject {
   }
 
  private:
+  void handle_request_outcome(
+      std::shared_ptr<z7::app::ArchiveRequest> request,
+      std::shared_ptr<CompletionHandler> on_complete,
+      const z7::app::OperationOutcome& outcome) {
+    if (!is_password_failure(outcome)) {
+      if (password_retry_state_) {
+        password_retry_state_->next_password.reset();
+        password_retry_state_->prompt_canceled = false;
+      }
+      if (on_complete && *on_complete) {
+        (*on_complete)(this, outcome);
+      }
+      return;
+    }
+
+    if (password_retry_state_ && password_retry_state_->prompt_canceled) {
+      password_retry_state_->next_password.reset();
+      password_retry_state_->prompt_canceled = false;
+      if (on_complete && *on_complete) {
+        (*on_complete)(this, make_canceled_outcome("Operation canceled."));
+      }
+      return;
+    }
+
+    QWidget* prompt_parent = ensure_dialog_visible_for_password_prompt();
+    if (prompt_parent == nullptr) {
+      if (on_complete && *on_complete) {
+        (*on_complete)(this, outcome);
+      }
+      return;
+    }
+
+    z7::app::PasswordPrompt prompt;
+    prompt.archive_path = password_prompt_archive_path(*request, outcome);
+    prompt.reason_kind = z7::app::PasswordPromptReason::kWrongPassword;
+    prompt.reason = "wrong_password";
+    const z7::app::PasswordReply reply =
+        show_password_prompt_dialog(prompt_parent, prompt);
+    if (reply.kind != z7::app::PasswordReplyKind::kProvide) {
+      if (password_retry_state_) {
+        password_retry_state_->next_password.reset();
+        password_retry_state_->prompt_canceled = false;
+      }
+      if (on_complete && *on_complete) {
+        (*on_complete)(this, make_canceled_outcome("Operation canceled."));
+      }
+      return;
+    }
+
+    const bool request_stores_password =
+        store_retry_password_in_request(request.get(), reply.password);
+    if (password_retry_state_) {
+      if (request_stores_password) {
+        password_retry_state_->next_password.reset();
+      } else {
+        password_retry_state_->next_password = reply.password;
+      }
+      password_retry_state_->prompt_canceled = false;
+    }
+    start_request_attempt(std::move(request), std::move(on_complete));
+  }
+
   bool should_show_failure_progress_result() const {
 #ifdef Z7_TESTING
     if (gui_app_controller_helpers::suppress_result_dialogs_for_tests()) {
@@ -479,6 +653,8 @@ class ArchiveTaskAsyncSequencer : public QObject {
   SessionControlBindings active_bindings_;
   CompletionHandler active_completion_;
   std::function<void(ArchiveTaskAsyncSequencer*)> after_close_;
+  std::shared_ptr<PasswordRetryState> password_retry_state_ =
+      std::make_shared<PasswordRetryState>();
   bool dialog_was_shown_ = false;
   bool show_delay_armed_ = false;
   bool finished_ = false;

@@ -6,15 +6,97 @@
 #include "dialogs/temp_files/temp_files_dialog.h"
 
 #include "archive_session_helpers.h"
+#include "archive_failure_messages.h"
 
 #include <QEventLoop>
 
+#include <limits>
 #include <memory>
 #include <optional>
 
 #include "task_background_mode.h"
 
 namespace z7::ui::filemanager {
+
+namespace {
+
+std::optional<qulonglong> first_split_volume_size_bytes(
+    const QString& volume_size_spec) {
+  QVector<qulonglong> values;
+  bool prev_is_number = false;
+  const QString input = volume_size_spec.trimmed();
+
+  for (qsizetype i = 0; i < input.size();) {
+    const QChar c = input.at(i++);
+    if (c.isSpace()) {
+      continue;
+    }
+    if (c == QLatin1Char('-')) {
+      break;
+    }
+
+    if (prev_is_number) {
+      prev_is_number = false;
+      unsigned num_bits = 0;
+      switch (c.toLower().toLatin1()) {
+        case 'b':
+          continue;
+        case 'k':
+          num_bits = 10;
+          break;
+        case 'm':
+          num_bits = 20;
+          break;
+        case 'g':
+          num_bits = 30;
+          break;
+        case 't':
+          num_bits = 40;
+          break;
+        default:
+          break;
+      }
+      if (num_bits != 0) {
+        qulonglong& value = values.back();
+        if (value > (std::numeric_limits<qulonglong>::max() >> num_bits)) {
+          return std::nullopt;
+        }
+        value <<= num_bits;
+        while (i < input.size() && !input.at(i).isSpace()) {
+          ++i;
+        }
+        continue;
+      }
+    }
+
+    --i;
+    const qsizetype start = i;
+    qulonglong value = 0;
+    while (i < input.size() && input.at(i).isDigit()) {
+      const int digit = input.at(i).digitValue();
+      if (value >
+          (std::numeric_limits<qulonglong>::max() -
+           static_cast<qulonglong>(digit)) /
+              10ULL) {
+        return std::nullopt;
+      }
+      value = value * 10ULL + static_cast<qulonglong>(digit);
+      ++i;
+    }
+    if (i == start || value == 0) {
+      return std::nullopt;
+    }
+    values.push_back(value);
+    prev_is_number = true;
+  }
+
+  if (values.isEmpty()) {
+    return std::nullopt;
+  }
+  return values.front();
+}
+
+}  // namespace
 
 void MainWindow::on_split_requested() {
   if (in_archive_view()) {
@@ -274,6 +356,7 @@ bool MainWindow::start_task_with_runner(const QString& header,
           : new TaskProgressDialog(this);
   const std::shared_ptr<RunningTaskContext> task =
       std::make_shared<RunningTaskContext>();
+  const auto failure_messages = std::make_shared<QStringList>();
   task->runner = created_runner;
   task->dialog = created_dialog;
   active_runner_tasks_.push_back(task);
@@ -292,8 +375,32 @@ bool MainWindow::start_task_with_runner(const QString& header,
     }
   };
 
+  created_runner->set_prompt_parent_provider([this]() -> QWidget* {
+    return this;
+  });
+
+  connect(created_runner,
+          &ArchiveProcessRunner::failure_message,
+          this,
+          [failure_messages, dialog_guard](const QString& message) {
+            const QString trimmed = message.trimmed();
+            if (trimmed.isEmpty()) {
+              return;
+            }
+            failure_messages->push_back(trimmed);
+            if (dialog_guard) {
+              dialog_guard->append_failure_result_message(trimmed);
+            }
+          });
+
   if (created_dialog != nullptr) {
     created_dialog->set_header(header);
+#ifdef Z7_TESTING
+    QStringList task_headers =
+        property("z7.fm.task.headers").toStringList();
+    task_headers << header;
+    setProperty("z7.fm.task.headers", task_headers);
+#endif
     created_dialog->set_test_mode(false);
     created_runner->set_prompt_parent_provider(
         [dialog_guard]() -> QWidget* {
@@ -408,6 +515,7 @@ bool MainWindow::start_task_with_runner(const QString& header,
            created_runner,
            dialog_guard,
            background_mode,
+           failure_messages,
            failure_caption,
            finished_cb,
            should_show_failure,
@@ -426,12 +534,36 @@ bool MainWindow::start_task_with_runner(const QString& header,
             const bool canceled =
                 static_cast<z7::app::ArchiveErrorDomain>(error_domain) ==
                 z7::app::ArchiveErrorDomain::kCanceled;
-            if (!ok && !canceled &&
+
+            QStringList result_messages = *failure_messages;
+            const QString localized_summary =
+                z7::ui::runtime_support::localize_archive_failure_message(
+                    summary)
+                    .trimmed();
+            if (!ok && !canceled && result_messages.isEmpty()) {
+              if (!localized_summary.isEmpty()) {
+                result_messages.push_back(localized_summary);
+              } else {
+                result_messages.push_back(stable_error_message(error_domain));
+              }
+            }
+
+            const bool keep_dialog_for_result =
+                dialog_guard && !canceled && (!ok || !result_messages.isEmpty());
+            if (keep_dialog_for_result) {
+              dialog_guard->set_failure_result_messages(result_messages);
+              dialog_guard->set_failure_result_mode();
+            }
+
+            if (!dialog_guard && !ok && !canceled &&
                 (!should_show_failure ||
                  should_show_failure(error_domain, summary))) {
-              const QString failure_message = summary.trimmed().isEmpty()
-                                                  ? stable_error_message(error_domain)
-                                                  : summary.trimmed();
+              const QString failure_message =
+                  !result_messages.isEmpty()
+                      ? result_messages.join(QLatin1Char('\n'))
+                      : (localized_summary.isEmpty()
+                             ? stable_error_message(error_domain)
+                             : localized_summary);
               QMessageBox::warning(this,
                                    failure_caption,
                                    failure_message);
@@ -464,7 +596,9 @@ bool MainWindow::start_task_with_runner(const QString& header,
               return;
             }
 
-            dialog_guard->deleteLater();
+            if (!keep_dialog_for_result) {
+              dialog_guard->deleteLater();
+            }
           });
 
   if (created_dialog != nullptr) {
@@ -491,6 +625,20 @@ bool MainWindow::start_task_with_runner(const QString& header,
 void MainWindow::start_split_task(const QString& source_file_path,
                                   const QString& output_dir,
                                   const QString& volume_size_spec) {
+  const QFileInfo source_info(source_file_path);
+  const std::optional<qulonglong> first_volume_size =
+      first_split_volume_size_bytes(volume_size_spec);
+  if (first_volume_size.has_value() && source_info.exists() &&
+      source_info.isFile() &&
+      static_cast<qulonglong>(source_info.size()) <= *first_volume_size) {
+    QMessageBox::warning(
+        this,
+        z7::ui::runtime_support::strip_mnemonic(
+            z7::ui::runtime_support::L(549)),
+        z7::ui::runtime_support::L(7306));
+    return;
+  }
+
   start_task_with_runner(
       QStringLiteral("%1: %2").arg(z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(549)), source_file_path),
       z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(549)),

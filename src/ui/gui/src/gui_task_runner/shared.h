@@ -5,6 +5,8 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include <QMetaObject>
@@ -57,6 +59,11 @@ struct SessionControlBindings {
   QMetaObject::Connection remote_cancel_connection;
 };
 
+struct PasswordRetryState {
+  std::optional<std::string> next_password;
+  bool prompt_canceled = false;
+};
+
 using PasswordPromptParentProvider = std::function<
     z7::ui::runtime_support::TaskProgressDialogBase*()>;
 
@@ -64,7 +71,8 @@ std::shared_ptr<z7::app::IArchiveDelegate> make_progress_dialog_delegate(
     z7::ui::runtime_support::TaskProgressDialogBase* dialog,
     GuiTaskRunResult* out,
     std::function<void(const z7::app::OperationOutcome&)> on_finished,
-    PasswordPromptParentProvider password_prompt_parent_provider = {});
+    PasswordPromptParentProvider password_prompt_parent_provider = {},
+    std::shared_ptr<PasswordRetryState> password_retry_state = {});
 
 void prepare_progress_dialog(
     z7::ui::runtime_support::TaskProgressDialogBase* dialog,

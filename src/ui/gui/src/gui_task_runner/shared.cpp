@@ -15,114 +15,15 @@
 #include "../gui_task_runner_helpers.h"
 #include "archive_delegate_qt.h"
 #include "archive_error.h"
+#include "archive_failure_messages.h"
 #include "archive_format.h"
 #include "archive_string_codec_qt.h"
 #include "common/archive_type_normalization.h"
 #include "extract_memory_settings.h"
-#include "official_lang_catalog.h"
 #include "platform_support.h"
 
 namespace z7::ui::gui::gui_task_runner_shared {
 namespace {
-
-std::optional<QString> original_style_empty_archive_open_message() {
-  QString text = z7::ui::runtime_support::LF(3005, {QString()}).trimmed();
-  text.replace(QStringLiteral(" ''"), QString());
-  text.replace(QStringLiteral("''"), QString());
-  return text;
-}
-
-std::optional<QString> localized_failure_reason(QString reason) {
-  reason = reason.trimmed();
-  if (reason.isEmpty()) {
-    return QString();
-  }
-
-  if (reason.compare(QStringLiteral("Archive format is unsupported"),
-                     Qt::CaseInsensitive) == 0) {
-    return original_style_empty_archive_open_message();
-  }
-  if (reason.compare(QStringLiteral("Password required or incorrect"),
-                     Qt::CaseInsensitive) == 0) {
-    QString text = z7::ui::runtime_support::LF(3006, {QString()}).trimmed();
-    text.replace(QStringLiteral(" ''"), QString());
-    text.replace(QStringLiteral("''"), QString());
-    return text;
-  }
-  if (reason.compare(QStringLiteral("Unsupported method"),
-                     Qt::CaseInsensitive) == 0 ||
-      reason.compare(QStringLiteral("Unsupported compression method"),
-                     Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3721);
-  }
-  if (reason.compare(QStringLiteral("Data error"), Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3722);
-  }
-  if (reason.compare(QStringLiteral("CRC failed"), Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3723);
-  }
-  if (reason.compare(QStringLiteral("Unavailable data"), Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3724);
-  }
-  if (reason.compare(QStringLiteral("Unexpected end of data"),
-                     Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3725);
-  }
-  if (reason.compare(QStringLiteral("There are some data after the end of payload data"),
-                     Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3726);
-  }
-  if (reason.compare(QStringLiteral("Is not archive"), Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3727);
-  }
-  if (reason.compare(QStringLiteral("Headers error"), Qt::CaseInsensitive) == 0 ||
-      reason.compare(QStringLiteral("Headers Error"), Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3728);
-  }
-  if (reason.compare(QStringLiteral("Wrong password"), Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(3729);
-  }
-  if (reason.compare(QStringLiteral("Operation canceled"), Qt::CaseInsensitive) == 0) {
-    return z7::ui::runtime_support::L(402);
-  }
-  return std::nullopt;
-}
-
-QString localize_failure_line(QString line) {
-  const QString trimmed = line.trimmed();
-  if (trimmed.isEmpty()) {
-    return QString();
-  }
-
-  if (std::optional<QString> direct = localized_failure_reason(trimmed);
-      direct.has_value()) {
-    return *direct;
-  }
-
-  constexpr QLatin1StringView kPathReasonSeparator(" : ");
-  const qsizetype separator = trimmed.lastIndexOf(kPathReasonSeparator);
-  if (separator > 0) {
-    const QString path = trimmed.left(separator).trimmed();
-    const QString reason =
-        trimmed.mid(separator + kPathReasonSeparator.size()).trimmed();
-    if (!path.isEmpty()) {
-      if (std::optional<QString> localized = localized_failure_reason(reason);
-          localized.has_value()) {
-        return path + QLatin1Char('\n') + *localized;
-      }
-    }
-  }
-
-  return trimmed;
-}
-
-QString localize_failure_message_impl(QString message) {
-  QStringList lines = message.split(QLatin1Char('\n'));
-  for (QString& line : lines) {
-    line = localize_failure_line(line);
-  }
-  return lines.join(QLatin1Char('\n'));
-}
 
 std::optional<z7::ui::runtime_support::TaskProgressRatioInfo> to_task_progress_ratio_info(
     const std::optional<z7::app::ProgressRatioInfo>& ratio_info) {
@@ -154,7 +55,8 @@ void apply_log_to_dialog(z7::ui::runtime_support::TaskProgressDialogBase* dialog
   if (out != nullptr && !log_line.isEmpty()) {
     const QString display_log_line =
         log.channel == z7::app::OutputChannel::kStdErr
-            ? localize_failure_message_impl(log_line)
+            ? z7::ui::runtime_support::localize_archive_failure_message(
+                  log_line)
             : log_line;
     out->log_lines.push_back(display_log_line);
     if (log.channel == z7::app::OutputChannel::kStdErr) {
@@ -205,7 +107,8 @@ class ProgressDialogArchiveDelegate final
       z7::ui::runtime_support::TaskProgressDialogBase* dialog,
       GuiTaskRunResult* out,
       FinishedCallback on_finished,
-      PasswordPromptParentProvider password_prompt_parent_provider)
+      PasswordPromptParentProvider password_prompt_parent_provider,
+      std::shared_ptr<PasswordRetryState> password_retry_state)
       : z7::ui::archive_support::OwnerRelayDelegate<
             z7::ui::runtime_support::TaskProgressDialogBase>(
             dialog,
@@ -214,7 +117,8 @@ class ProgressDialogArchiveDelegate final
             z7::ui::archive_support::MissingTargetPolicy::kInvokeDirect),
         out_(out),
         password_prompt_parent_provider_(
-            std::move(password_prompt_parent_provider)) {}
+            std::move(password_prompt_parent_provider)),
+        password_retry_state_(std::move(password_retry_state)) {}
 
   void on_log(const z7::app::ArchiveLog& log) override {
     const z7::app::ArchiveLog log_copy = log;
@@ -258,6 +162,17 @@ class ProgressDialogArchiveDelegate final
         prompt,
         z7::app::PasswordReply{},
         [this, dialog](const z7::app::PasswordPrompt& prompt_value) {
+          if (password_retry_state_ &&
+              password_retry_state_->next_password.has_value()) {
+            z7::app::PasswordReply retry_reply;
+            retry_reply.kind = z7::app::PasswordReplyKind::kProvide;
+            retry_reply.password =
+                std::move(*password_retry_state_->next_password);
+            password_retry_state_->next_password.reset();
+            password_retry_state_->prompt_canceled = false;
+            return retry_reply;
+          }
+
           QWidget* prompt_dialog = nullptr;
           if (password_prompt_parent_provider_) {
             prompt_dialog = password_prompt_parent_provider_();
@@ -268,7 +183,13 @@ class ProgressDialogArchiveDelegate final
           if (prompt_dialog == nullptr) {
             return z7::app::PasswordReply{};
           }
-          return show_password_prompt_dialog(prompt_dialog, prompt_value);
+          z7::app::PasswordReply reply =
+              show_password_prompt_dialog(prompt_dialog, prompt_value);
+          if (password_retry_state_) {
+            password_retry_state_->prompt_canceled =
+                reply.kind != z7::app::PasswordReplyKind::kProvide;
+          }
+          return reply;
         });
   }
 
@@ -309,24 +230,28 @@ class ProgressDialogArchiveDelegate final
  private:
   GuiTaskRunResult* out_ = nullptr;
   PasswordPromptParentProvider password_prompt_parent_provider_;
+  std::shared_ptr<PasswordRetryState> password_retry_state_;
 };
 
 }  // namespace
 
 QString localize_failure_message(QString message) {
-  return localize_failure_message_impl(std::move(message));
+  return z7::ui::runtime_support::localize_archive_failure_message(
+      std::move(message));
 }
 
 std::shared_ptr<z7::app::IArchiveDelegate> make_progress_dialog_delegate(
     z7::ui::runtime_support::TaskProgressDialogBase* dialog,
     GuiTaskRunResult* out,
     std::function<void(const z7::app::OperationOutcome&)> on_finished,
-    PasswordPromptParentProvider password_prompt_parent_provider) {
+    PasswordPromptParentProvider password_prompt_parent_provider,
+    std::shared_ptr<PasswordRetryState> password_retry_state) {
   return std::make_shared<ProgressDialogArchiveDelegate>(
       dialog,
       out,
       std::move(on_finished),
-      std::move(password_prompt_parent_provider));
+      std::move(password_prompt_parent_provider),
+      std::move(password_retry_state));
 }
 
 void prepare_progress_dialog(

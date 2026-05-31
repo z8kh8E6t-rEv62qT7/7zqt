@@ -328,6 +328,36 @@ bool ArchiveProcessRunner::start_delete_entries(
       z7::app::ArchiveRequest{std::move(request)});
 }
 
+bool ArchiveProcessRunner::start_archive_properties(
+    const QString& archive_path,
+    const QStringList& archive_entries,
+    const QString& directory,
+    bool flat_view,
+    const QString& archive_type_hint,
+    z7::app::ArchiveSessionToken session_token) {
+  if (archive_path.trimmed().isEmpty() && !session_token.is_valid()) {
+    return finish_immediately(z7::app::make_immediate_result(
+        7,
+        z7::app::ArchiveErrorDomain::kInvalidArguments,
+        to_utf8_string(z7::ui::runtime_support::L(3015))));
+  }
+
+  z7::app::ArchivePropertiesRequest request;
+  request.archive_path = to_native_string(archive_path);
+  request.entries = to_utf8_string_list(archive_entries);
+  request.directory = to_utf8_string(directory);
+  request.flat_view = flat_view;
+  request.archive_type_hint = to_native_string(archive_type_hint.trimmed());
+  if (session_token.is_valid()) {
+    request.session_token = session_token;
+  }
+
+  return start_operation(
+      QStringLiteral("Properties"),
+      QStringList{archive_path},
+      z7::app::ArchiveRequest{std::move(request)});
+}
+
 bool ArchiveProcessRunner::start_open_from_path(
     const QString& archive_path,
     const QString& archive_type_hint,

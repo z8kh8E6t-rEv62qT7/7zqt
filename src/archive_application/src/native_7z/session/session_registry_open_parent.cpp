@@ -257,7 +257,9 @@ OpenArchiveSessionResult open_native_archive_session_from_parent(
   ArchiveOpenSessionNativeAccess::set_entry_path_from_parent(
       *child,
       resolved_entry_path);
-  child->set_password(parent->password());
+  if (parent->password_defined()) {
+    child->set_password(parent->password());
+  }
   reset_archive_session_open_state(*child);
   ArchiveOpenSessionState& child_state = archive_session_state(*child);
 

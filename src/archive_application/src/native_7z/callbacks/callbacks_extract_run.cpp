@@ -44,6 +44,7 @@ NativeExtractCallback::NativeExtractCallback(
                                        configured_memory_limit_bytes != 0),
       total_files_(total_files),
       budget_(std::move(budget)) {
+  password_defined_ = !password_.empty();
   for (std::string& entry : selected_entries_) {
     entry = normalize_archive_item_path(entry);
   }

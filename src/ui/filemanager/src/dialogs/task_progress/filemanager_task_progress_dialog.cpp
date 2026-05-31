@@ -15,6 +15,14 @@ const z7::ui::runtime_support::TaskProgressDialogBehavior& filemanager_task_prog
       .append_blank_log_lines = true,
       .parse_extended_progress_log = true,
       .freeze_title_after_result_mode = true,
+#ifdef Z7_TESTING
+      .dialog_object_name = "filemanagerTaskProgressDialog",
+      .result_messages_view_object_name = "filemanagerTaskProgressMessages",
+      .background_button_object_name = "filemanagerTaskProgressBackgroundButton",
+      .pause_button_object_name = "filemanagerTaskProgressPauseButton",
+      .cancel_button_object_name = "filemanagerTaskProgressCancelButton",
+      .close_button_object_name = "filemanagerTaskProgressCloseButton",
+#endif
   };
   return behavior;
 }

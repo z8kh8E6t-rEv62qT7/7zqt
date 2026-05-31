@@ -8,10 +8,17 @@
 #include "structured_list_view.h"
 
 #include <QListView>
+#include <QPersistentModelIndex>
+#include <QPointer>
 #include <QStringList>
 #include <QTreeView>
 
 #include <functional>
+
+class QAbstractItemModel;
+class QHideEvent;
+class QKeyEvent;
+class QMouseEvent;
 
 namespace z7::ui::filemanager {
 
@@ -76,17 +83,36 @@ class DragAwareListView final : public QListView {
       std::function<bool(const QString&, bool, const QString&, QString*)>;
 
   explicit DragAwareListView(QWidget* parent = nullptr);
+  void set_alternative_selection_mode(bool enabled);
+  void setModel(QAbstractItemModel* model) override;
+  void reset_keyboard_shift_selection();
   void set_drag_finished_callback(DragFinishedCallback callback);
   void set_archive_drag_materializer(ArchiveDragMaterializer materializer);
   void set_archive_drag_direct_exporter(ArchiveDragDirectExporter exporter);
 
  protected:
+  void keyPressEvent(QKeyEvent* event) override;
+  void keyReleaseEvent(QKeyEvent* event) override;
+  void hideEvent(QHideEvent* event) override;
+  void mousePressEvent(QMouseEvent* event) override;
+  void mouseReleaseEvent(QMouseEvent* event) override;
   void startDrag(Qt::DropActions supported_actions) override;
 
  private:
+  bool handle_keyboard_shift_selection(QKeyEvent* event);
+
   DragFinishedCallback drag_finished_callback_;
   ArchiveDragMaterializer archive_drag_materializer_;
   ArchiveDragDirectExporter archive_drag_direct_exporter_;
+  QPersistentModelIndex keyboard_shift_anchor_;
+  QPersistentModelIndex mouse_shift_anchor_;
+  QPointer<QAbstractItemModel> mouse_shift_anchor_model_;
+  int mouse_shift_anchor_row_ = -1;
+  bool pending_custom_shift_click_release_ = false;
+  bool keyboard_shift_pressed_ = false;
+  bool alternative_selection_mode_ = false;
+  bool alternative_shift_selection_defined_ = false;
+  bool alternative_shift_select_mark_ = true;
 };
 
 class DragAwareStructuredListView final : public z7::ui::widgets::StructuredListView {
@@ -101,17 +127,36 @@ class DragAwareStructuredListView final : public z7::ui::widgets::StructuredList
       std::function<bool(const QString&, bool, const QString&, QString*)>;
 
   explicit DragAwareStructuredListView(QWidget* parent = nullptr);
+  void set_alternative_selection_mode(bool enabled);
+  void setModel(QAbstractItemModel* model) override;
+  void reset_keyboard_shift_selection();
   void set_drag_finished_callback(DragFinishedCallback callback);
   void set_archive_drag_materializer(ArchiveDragMaterializer materializer);
   void set_archive_drag_direct_exporter(ArchiveDragDirectExporter exporter);
 
  protected:
+  void keyPressEvent(QKeyEvent* event) override;
+  void keyReleaseEvent(QKeyEvent* event) override;
+  void hideEvent(QHideEvent* event) override;
+  void mousePressEvent(QMouseEvent* event) override;
+  void mouseReleaseEvent(QMouseEvent* event) override;
   void startDrag(Qt::DropActions supported_actions) override;
 
  private:
+  bool handle_keyboard_shift_selection(QKeyEvent* event);
+
   DragFinishedCallback drag_finished_callback_;
   ArchiveDragMaterializer archive_drag_materializer_;
   ArchiveDragDirectExporter archive_drag_direct_exporter_;
+  QPersistentModelIndex keyboard_shift_anchor_;
+  QPersistentModelIndex mouse_shift_anchor_;
+  QPointer<QAbstractItemModel> mouse_shift_anchor_model_;
+  int mouse_shift_anchor_row_ = -1;
+  bool pending_custom_shift_click_release_ = false;
+  bool keyboard_shift_pressed_ = false;
+  bool alternative_selection_mode_ = false;
+  bool alternative_shift_selection_defined_ = false;
+  bool alternative_shift_select_mark_ = true;
 };
 
 }  // namespace z7::ui::filemanager

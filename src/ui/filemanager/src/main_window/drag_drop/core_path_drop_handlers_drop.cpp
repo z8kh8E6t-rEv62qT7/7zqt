@@ -23,6 +23,16 @@ QString archive_drop_destination_display_path(
   return QStringLiteral("/%1").arg(normalized_virtual_dir);
 }
 
+QString archive_drop_destination_display_path(
+    const QString& display_source,
+    const QString& normalized_virtual_dir) {
+  if (display_source.trimmed().isEmpty()) {
+    return archive_drop_destination_display_path(normalized_virtual_dir);
+  }
+  return z7::ui::archive_support::virtual_display_path(display_source,
+                                                       normalized_virtual_dir);
+}
+
 }  // namespace
 
 bool MainWindow::handle_panel_drop(QObject* watched,
@@ -157,14 +167,21 @@ bool MainWindow::handle_panel_drop(QObject* watched,
         const QString confirm_text = QStringLiteral("%1\n%2\n%3 ?")
                                          .arg(z7::ui::runtime_support::strip_mnemonic(lang_or(6002)),
                                               archive_drop_destination_display_path(
+                                                  panel.archive_display_source(),
                                                   archive_destination_virtual_dir),
                                               z7::ui::runtime_support::strip_mnemonic(lang_or(6011)));
-        confirm = QMessageBox::question(
-            this,
-            confirm_title,
-            confirm_text,
-            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
-            QMessageBox::Yes);
+        QMessageBox confirm_box(QMessageBox::Question,
+                                confirm_title,
+                                confirm_text,
+                                QMessageBox::Yes | QMessageBox::No |
+                                    QMessageBox::Cancel,
+                                this);
+#ifdef Z7_TESTING
+        confirm_box.setProperty("z7.fm.semantic.window_title",
+                                confirm_title);
+#endif
+        confirm_box.setDefaultButton(QMessageBox::Yes);
+        confirm = static_cast<QMessageBox::StandardButton>(confirm_box.exec());
 #ifdef Z7_TESTING
       }
 #endif

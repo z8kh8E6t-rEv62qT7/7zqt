@@ -8,9 +8,7 @@
 
 #include <algorithm>
 
-#include "archive_delegate_qt.h"
 #include "common/archive_type_normalization.h"
-#include "large_pages_settings.h"
 
 #if defined(Q_OS_WIN)
 #include <windows.h>
@@ -36,15 +34,6 @@ QString canonical_archive_type_from_suffix(const QString& value) {
   return QString::fromStdString(
       z7::common::canonical_archive_type_from_filename_suffix_copy(
           value.toStdString()));
-}
-
-QString archive_parent_virtual_dir(const QString& entry) {
-  const QString normalized = QDir::fromNativeSeparators(entry);
-  const int slash_pos = normalized.lastIndexOf(QLatin1Char('/'));
-  if (slash_pos <= 0) {
-    return QString();
-  }
-  return normalized.left(slash_pos);
 }
 
 QString archive_temp_update_source_unavailable_message(
@@ -197,7 +186,7 @@ QString MainWindow::archive_update_format_for_session(
 void MainWindow::update_archive_entries_from_snapshots(
     const ArchiveTempSession& session,
     const QVector<ArchiveTempFileSnapshot>& changed_snapshots,
-    const std::function<void(bool, const QString&)>& finished_cb) const {
+    const std::function<void(bool, const QString&)>& finished_cb) {
   const auto finish = [finished_cb](const bool ok, const QString& message) {
     if (finished_cb) {
       finished_cb(ok, message);
@@ -227,101 +216,45 @@ void MainWindow::update_archive_entries_from_snapshots(
     }
   }
 
-  struct SnapshotUpdateChain final
-      : public std::enable_shared_from_this<SnapshotUpdateChain> {
-    QPointer<const MainWindow> owner;
-    std::string archive_format_utf8;
-    z7::app::ArchiveSessionToken session_token;
-    QVector<MainWindow::ArchiveTempFileSnapshot> snapshots;
-    int cursor = 0;
-    std::function<void(bool, const QString&)> finished;
-    z7::app::ArchiveEngine engine;
-    z7::app::ArchiveSession active_session;
-
-    void start_next() {
-      while (cursor < snapshots.size()) {
-        const MainWindow::ArchiveTempFileSnapshot& snapshot = snapshots[cursor];
-        if (snapshot.archive_entry.trimmed().isEmpty() ||
-            snapshot.extracted_path.trimmed().isEmpty()) {
-          ++cursor;
-          continue;
-        }
-        const QFileInfo source_info(snapshot.extracted_path);
-        if (!source_info.exists() || !source_info.isFile()) {
-          complete(false,
-                   archive_temp_update_source_unavailable_message(
-                       snapshot.extracted_path,
-                       source_info.exists()));
-          return;
-        }
-
-        z7::app::AddRequest request;
-        request.session_token = session_token;
-        if (!archive_format_utf8.empty()) {
-          request.format = archive_format_utf8;
-        }
-        request.update_mode = "update";
-        request.directory = z7::ui::archive_support::to_utf8_string(
-            archive_parent_virtual_dir(snapshot.archive_entry));
-        request.input_paths.push_back(z7::ui::archive_support::to_native_string(source_info.absoluteFilePath()));
-
-        const std::shared_ptr<SnapshotUpdateChain> self = shared_from_this();
-        auto delegate = std::make_shared<z7::ui::archive_support::OutcomeRelayDelegate>(
-            const_cast<MainWindow*>(owner.data()),
-            [self](const z7::app::OperationOutcome& outcome) {
-              self->on_single_update_finished(outcome);
-            },
-            nullptr,
-            z7::ui::archive_support::MissingTargetPolicy::kInvokeDirect);
-        z7::ui::runtime_support::apply_configured_large_pages_mode();
-        active_session = engine.start(z7::app::ArchiveRequest{std::move(request)}, delegate);
-        if (!active_session.valid()) {
-          const z7::app::OperationOutcome unavailable =
-              z7::app::make_backend_unavailable_outcome();
-          complete(false, z7::ui::archive_support::from_utf8_string(unavailable.summary));
-        }
-        return;
-      }
-
-      complete(true, QString());
+  AddTaskOptions options;
+  options.archive_path = session.archive_path;
+  options.format = archive_format;
+  options.session_token = session.session_token;
+  options.update_mode = QStringLiteral("update");
+  options.input_items.reserve(changed_snapshots.size());
+  for (const ArchiveTempFileSnapshot& snapshot : changed_snapshots) {
+    const QString entry =
+        z7::ui::archive_support::normalize_virtual_dir(snapshot.archive_entry);
+    if (entry.isEmpty() || snapshot.extracted_path.trimmed().isEmpty()) {
+      continue;
     }
+    ArchiveAddInputItem item;
+    item.filesystem_path = QFileInfo(snapshot.extracted_path).absoluteFilePath();
+    item.archive_entry = entry;
+    options.input_items.push_back(std::move(item));
+  }
+  if (options.input_items.isEmpty()) {
+    finish(true, QString());
+    return;
+  }
 
-    void on_single_update_finished(const z7::app::OperationOutcome& outcome) {
-      const auto result = z7::app::outcome_payload_as<z7::app::AddResult>(outcome);
-      if (!result.has_value() || !result->ok) {
-        QString error_message;
-        if (result.has_value()) {
-          error_message = z7::ui::archive_support::from_utf8_string(result->summary);
-        }
-        if (error_message.trimmed().isEmpty()) {
-          error_message = z7::ui::archive_support::from_utf8_string(outcome.error.message);
-        }
-        if (error_message.trimmed().isEmpty()) {
-          error_message = QStringLiteral("Failed to update modified archive entries.");
-        }
-        complete(false, error_message);
-        return;
-      }
-
-      ++cursor;
-      start_next();
-    }
-
-    void complete(const bool ok, const QString& message) {
-      active_session = z7::app::ArchiveSession{};
-      if (!owner.isNull() && finished) {
-        finished(ok, message);
-      }
-    }
-  };
-
-  auto chain = std::make_shared<SnapshotUpdateChain>();
-  chain->owner = this;
-  chain->archive_format_utf8 = z7::ui::archive_support::to_utf8_string(archive_format);
-  chain->session_token = session.session_token;
-  chain->snapshots = changed_snapshots;
-  chain->finished = finish;
-  chain->start_next();
+  const QString caption = archive_writeback_copying_caption();
+  const bool started = start_task_with_runner(
+      caption,
+      caption,
+      [options](ArchiveProcessRunner* runner) {
+        return runner != nullptr && runner->start_add_to_archive(options);
+      },
+      [finish](bool ok,
+               int,
+               int,
+               const QString&,
+               const z7::app::OperationOutcome&) {
+        finish(ok, QString());
+      });
+  if (!started) {
+    finish(false, QStringLiteral("Failed to start archive update."));
+  }
 }
 
 void MainWindow::retain_archive_temp_session(
@@ -502,11 +435,9 @@ void MainWindow::on_archive_temp_session_process_finished(
       [this, session, prompt_title](const bool ok, const QString& update_error) {
         if (!ok) {
           release_archive_temp_session(session);
-          QMessageBox::warning(this,
-                               prompt_title,
-                               update_error.trimmed().isEmpty()
-                                   ? QStringLiteral("Failed to update archive.")
-                                   : update_error);
+          if (!update_error.trimmed().isEmpty()) {
+            QMessageBox::warning(this, prompt_title, update_error);
+          }
           return;
         }
 

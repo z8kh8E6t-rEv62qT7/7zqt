@@ -165,6 +165,7 @@ HRESULT NativeUpdateOperationCallback::provide_password(BSTR* password, bool for
     {
       std::lock_guard<std::mutex> lock(mutex_);
       password_ = password_value;
+      password_defined_ = true;
       wrong_password_ = false;
     }
   }
@@ -183,9 +184,12 @@ HRESULT NativeUpdateOperationCallback::CryptoGetTextPassword2(
     BSTR* password) {
   const HRESULT password_res = provide_password(password, false);
   if (password_is_defined != nullptr) {
-    const bool has_password = password_res == S_OK && password != nullptr &&
-                              *password != nullptr && ::SysStringLen(*password) > 0;
-    *password_is_defined = BoolToInt(has_password);
+    bool password_defined = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      password_defined = password_defined_;
+    }
+    *password_is_defined = BoolToInt(password_res == S_OK && password_defined);
   }
   return password_res;
 }

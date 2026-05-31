@@ -21,7 +21,8 @@ target_include_directories(z7_sfx_module_7z
 set_target_properties(z7_sfx_module_7z
   PROPERTIES
     OUTPUT_NAME "7z.sfx"
-    RUNTIME_OUTPUT_DIRECTORY "${Z7_EXECUTABLE_OUTPUT_DIR}")
+    RUNTIME_OUTPUT_DIRECTORY "${Z7_EXECUTABLE_OUTPUT_DIR}"
+    Z7_SKIP_MACOS_RELEASE_LLVM_RUNTIME TRUE)
 
 z7_set_default_target_options(z7_sfx_module_7z)
 

@@ -112,9 +112,9 @@ QString overwrite_data_from_original_value(int value) {
     case kOriginalOverwriteSkip:
       return QStringLiteral("-aos");
     case kOriginalOverwriteRename:
-      return QStringLiteral("-aot");
-    case kOriginalOverwriteRenameExisting:
       return QStringLiteral("-aou");
+    case kOriginalOverwriteRenameExisting:
+      return QStringLiteral("-aot");
     case kOriginalOverwriteAsk:
     default:
       return QString();
@@ -129,10 +129,10 @@ int original_value_from_overwrite_data(const QString& value) {
   if (normalized == QStringLiteral("-aos")) {
     return kOriginalOverwriteSkip;
   }
-  if (normalized == QStringLiteral("-aot")) {
+  if (normalized == QStringLiteral("-aou")) {
     return kOriginalOverwriteRename;
   }
-  if (normalized == QStringLiteral("-aou")) {
+  if (normalized == QStringLiteral("-aot")) {
     return kOriginalOverwriteRenameExisting;
   }
   return kOriginalOverwriteAsk;
@@ -249,9 +249,9 @@ ExtractDialog::ExtractDialog(const ExtractCommandOptions& initial,
   overwrite_combo_->addItem(lang_or(3423),
                             QStringLiteral("-aos"));
   overwrite_combo_->addItem(lang_or(3424),
-                            QStringLiteral("-aot"));
-  overwrite_combo_->addItem(lang_or(3425),
                             QStringLiteral("-aou"));
+  overwrite_combo_->addItem(lang_or(3425),
+                            QStringLiteral("-aot"));
   left_column->addWidget(overwrite_combo_);
   left_column->addStretch(1);
 
