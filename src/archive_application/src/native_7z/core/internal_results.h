@@ -260,6 +260,15 @@ struct HasTakeRollbackEntries<
     std::void_t<decltype(std::declval<CallbackT*>()->take_rollback_entries())>>
     : std::true_type {};
 
+template <typename CallbackT, typename = void>
+struct HasFinishDeferredLinks : std::false_type {};
+
+template <typename CallbackT>
+struct HasFinishDeferredLinks<
+    CallbackT,
+    std::void_t<decltype(std::declval<CallbackT*>()->finish_deferred_links())>>
+    : std::true_type {};
+
 template <typename CallbackT>
 ExtractInvocationStatus invoke_archive_extract_with_callback(
     IInArchive* archive,
@@ -269,6 +278,11 @@ ExtractInvocationStatus invoke_archive_extract_with_callback(
     CallbackT* callback) {
   ExtractInvocationStatus status;
   status.hresult = archive->Extract(indices, num_indices, BoolToInt(test_mode), callback);
+  if (status.hresult == S_OK) {
+    if constexpr (HasFinishDeferredLinks<CallbackT>::value) {
+      callback->finish_deferred_links();
+    }
+  }
   status.totals_known = callback->totals_known();
   status.total_bytes = callback->total_bytes();
   status.completed_bytes = callback->completed_bytes();

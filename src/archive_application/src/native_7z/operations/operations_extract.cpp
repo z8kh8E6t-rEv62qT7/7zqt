@@ -193,13 +193,24 @@ RollbackAttemptResult rollback_extract_entries(
     std::error_code ec;
 
     if (entry.had_original) {
+      if (entry.backup_path.empty()) {
+        result.ok = false;
+        if (result.first_error.empty()) {
+          result.first_error =
+              "Cannot restore overwritten output without a backup: " +
+              entry.output_path.generic_string();
+        }
+        continue;
+      }
       remove_path_any(entry.output_path, ec);
       ec.clear();
       fs::rename(entry.backup_path, entry.destination_path, ec);
-      if (ec && result.first_error.empty()) {
+      if (ec) {
         result.ok = false;
-        result.first_error =
-            "Failed to restore overwritten output: " + ec.message();
+        if (result.first_error.empty()) {
+          result.first_error =
+              "Failed to restore overwritten output: " + ec.message();
+        }
       }
       continue;
     }

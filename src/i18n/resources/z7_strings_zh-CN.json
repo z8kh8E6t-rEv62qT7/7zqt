@@ -55,7 +55,8 @@
     "password_retry": "上次输入的密码不正确。",
     "password_placeholder": "密码",
     "password_ok": "解锁",
-    "password_read_clipboard": "读取剪贴板",
+    "password_clipboard_source": "来自剪贴板",
+    "password_confirm": "确认",
     "password_cancel": "取消"
   },
   "ui": {

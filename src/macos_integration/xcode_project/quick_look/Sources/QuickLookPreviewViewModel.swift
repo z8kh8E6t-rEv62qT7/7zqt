@@ -41,8 +41,9 @@ struct QuickLookPasswordPromptModel {
   let subtitle: String
   let showsRetryHint: Bool
   let retryText: String
+  let clipboardSourceText: String
   let clipboardText: String
-  let readClipboardTitle: String
+  let confirmTitle: String
   let cancelTitle: String
 }
 

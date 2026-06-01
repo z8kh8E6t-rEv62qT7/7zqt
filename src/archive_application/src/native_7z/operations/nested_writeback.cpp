@@ -53,11 +53,6 @@ struct NestedWritebackWorkspace final {
   std::vector<NestedWritebackLayer> parent_layers;
 };
 
-struct StagedWritebackInput final {
-  fs::path staged_path;
-  std::string relative_entry;
-};
-
 fs::path sibling_work_area_parent(const fs::path& path, std::error_code& ec) {
   ec.clear();
   if (path.has_parent_path()) {
@@ -132,77 +127,18 @@ std::string update_format_from_archive_path(const fs::path& archive_path) {
   return z7::common::canonical_archive_type_from_filename_suffix_copy(ext);
 }
 
-std::optional<OperationResult> stage_parent_writeback_input(
-    const NestedWritebackWorkspace& workspace,
-    size_t stage_index,
-    const fs::path& child_archive_path,
-    const std::string& child_entry,
-    StagedWritebackInput* out_input) {
-  if (out_input == nullptr) {
-    return invalid_request("Nested writeback staged input output is required");
-  }
-
-  const std::string staged_relative_entry =
-      normalize_archive_virtual_directory(child_entry);
-  if (staged_relative_entry.empty()) {
-    return make_operation_failure<OperationResult>(
-        ArchiveErrorDomain::kIo,
-        "Nested archive writeback lost the staged child archive entry path",
-        2);
-  }
-
-  StagedWritebackInput input;
-  const fs::path staging_root =
-      workspace.workspace_dir.path /
-      (std::string("parent-stage-") + std::to_string(stage_index));
-  input.relative_entry = staged_relative_entry;
-
-  std::error_code stage_dir_ec;
-  fs::create_directories(staging_root, stage_dir_ec);
-  if (stage_dir_ec) {
-    return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo,
-                                                   stage_dir_ec.message(),
-                                                   2);
-  }
-
-  input.staged_path = staging_root / fs::path(input.relative_entry);
-  const fs::path staged_parent_path = input.staged_path.parent_path();
-  if (!staged_parent_path.empty()) {
-    std::error_code stage_parent_ec;
-    fs::create_directories(staged_parent_path, stage_parent_ec);
-    if (stage_parent_ec) {
-      return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo,
-                                                     stage_parent_ec.message(),
-                                                     2);
-    }
-  }
-
-  std::error_code copy_ec;
-  fs::copy_file(child_archive_path,
-                input.staged_path,
-                fs::copy_options::overwrite_existing,
-                copy_ec);
-  if (copy_ec) {
-    return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo,
-                                                   copy_ec.message(),
-                                                   2);
-  }
-
-  *out_input = std::move(input);
-  return std::nullopt;
-}
-
-AddResult run_add_from_staged_tree(NativeArchiveBackend& backend,
-                                   const fs::path& archive_path,
-                                   const std::string& archive_format,
-                                   const StagedWritebackInput& input,
-                                   const ArchiveBackendHooks& hooks) {
+AddResult run_add_with_mapped_input(NativeArchiveBackend& backend,
+                                    const fs::path& archive_path,
+                                    const std::string& archive_format,
+                                    const fs::path& child_archive_path,
+                                    const std::string& child_entry,
+                                    const ArchiveBackendHooks& hooks) {
   AddRequest update_request;
   update_request.archive_path = archive_path.string();
   update_request.format = archive_format;
-  update_request.update_mode = "update";
+  update_request.update_mode = "add";
   update_request.input_items.push_back(
-      AddInputItem{input.staged_path.string(), input.relative_entry});
+      AddInputItem{child_archive_path.string(), child_entry});
   return backend.add(update_request, hooks);
 }
 
@@ -310,10 +246,9 @@ std::optional<OperationResult> propagate_nested_writeback_to_root(
     const NestedWritebackWorkspace& workspace,
     const ArchiveBackendHooks& hooks) {
   fs::path child_archive_path = workspace.leaf_working_archive_path;
-  size_t stage_index = 0;
   for (auto it = workspace.parent_layers.rbegin();
        it != workspace.parent_layers.rend();
-       ++it, ++stage_index) {
+       ++it) {
     const std::string parent_format = update_format_from_archive_path(it->archive_path);
     if (parent_format.empty()) {
       return make_operation_failure<OperationResult>(
@@ -323,23 +258,12 @@ std::optional<OperationResult> propagate_nested_writeback_to_root(
           7);
     }
 
-    StagedWritebackInput input;
-    if (std::optional<OperationResult> stage_error =
-            stage_parent_writeback_input(
-                workspace,
-                stage_index,
-                child_archive_path,
-                it->child_entry,
-                &input);
-        stage_error.has_value()) {
-      return std::move(*stage_error);
-    }
-
-    const AddResult update_result = run_add_from_staged_tree(
+    const AddResult update_result = run_add_with_mapped_input(
         backend,
         it->archive_path,
         parent_format,
-        input,
+        child_archive_path,
+        it->child_entry,
         hooks);
     if (!update_result.ok) {
       return static_cast<OperationResult>(update_result);

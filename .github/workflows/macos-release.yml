@@ -8,7 +8,8 @@ on:
     inputs:
       release_tag:
         description: "GitHub release tag to create or update"
-        required: true
+        required: false
+        default: head
         type: string
       prerelease:
         description: "Mark the GitHub release as a prerelease"
@@ -20,15 +21,16 @@ permissions:
   contents: write
 
 concurrency:
-  group: macos-release-${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+  group: macos-release-${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || 'head' }}
   cancel-in-progress: false
 
 jobs:
   build:
     name: Build macOS release bundle
-    runs-on: macos-15
+    runs-on: macos-26
     env:
-      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || 'head' }}
       PRERELEASE: ${{ inputs.prerelease || false }}
 
     steps:
@@ -59,14 +61,21 @@ jobs:
       - name: Show tool versions
         run: |
           set -euo pipefail
-          sw_vers
-          xcodebuild -version
+          sw_vers | tee /tmp/z7-sw-vers.txt
+          xcodebuild -version | tee /tmp/z7-xcode-version.txt
+          sdk_version="$(xcrun --show-sdk-version)"
+          echo "macOS SDK $sdk_version"
           cmake --version
           ninja --version
           clang --version
           7zz i
           xcodegen --version
-          qmake -v
+          qmake -v | tee /tmp/z7-qmake-version.txt
+
+          grep -q "ProductVersion:[[:space:]]*26\\." /tmp/z7-sw-vers.txt
+          grep -q "Xcode 26\\.3" /tmp/z7-xcode-version.txt
+          test "$sdk_version" = "26.2"
+          grep -q "Using Qt version 6\\.11\\.1" /tmp/z7-qmake-version.txt
 
       - name: Configure release
         run: |
@@ -96,10 +105,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          (
-            cd build/release/deploy
-            7zz a "$GITHUB_WORKSPACE/dist/7zqt-macos.arm64.zip" 7zFM.app
-          )
+          archive="$GITHUB_WORKSPACE/dist/7zqt-macos.arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent build/release/deploy/7zFM.app "$archive"
+
+          verify_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/z7fm-artifact.XXXXXX")"
+          trap 'rm -rf "$verify_dir"' EXIT
+          ditto -x -k "$archive" "$verify_dir"
+          test -L "$verify_dir/7zFM.app/Contents/Frameworks/QtGui.framework/QtGui"
+          test -L "$verify_dir/7zFM.app/Contents/Frameworks/QtGui.framework/Versions/Current"
+          codesign --verify --deep --strict "$verify_dir/7zFM.app"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

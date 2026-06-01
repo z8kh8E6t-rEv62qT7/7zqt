@@ -10,6 +10,8 @@
 
 namespace z7::app {
 
+class NativeHashOutStream;
+
 class NativeTestExtractCallback final : public IArchiveExtractCallback,
                                         public ICryptoGetTextPassword,
                                         public ICompressProgressInfo,
@@ -23,7 +25,10 @@ class NativeTestExtractCallback final : public IArchiveExtractCallback,
                             std::string archive_path,
                             uint64_t total_files,
                             uint64_t configured_memory_limit_bytes = 0,
-                            bool configured_memory_limit_defined = false);
+                            bool configured_memory_limit_defined = false,
+                            std::string initial_password = {});
+
+  void set_hash_bundle(CHashBundle* hash_bundle);
 
   uint64_t completed_files() const;
   uint64_t error_count() const;
@@ -73,6 +78,9 @@ class NativeTestExtractCallback final : public IArchiveExtractCallback,
   ProgressSnapshot snapshot_progress() const;
   void emit_progress_snapshot() const;
   HRESULT check_canceled() const;
+  HRESULT write_hash_data(const void* data, UInt32 size, UInt32* processed_size);
+
+  friend class NativeHashOutStream;
 
   std::atomic<ULONG> ref_count_{1};
   IInArchive* archive_ = nullptr;
@@ -98,6 +106,12 @@ class NativeTestExtractCallback final : public IArchiveExtractCallback,
   bool password_defined_ = false;
   bool wrong_password_ = false;
   std::string diagnostic_message_;
+  CHashBundle* hash_bundle_ = nullptr;
+  bool hash_current_active_ = false;
+  bool hash_current_is_dir_ = false;
+  bool hash_first_file_set_ = false;
+  uint64_t hash_file_progress_prev_ = 0;
+  std::string hash_current_path_;
 };
 
 }  // namespace z7::app

@@ -164,6 +164,18 @@ static void create_encrypted_7z_archive(NSString *workingDirectory,
   run_task_or_fail(sevenzz_path(), arguments, workingDirectory);
 }
 
+static void create_content_encrypted_7z_archive(NSString *workingDirectory,
+                                                NSString *archivePath,
+                                                NSArray<NSString *> *inputs,
+                                                NSString *password) {
+  NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:@"a"];
+  [arguments addObject:archivePath.lastPathComponent];
+  [arguments addObject:@"-t7z"];
+  [arguments addObject:[NSString stringWithFormat:@"-p%@", password]];
+  [arguments addObjectsFromArray:inputs];
+  run_task_or_fail(sevenzz_path(), arguments, workingDirectory);
+}
+
 static NSArray<NSString *> *collect_item_names(const z7_mi_quicklook_list_result_t *result) {
   NSMutableArray<NSString *> *names = [NSMutableArray array];
   if (result == NULL || result->items == NULL) {
@@ -415,6 +427,14 @@ static NSDictionary<NSString *, NSString *> *create_encrypted_archive_fixture(vo
   NSString *archivePath = [root stringByAppendingPathComponent:@"encrypted.7z"];
   create_encrypted_7z_archive(root, archivePath, @[ @"secret.txt" ], @"test-password");
   return @{@"archive": archivePath, @"entry": @"secret.txt"};
+}
+
+static NSDictionary<NSString *, NSString *> *create_content_encrypted_archive_fixture(void) {
+  NSString *root = temporary_root(@"z7-ql-content-encrypted");
+  write_text_file([root stringByAppendingPathComponent:@"report.txt"], @"report");
+  NSString *archivePath = [root stringByAppendingPathComponent:@"report.7z"];
+  create_content_encrypted_7z_archive(root, archivePath, @[ @"report.txt" ], @"test-password");
+  return @{@"archive": archivePath, @"entry": @"report.txt"};
 }
 
 static NSDictionary<NSString *, NSString *> *create_nested_encrypted_archive_fixture(void) {
@@ -761,6 +781,60 @@ static void test_batch_export_file_uses_current_materialize_path(void) {
   z7_mi_session_destroy(session);
 }
 
+static void test_content_encrypted_batch_export_prompts_and_succeeds(void) {
+  NSDictionary<NSString *, NSString *> *fixture =
+      create_content_encrypted_archive_fixture();
+  PasswordPromptScript *script = [[PasswordPromptScript alloc] init];
+  script.responses = @[ @"test-password" ];
+
+  z7_mi_session_t *session = z7_mi_session_create();
+  z7_mi_session_set_password_prompt_callback(
+      session, password_prompt_callback, (__bridge void *)script);
+
+  QuickLookListCallResult listResult =
+      quicklook_list(session, fixture[@"archive"], @"", @"7z", @[]);
+  expect_true(listResult.status == Z7_MI_STATUS_OK && listResult.result->ok,
+              @"content-encrypted archive list should succeed without header prompt");
+  expect_true([collect_item_names(listResult.result) containsObject:fixture[@"entry"]],
+              @"content-encrypted archive list should expose plaintext filename");
+  z7_mi_destroy_quicklook_list_result(listResult.result);
+  expect_true(script.callCount == 0,
+              @"content-encrypted archive list should not request a password");
+
+  NSString *exportRoot = temporary_root(@"z7-ql-export-content-encrypted");
+  NSString *destination = [exportRoot stringByAppendingPathComponent:@"report.txt"];
+  QuickLookBatchExportCallResult result = quicklook_batch_export(
+      session,
+      fixture[@"archive"],
+      @"7z",
+      @[],
+      fixture[@"entry"],
+      destination,
+      NO,
+      NO);
+  NSString *errorMessage = result.result != NULL && result.result->error_message != NULL
+                               ? [NSString stringWithUTF8String:result.result->error_message]
+                               : @"";
+  expect_true(result.status == Z7_MI_STATUS_OK && result.result->ok,
+              [NSString stringWithFormat:
+                            @"content-encrypted export should prompt and then succeed; status=%d error=%@",
+                            result.status,
+                            errorMessage]);
+  expect_true(script.callCount == 1,
+              @"content-encrypted export should request a password");
+  expect_true([script.reasonKeys.firstObject isEqualToString:@"password_required"],
+              @"content-encrypted export prompt should start as password_required");
+  NSString *content =
+      [NSString stringWithContentsOfFile:destination
+                                encoding:NSUTF8StringEncoding
+                                   error:nil];
+  expect_true([content isEqualToString:@"report"],
+              @"content-encrypted export should materialize decrypted file content");
+
+  z7_mi_destroy_quicklook_batch_export_result(result.result);
+  z7_mi_session_destroy(session);
+}
+
 static void test_batch_export_nested_file_uses_current_materialize_path(void) {
   NSDictionary<NSString *, NSString *> *fixture =
       create_nested_archive_fixture();
@@ -995,6 +1069,9 @@ int main(int argc, const char *argv[]) {
     });
     run_test(@"batch_export_file_uses_current_materialize_path", argc, argv, ^{
       test_batch_export_file_uses_current_materialize_path();
+    });
+    run_test(@"content_encrypted_batch_export_prompts_and_succeeds", argc, argv, ^{
+      test_content_encrypted_batch_export_prompts_and_succeeds();
     });
     run_test(@"batch_export_nested_file_uses_current_materialize_path", argc, argv, ^{
       test_batch_export_nested_file_uses_current_materialize_path();

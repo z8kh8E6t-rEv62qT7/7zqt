@@ -55,7 +55,8 @@
     "password_retry": "The previous password was incorrect.",
     "password_placeholder": "Password",
     "password_ok": "Unlock",
-    "password_read_clipboard": "Read Clipboard",
+    "password_clipboard_source": "From Clipboard",
+    "password_confirm": "Confirm",
     "password_cancel": "Cancel"
   },
   "ui": {

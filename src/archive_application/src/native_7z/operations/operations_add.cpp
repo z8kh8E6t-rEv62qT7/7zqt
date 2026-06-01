@@ -274,7 +274,6 @@ AddResult NativeArchiveBackend::add(const AddRequest& request,
     return add_result;
   }
 
-  ScopedAddInputTree staged_inputs;
   AddRequest prepared_request;
   AddResult add_result = run_update_operation_with_mode<AddResult>(
       request.archive_path,
@@ -294,7 +293,7 @@ AddResult NativeArchiveBackend::add(const AddRequest& request,
           NWildcard::CCensor& censor,
           CUpdateOptions& options) -> std::optional<OperationResult> {
         if (std::optional<OperationResult> prepare_error =
-                prepare_add_request_for_execution(request, &staged_inputs, &prepared_request);
+                prepare_add_request_for_execution(request, &prepared_request);
             prepare_error.has_value()) {
           return std::move(*prepare_error);
         }
@@ -311,6 +310,13 @@ AddResult NativeArchiveBackend::add(const AddRequest& request,
 
         for (const std::string& input : prepared_request.input_paths) {
           censor.AddPreItem_NoWildcard(utf8_to_ustring(input));
+        }
+
+        options.InputItemSourcePaths.Clear();
+        options.InputItemArchivePaths.Clear();
+        for (const AddInputItem& item : prepared_request.input_items) {
+          options.InputItemSourcePaths.Add(us2fs(utf8_to_ustring(item.filesystem_path)));
+          options.InputItemArchivePaths.Add(utf8_to_ustring(item.archive_entry));
         }
 
         std::string update_switch_error;

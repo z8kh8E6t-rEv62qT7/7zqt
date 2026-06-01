@@ -24,10 +24,13 @@ final class QuickLookPreviewController: NSViewController, QLPreviewingController
   var pendingExportNavigationSnapshot: QuickLookNavigationSnapshot?
   var inlineOverlayAction: (() -> Void)?
   var toastDismissWorkItem: DispatchWorkItem?
+  var passwordClipboardPollWorkItem: DispatchWorkItem?
+  var passwordClipboardPollGeneration: UInt64 = 0
   var hasCompletedInitialSyntheticRootReveal = false
   var pendingInitialSyntheticRootRevealGeneration: UInt64?
 #if Z7_TESTING
   var z7TestingClipboardPasswordProvider: (() -> String?)?
+  var z7TestingShowErrorHandler: ((String) -> Void)?
   var z7TestingExportItemsHandler:
     (([SelectedExportItem],
       @escaping (Result<Z7BrokerQuickLookBatchExportResult, QuickLookOperationFailure>) -> Void) -> Void)?
@@ -48,8 +51,19 @@ final class QuickLookPreviewController: NSViewController, QLPreviewingController
     let listedSize: UInt64
   }
 
+  override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
+    super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+    installPasswordPromptHandler()
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    installPasswordPromptHandler()
+  }
+
   deinit {
     toastDismissWorkItem?.cancel()
+    stopPasswordClipboardPolling()
     cancelActivePasswordPrompt()
     cancelAllActiveContexts()
     brokerClient.invalidate()
@@ -60,6 +74,9 @@ final class QuickLookPreviewController: NSViewController, QLPreviewingController
     collectionProxy.onInitialSyntheticRootProbeWidthStable = { [weak self] generation in
       self?.handleInitialSyntheticRootProbeWidthStable(generation: generation)
     }
+  }
+
+  private func installPasswordPromptHandler() {
     brokerClient.setPasswordPromptHandler { [weak self] event in
       self?.showPasswordPrompt(
         promptID: event.promptID,
@@ -77,7 +94,7 @@ final class QuickLookPreviewController: NSViewController, QLPreviewingController
       onExtractSelected: { [weak self] in self?.onExtractSelected() },
       onSelectionChange: { [weak self] indexes in self?.setSelectedItemIndexes(indexes) },
       onPrimaryAction: { [weak self] in self?.performPrimarySelectionAction() },
-      onPasswordReadClipboard: { [weak self] in self?.readClipboardPasswordForActivePrompt() },
+      onPasswordConfirm: { [weak self] in self?.confirmClipboardPasswordForActivePrompt() },
       onPasswordCancel: { [weak self] in self?.cancelActivePasswordPrompt() },
       onInlinePrimaryAction: { [weak self] in self?.performInlineOverlayPrimaryAction() },
       onExportPrimaryAction: { [weak self] in self?.acknowledgeExportResult(primary: true) },
@@ -196,6 +213,7 @@ final class QuickLookPreviewController: NSViewController, QLPreviewingController
       switch result {
       case .success(let batchResult):
         self.finishExtractSelectedBatch()
+        self.hideInlineOverlay()
         self.viewModel.mode = .exportSuccess(
           QuickLookExportResultModel(
             title: QuickLookLocalization.text(
@@ -212,6 +230,9 @@ final class QuickLookPreviewController: NSViewController, QLPreviewingController
             primaryButtonEnabled: true))
       case .failure(let failure):
         self.finishExtractSelectedBatch()
+        if !failure.isPasswordRequired || !self.hasActivePasswordPrompt() {
+          self.hideInlineOverlay()
+        }
         let summary = failure.isDirectoryBudgetExceeded
           ? QuickLookLocalization.text(
               "quicklook.folder_export_limited_message")
@@ -298,6 +319,7 @@ final class QuickLookPreviewController: NSViewController, QLPreviewingController
   }
 
   func hideInlineOverlay() {
+    stopPasswordClipboardPolling()
     toastDismissWorkItem?.cancel()
     toastDismissWorkItem = nil
     inlineOverlayAction = nil

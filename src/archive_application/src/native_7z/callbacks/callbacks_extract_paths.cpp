@@ -104,7 +104,18 @@ OverwriteDecision NativeExtractCallback::ask_overwrite_decision(
 
 NativeExtractCallback::ResolvedPath NativeExtractCallback::resolve_destination_path(
     const std::string& item_path) const {
-  std::string normalized_item = normalize_path_for_output(item_path);
+  const std::string normalized_archive_item =
+      normalize_archive_item_path(item_path);
+  std::string normalized_item = normalized_archive_item;
+  if (!eliminate_prefix_.empty()) {
+    if (normalized_item == eliminate_prefix_) {
+      normalized_item.clear();
+    } else if (normalized_item.size() > eliminate_prefix_.size() &&
+               normalized_item.compare(0, eliminate_prefix_.size(), eliminate_prefix_) == 0 &&
+               normalized_item[eliminate_prefix_.size()] == '/') {
+      normalized_item.erase(0, eliminate_prefix_.size() + 1);
+    }
+  }
   ResolvedPath out;
 
   const ExtractPathRemap* best_remap = nullptr;
@@ -116,10 +127,10 @@ NativeExtractCallback::ResolvedPath NativeExtractCallback::resolve_destination_p
         matches = request_selects_single_logical_root();
         break;
       case ExtractPathRemapMatchKind::kExactArchivePath:
-        matches = normalized_item == remap.source_path;
+        matches = normalized_archive_item == remap.source_path;
         break;
       case ExtractPathRemapMatchKind::kArchivePrefix:
-        matches = path_has_prefix(normalized_item, remap.source_path);
+        matches = path_has_prefix(normalized_archive_item, remap.source_path);
         break;
     }
     if (!matches) {
@@ -143,17 +154,17 @@ NativeExtractCallback::ResolvedPath NativeExtractCallback::resolve_destination_p
     switch (best_remap->match_kind) {
       case ExtractPathRemapMatchKind::kRequestRoot:
         if (!selected_entries_.empty()) {
-          relative_tail = strip_prefix_with_separator(normalized_item,
+          relative_tail = strip_prefix_with_separator(normalized_archive_item,
                                                       selected_entries_.front());
         } else {
-          relative_tail = normalized_item;
+          relative_tail = normalized_archive_item;
         }
         break;
       case ExtractPathRemapMatchKind::kExactArchivePath:
         relative_tail.clear();
         break;
       case ExtractPathRemapMatchKind::kArchivePrefix:
-        relative_tail = strip_prefix_with_separator(normalized_item,
+        relative_tail = strip_prefix_with_separator(normalized_archive_item,
                                                     best_remap->source_path);
         break;
     }

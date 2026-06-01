@@ -146,7 +146,13 @@ z7_mi_status_t quicklook_batch_export_status_from_outcome(
   if (capi::should_report_canceled(outcome, task_state && task_state->cancel_requested.load())) {
     return Z7_MI_STATUS_CANCELED;
   }
-  switch (outcome.error.domain) {
+  const z7::app::OperationResult result =
+      z7::app::operation_result_from_outcome(outcome);
+  const z7::app::ArchiveErrorDomain error_domain =
+      result.error.domain != z7::app::ArchiveErrorDomain::kNone
+          ? result.error.domain
+          : outcome.error.domain;
+  switch (error_domain) {
     case z7::app::ArchiveErrorDomain::kPassword:
       if (task_state && task_state->password_prompt_canceled.load()) {
         return Z7_MI_STATUS_PASSWORD_REQUIRED;
@@ -167,6 +173,92 @@ z7_mi_status_t quicklook_batch_export_status_from_outcome(
     case z7::app::ArchiveErrorDomain::kUnsupportedFormat:
     default:
       return Z7_MI_STATUS_BACKEND_ERROR;
+  }
+}
+
+bool quicklook_batch_export_is_password_failure(
+    const z7::app::OperationOutcome& outcome) {
+  const z7::app::OperationResult result =
+      z7::app::operation_result_from_outcome(outcome);
+  return outcome.status == z7::app::OperationStatus::kWrongPassword ||
+         outcome.error_domain == z7::app::ArchiveErrorDomain::kPassword ||
+         outcome.error.domain == z7::app::ArchiveErrorDomain::kPassword ||
+         result.error.domain == z7::app::ArchiveErrorDomain::kPassword;
+}
+
+bool quicklook_batch_export_request_password(
+    const std::shared_ptr<z7::app::IArchiveDelegate>& password_delegate,
+    const std::shared_ptr<AsyncTaskState>& task_state,
+    bool wrong_password,
+    z7::app::ExtractRequest* request) {
+  if (!password_delegate || request == nullptr) {
+    return false;
+  }
+  if (task_state &&
+      (task_state->password_prompt_canceled.load() ||
+       task_state->password_prompt_missing_callback.load())) {
+    return false;
+  }
+
+  z7::app::PasswordPrompt prompt;
+  prompt.reason_kind = wrong_password
+                           ? z7::app::PasswordPromptReason::kWrongPassword
+                           : z7::app::PasswordPromptReason::kPasswordRequired;
+  prompt.reason = wrong_password ? "wrong_password" : "password_required";
+  auto reply = password_delegate->request_password(prompt);
+  if (!reply.has_value() ||
+      reply->kind != z7::app::PasswordReplyKind::kProvide) {
+    return false;
+  }
+
+  request->password = std::move(reply->password);
+  return true;
+}
+
+z7::app::OperationOutcome run_quicklook_extract_with_password_retry(
+    z7::app::ExtractRequest request,
+    const std::shared_ptr<AsyncTaskState>& task_state,
+    const std::shared_ptr<z7::app::IArchiveDelegate>& password_delegate) {
+  constexpr int kMaxPasswordPrompts = 3;
+  int password_prompts = 0;
+
+  for (;;) {
+    const uint32_t prompt_count_before =
+        task_state ? task_state->password_prompt_request_count.load() : 0;
+    z7::app::OperationOutcome outcome = capi::run_archive_request_sync(
+        z7::app::ArchiveRequest{request},
+        task_state,
+        password_delegate);
+    if (!quicklook_batch_export_is_password_failure(outcome) ||
+        (task_state &&
+         capi::should_report_canceled(
+             outcome, task_state->cancel_requested.load()))) {
+      return outcome;
+    }
+    if (task_state &&
+        (task_state->password_prompt_canceled.load() ||
+         task_state->password_prompt_missing_callback.load())) {
+      return outcome;
+    }
+    if (password_prompts >= kMaxPasswordPrompts) {
+      return outcome;
+    }
+
+    const uint32_t prompt_count_after =
+        task_state ? task_state->password_prompt_request_count.load() : 0;
+    const bool backend_prompted_this_attempt =
+        prompt_count_after > prompt_count_before;
+    const bool wrong_password_prompt =
+        backend_prompted_this_attempt || password_prompts > 0 ||
+        !request.password.empty();
+    if (!quicklook_batch_export_request_password(
+            password_delegate,
+            task_state,
+            wrong_password_prompt,
+            &request)) {
+      return outcome;
+    }
+    ++password_prompts;
   }
 }
 
@@ -626,10 +718,11 @@ z7_mi_status_t z7_mi_quicklook_batch_export(
         }
         extract_request.path_remaps.push_back(extract_plan.path_remap);
 
-        const z7::app::OperationOutcome outcome = capi::run_archive_request_sync(
-            z7::app::ArchiveRequest{std::move(extract_request)},
-            task_state,
-            password_delegate);
+        const z7::app::OperationOutcome outcome =
+            run_quicklook_extract_with_password_retry(
+                std::move(extract_request),
+                task_state,
+                password_delegate);
         const auto payload =
             z7::app::outcome_payload_as<z7::app::ExtractResult>(outcome);
         if (!payload.has_value() || !payload->ok) {

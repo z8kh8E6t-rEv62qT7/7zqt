@@ -2,7 +2,6 @@
 // Role: Extract callback output stream selection and materialization setup.
 
 #include "core/internal.h"
-#include "core/filesystem_replace.h"
 #include "third_party_adapter/third_party_adapter.h"
 #include "third_party_adapter/callbacks_extract_run.h"
 #include "third_party_adapter/callbacks_extract_stream.h"
@@ -10,27 +9,264 @@
 namespace z7::app {
 namespace {
 
-bool restore_backup_to_destination(const fs::path& backup_path,
-                                   const fs::path& destination_path,
-                                   std::error_code& ec) {
+bool output_path_exists(const fs::path& path, std::error_code& ec) {
   ec.clear();
-  if (backup_path.empty()) {
-    return true;
+  const fs::file_status status = fs::symlink_status(path, ec);
+  if (ec == std::errc::no_such_file_or_directory) {
+    ec.clear();
+    return false;
   }
-
-  std::error_code cleanup_ec;
-  remove_path_any(destination_path, cleanup_ec);
-  ec.clear();
-  fs::rename(backup_path, destination_path, ec);
-  return !ec;
+  if (ec) {
+    return false;
+  }
+  return fs::status_known(status) && status.type() != fs::file_type::not_found;
 }
 
-fs::path make_partial_output_path(const fs::path& destination_path,
-                                  std::error_code& ec) {
-  return make_unique_sibling_path(destination_path, ".partial-", ec);
+fs::path make_unique_destination_path_no_follow(const fs::path& original_path,
+                                                std::error_code& ec) {
+  ec.clear();
+  std::error_code exists_ec;
+  if (!output_path_exists(original_path, exists_ec)) {
+    if (exists_ec) {
+      ec = exists_ec;
+      return {};
+    }
+    return original_path;
+  }
+  if (exists_ec) {
+    ec = exists_ec;
+    return {};
+  }
+
+  const fs::path parent = original_path.parent_path();
+  const std::string stem = original_path.stem().string();
+  const std::string ext = original_path.extension().string();
+  for (uint64_t suffix = 1; suffix < 10000; ++suffix) {
+    const fs::path candidate =
+        parent / fs::path(stem + "_" + std::to_string(suffix) + ext);
+    exists_ec.clear();
+    if (!output_path_exists(candidate, exists_ec)) {
+      if (exists_ec) {
+        ec = exists_ec;
+        return {};
+      }
+      return candidate;
+    }
+    if (exists_ec) {
+      ec = exists_ec;
+      return {};
+    }
+  }
+
+  const uint64_t unique_suffix = static_cast<uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  const fs::path candidate =
+      parent / fs::path(stem + "_" + std::to_string(unique_suffix) + ext);
+  exists_ec.clear();
+  if (!output_path_exists(candidate, exists_ec)) {
+    if (exists_ec) {
+      ec = exists_ec;
+      return {};
+    }
+    return candidate;
+  }
+  if (exists_ec) {
+    ec = exists_ec;
+  } else {
+    ec = std::make_error_code(std::errc::file_exists);
+  }
+  return {};
+}
+
+bool remove_existing_output_for_overwrite(const fs::path& destination_path,
+                                          std::error_code& ec) {
+  ec.clear();
+  std::error_code exists_ec;
+  if (!output_path_exists(destination_path, exists_ec)) {
+    if (exists_ec) {
+      ec = exists_ec;
+      return false;
+    }
+    return true;
+  }
+  return fs::remove(destination_path, ec);
 }
 
 }  // namespace
+
+HRESULT NativeExtractCallback::prepare_output_target(
+    UInt32 index,
+    const std::string& output_item_path,
+    const ResolvedPath& resolved_path,
+    OutputTarget& target,
+    bool& skipped) {
+  skipped = false;
+  target = OutputTarget{};
+  target.archive_entry_path = output_item_path;
+  target.destination_path = resolved_path.destination_path;
+  target.output_path = resolved_path.destination_path;
+  target.absolute_output_path = resolved_path.absolute_output_path;
+
+  std::error_code ec;
+  const bool exists = output_path_exists(target.destination_path, ec);
+  if (ec) {
+    record_io_error("Cannot query output path: " +
+                    target.destination_path.generic_string());
+    return E_FAIL;
+  }
+
+  bool should_remove_existing = false;
+  if (exists) {
+    switch (overwrite_mode_) {
+      case OverwriteMode::kSkip: {
+        emit_log_event(hooks_,
+                       OperationStage::kRunning,
+                       OutputChannel::kNone,
+                       "Skipping existing file: " +
+                           target.destination_path.generic_string());
+        skipped = true;
+        return S_OK;
+      }
+      case OverwriteMode::kAsk: {
+        if (ask_yes_to_all_) {
+          target.had_original = true;
+          should_remove_existing = true;
+          break;
+        }
+        if (ask_no_to_all_) {
+          emit_log_event(hooks_,
+                         OperationStage::kRunning,
+                         OutputChannel::kNone,
+                         "Skipping existing file: " +
+                             target.destination_path.generic_string());
+          skipped = true;
+          return S_OK;
+        }
+
+        const OverwriteDecision decision =
+            ask_overwrite_decision(target.destination_path, index, output_item_path);
+        switch (decision) {
+          case OverwriteDecision::kYes: {
+            target.had_original = true;
+            should_remove_existing = true;
+            break;
+          }
+          case OverwriteDecision::kYesToAll: {
+            ask_yes_to_all_ = true;
+            target.had_original = true;
+            should_remove_existing = true;
+            break;
+          }
+          case OverwriteDecision::kNo: {
+            emit_log_event(hooks_,
+                           OperationStage::kRunning,
+                           OutputChannel::kNone,
+                           "Skipping existing file: " +
+                               target.destination_path.generic_string());
+            skipped = true;
+            return S_OK;
+          }
+          case OverwriteDecision::kNoToAll: {
+            ask_no_to_all_ = true;
+            emit_log_event(hooks_,
+                           OperationStage::kRunning,
+                           OutputChannel::kNone,
+                           "Skipping existing file: " +
+                               target.destination_path.generic_string());
+            skipped = true;
+            return S_OK;
+          }
+          case OverwriteDecision::kAutoRename: {
+            std::error_code unique_ec;
+            target.output_path =
+                make_unique_destination_path_no_follow(target.destination_path,
+                                                       unique_ec);
+            if (unique_ec || target.output_path.empty()) {
+              record_io_error("Cannot allocate renamed output path: " +
+                              target.destination_path.generic_string() +
+                              (unique_ec ? std::string("; ") + unique_ec.message()
+                                         : ""));
+              return E_FAIL;
+            }
+            break;
+          }
+          case OverwriteDecision::kCancel: {
+            return E_ABORT;
+          }
+        }
+        break;
+      }
+      case OverwriteMode::kOverwrite: {
+        target.had_original = true;
+        should_remove_existing = true;
+        break;
+      }
+      case OverwriteMode::kRenameExisting: {
+        std::error_code unique_ec;
+        const fs::path renamed_existing =
+            make_unique_destination_path_no_follow(target.destination_path,
+                                                   unique_ec);
+        if (unique_ec || renamed_existing.empty()) {
+          record_io_error("Cannot allocate renamed destination path: " +
+                          target.destination_path.generic_string() +
+                          (unique_ec ? std::string("; ") + unique_ec.message()
+                                     : ""));
+          return E_FAIL;
+        }
+        fs::rename(target.destination_path, renamed_existing, ec);
+        if (ec) {
+          record_io_error("Cannot rename existing destination: " +
+                          target.destination_path.generic_string());
+          return E_FAIL;
+        }
+        target.backup_path = renamed_existing;
+        target.had_original = true;
+        target.preserve_backup_on_commit = true;
+        emit_log_event(hooks_,
+                       OperationStage::kRunning,
+                       OutputChannel::kNone,
+                       "Renamed existing file to: " +
+                           renamed_existing.generic_string());
+        break;
+      }
+      case OverwriteMode::kRenameExtracted: {
+        std::error_code unique_ec;
+        target.output_path =
+            make_unique_destination_path_no_follow(target.destination_path,
+                                                   unique_ec);
+        if (unique_ec || target.output_path.empty()) {
+          record_io_error("Cannot allocate renamed output path: " +
+                          target.destination_path.generic_string() +
+                          (unique_ec ? std::string("; ") + unique_ec.message()
+                                     : ""));
+          return E_FAIL;
+        }
+        break;
+      }
+    }
+  }
+
+  if (should_remove_existing &&
+      !remove_existing_output_for_overwrite(target.output_path, ec)) {
+    record_io_error("Cannot delete output path before overwrite: " +
+                    target.output_path.generic_string() +
+                    (ec ? std::string("; ") + ec.message() : ""));
+    return E_FAIL;
+  }
+
+  if (!ensure_parent_dir(target.output_path, ec)) {
+    record_io_error("Cannot create output directory: " +
+                    target.output_path.parent_path().generic_string());
+    return E_FAIL;
+  }
+
+  target.overwrote_existing = exists && (target.output_path == target.destination_path);
+  target.renamed_from_collision = (target.output_path != target.destination_path);
+  if (target.renamed_from_collision) {
+    target.absolute_output_path = fs::absolute(target.output_path).generic_string();
+  }
+  return S_OK;
+}
 
 STDMETHODIMP NativeExtractCallback::GetStream(UInt32 index,
                                               ISequentialOutStream** out_stream,
@@ -107,6 +343,18 @@ STDMETHODIMP NativeExtractCallback::GetStream(UInt32 index,
 
   const ResolvedPath resolved_path = resolve_destination_path(output_item_path);
   const fs::path destination_path = resolved_path.destination_path;
+  ExtractItemAttributes item_attributes;
+  const HRESULT attributes_res = read_item_attributes(index, item_attributes);
+  if (attributes_res != S_OK) {
+    record_io_error("Cannot read output file attributes: " + display_path);
+    return attributes_res;
+  }
+  ExtractItemLinkInfo item_link_info;
+  const HRESULT link_res = read_item_link_info(index, item_link_info);
+  if (link_res != S_OK) {
+    record_io_error("Cannot read output link target: " + display_path);
+    return link_res;
+  }
 
   std::error_code ec;
   if (is_dir) {
@@ -121,6 +369,11 @@ STDMETHODIMP NativeExtractCallback::GetStream(UInt32 index,
       record_io_error("Cannot create output directory: " +
                       destination_path.generic_string());
       return E_FAIL;
+    }
+    if (const std::optional<std::string> warning =
+            apply_item_attributes(destination_path, item_attributes);
+        warning.has_value()) {
+      record_nonfatal_warning(*warning);
     }
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -140,180 +393,49 @@ STDMETHODIMP NativeExtractCallback::GetStream(UInt32 index,
     return S_OK;
   }
 
-  fs::path final_output_path = destination_path;
-  fs::path staged_output_path;
-  fs::path backup_path;
-  bool had_original = false;
-  bool restore_backup_on_failure = false;
-  bool preserve_backup_on_commit = false;
-  bool preserve_committed_backup_for_rollback =
-      budget_.has_value() &&
-      budget_->on_exceeded == BudgetExceededAction::kFailAndRollback;
-  ec.clear();
-  const bool exists = fs::exists(destination_path, ec);
-  if (ec) {
-    record_io_error("Cannot query output path: " +
-                    destination_path.generic_string());
-    return E_FAIL;
-  }
+  if (item_link_info.is_link()) {
+    OutputTarget target;
+    target.archive_entry_path = output_item_path;
+    target.destination_path = destination_path;
+    target.output_path = destination_path;
+    target.absolute_output_path = resolved_path.absolute_output_path;
 
-  if (exists) {
-    switch (overwrite_mode_) {
-      case OverwriteMode::kSkip: {
-        emit_log_event(hooks_,
-                       OperationStage::kRunning,
-                       OutputChannel::kNone,
-                       "Skipping existing file: " + destination_path.generic_string());
-        return S_OK;
-      }
-      case OverwriteMode::kAsk: {
-        if (ask_yes_to_all_) {
-          had_original = true;
-          break;
-        }
-        if (ask_no_to_all_) {
-          emit_log_event(hooks_,
-                         OperationStage::kRunning,
-                         OutputChannel::kNone,
-                         "Skipping existing file: " + destination_path.generic_string());
-          return S_OK;
-        }
-
-        const OverwriteDecision decision =
-            ask_overwrite_decision(destination_path, index, output_item_path);
-        switch (decision) {
-          case OverwriteDecision::kYes: {
-            had_original = true;
-            break;
-          }
-          case OverwriteDecision::kYesToAll: {
-            ask_yes_to_all_ = true;
-            had_original = true;
-            break;
-          }
-          case OverwriteDecision::kNo: {
-            emit_log_event(hooks_,
-                           OperationStage::kRunning,
-                           OutputChannel::kNone,
-                           "Skipping existing file: " + destination_path.generic_string());
-            return S_OK;
-          }
-          case OverwriteDecision::kNoToAll: {
-            ask_no_to_all_ = true;
-            emit_log_event(hooks_,
-                           OperationStage::kRunning,
-                           OutputChannel::kNone,
-                           "Skipping existing file: " + destination_path.generic_string());
-            return S_OK;
-          }
-          case OverwriteDecision::kAutoRename: {
-            std::error_code unique_ec;
-            final_output_path =
-                make_unique_destination_path(destination_path, unique_ec);
-            if (unique_ec || final_output_path.empty()) {
-              record_io_error("Cannot allocate renamed output path: " +
-                              destination_path.generic_string() +
-                              (unique_ec ? std::string("; ") + unique_ec.message() : ""));
-              return E_FAIL;
-            }
-            break;
-          }
-          case OverwriteDecision::kCancel: {
-            return E_ABORT;
-          }
-        }
-        break;
-      }
-      case OverwriteMode::kOverwrite: {
-        had_original = true;
-        break;
-      }
-      case OverwriteMode::kRenameExisting: {
-        std::error_code unique_ec;
-        const fs::path renamed_existing =
-            make_unique_destination_path(destination_path, unique_ec);
-        if (unique_ec || renamed_existing.empty()) {
-          record_io_error("Cannot allocate renamed destination path: " +
-                          destination_path.generic_string() +
-                          (unique_ec ? std::string("; ") + unique_ec.message() : ""));
-          return E_FAIL;
-        }
-        fs::rename(destination_path, renamed_existing, ec);
-        if (ec) {
-          record_io_error("Cannot rename existing destination: " +
-                          destination_path.generic_string());
-          return E_FAIL;
-        }
-        backup_path = renamed_existing;
-        had_original = true;
-        restore_backup_on_failure = true;
-        preserve_backup_on_commit = true;
-        emit_log_event(hooks_,
-                       OperationStage::kRunning,
-                       OutputChannel::kNone,
-                       "Renamed existing file to: " +
-                           renamed_existing.generic_string());
-        break;
-      }
-      case OverwriteMode::kRenameExtracted: {
-        std::error_code unique_ec;
-        final_output_path =
-            make_unique_destination_path(destination_path, unique_ec);
-        if (unique_ec || final_output_path.empty()) {
-          record_io_error("Cannot allocate renamed output path: " +
-                          destination_path.generic_string() +
-                          (unique_ec ? std::string("; ") + unique_ec.message() : ""));
-          return E_FAIL;
-        }
-        break;
-      }
+    LinkCreationPlan link_plan;
+    if (const std::optional<std::string> warning =
+            prepare_link_creation_plan(target, item_link_info, link_plan);
+        warning.has_value()) {
+      record_nonfatal_warning(*warning);
+      return S_OK;
     }
-  }
 
-  std::error_code partial_path_ec;
-  staged_output_path = make_partial_output_path(final_output_path, partial_path_ec);
-  if (staged_output_path.empty()) {
-    if (restore_backup_on_failure &&
-        !restore_backup_to_destination(backup_path, destination_path, ec)) {
-      record_io_error("Cannot allocate partial output path for extract: " +
-                      final_output_path.generic_string() +
-                      (partial_path_ec ? std::string("; ") + partial_path_ec.message() : "") +
-                      "; original file restore also failed: " + ec.message());
-    } else {
-      record_io_error("Cannot allocate partial output path for extract: " +
-                      final_output_path.generic_string() +
-                      (partial_path_ec ? std::string("; ") + partial_path_ec.message() : ""));
+    bool skipped = false;
+    const HRESULT target_res =
+        prepare_output_target(index, output_item_path, resolved_path, target, skipped);
+    if (target_res != S_OK || skipped) {
+      return target_res;
     }
-    return E_FAIL;
-  }
 
-  if (!ensure_parent_dir(staged_output_path, ec)) {
-    if (restore_backup_on_failure &&
-        !restore_backup_to_destination(backup_path, destination_path, ec)) {
-      record_io_error("Cannot create output directory: " +
-                      staged_output_path.parent_path().generic_string() +
-                      "; original file restore also failed: " + ec.message());
-    } else {
-      record_io_error("Cannot create output directory: " +
-                      staged_output_path.parent_path().generic_string());
+    if (const std::optional<std::string> warning =
+            materialize_link(target, link_plan, true);
+        warning.has_value()) {
+      record_nonfatal_warning(*warning);
     }
-    return E_FAIL;
+    return S_OK;
   }
 
-  auto* stream = new NativeFileOutStream(staged_output_path);
+  OutputTarget target;
+  bool skipped = false;
+  const HRESULT target_res =
+      prepare_output_target(index, output_item_path, resolved_path, target, skipped);
+  if (target_res != S_OK || skipped) {
+    return target_res;
+  }
+
+  auto* stream = new NativeFileOutStream(target.output_path);
   const HRESULT open_res = stream->open();
   if (open_res != S_OK) {
-    std::error_code cleanup_ec;
-    remove_path_any(staged_output_path, cleanup_ec);
-    if (restore_backup_on_failure &&
-        !restore_backup_to_destination(backup_path, destination_path, ec)) {
-      record_io_error("Cannot create output file: " +
-                      staged_output_path.generic_string() +
-                      "; original file restore also failed: " + ec.message());
-    } else {
-      record_io_error("Cannot create output file: " +
-                      staged_output_path.generic_string());
-    }
+    record_io_error("Cannot create output file: " +
+                    target.output_path.generic_string());
     stream->Release();
     return open_res;
   }
@@ -322,24 +444,17 @@ STDMETHODIMP NativeExtractCallback::GetStream(UInt32 index,
   {
     std::lock_guard<std::mutex> lock(mutex_);
     PendingEntry pe;
-    pe.archive_entry_path = output_item_path;
-    pe.absolute_output_path =
-        (final_output_path == destination_path)
-            ? resolved_path.absolute_output_path
-            : fs::absolute(final_output_path).generic_string();
-    pe.output_path = final_output_path;
-    pe.staged_output_path = staged_output_path;
-    pe.destination_path = final_output_path;
-    pe.backup_path = backup_path;
-    pe.had_original = had_original;
-    pe.overwrote_existing = exists && (final_output_path == destination_path);
-    pe.renamed_from_collision = (final_output_path != destination_path);
-    pe.restore_backup_on_failure = restore_backup_on_failure;
-    pe.preserve_backup_on_commit = preserve_backup_on_commit;
-    pe.preserve_committed_backup_for_rollback =
-        preserve_committed_backup_for_rollback && pe.overwrote_existing &&
-        !pe.preserve_backup_on_commit;
+    pe.archive_entry_path = target.archive_entry_path;
+    pe.absolute_output_path = target.absolute_output_path;
+    pe.output_path = target.output_path;
+    pe.destination_path = target.destination_path;
+    pe.backup_path = target.backup_path;
+    pe.had_original = target.had_original;
+    pe.overwrote_existing = target.overwrote_existing;
+    pe.renamed_from_collision = target.renamed_from_collision;
+    pe.preserve_backup_on_commit = target.preserve_backup_on_commit;
     (void)archive_get_prop_uint64(archive_, index, kpidSize, pe.declared_size);
+    pe.attributes = item_attributes;
     pe.owned_stream = stream;
     pending_entry_ = std::move(pe);
   }

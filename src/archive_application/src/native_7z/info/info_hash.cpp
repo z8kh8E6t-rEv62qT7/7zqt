@@ -3,28 +3,15 @@
 
 #include "core/internal.h"
 #include "third_party_adapter/third_party_adapter.h"
+#include "third_party_adapter/callbacks_extract_test.h"
 
 namespace z7::app {
 
-HashResult NativeArchiveBackend::run_hash_entries(
-    const HashRequest& request,
-    const ArchiveBackendHooks& hooks,
-    const std::vector<HashInputEntry>& entries,
-    const std::string& main_name) {
-  uint64_t total_files = 0;
-  uint64_t total_bytes = 0;
-  for (const HashInputEntry& entry : entries) {
-    if (entry.is_dir) {
-      continue;
-    }
-    ++total_files;
-    total_bytes += entry.file_size;
-  }
+namespace {
 
-  uint64_t error_count = 0;
-  emit_hash_progress(
-      hooks, "Hashing", true, total_bytes, 0, total_files, 0, 0, {});
-
+std::optional<HashResult> configure_hash_bundle(const HashRequest& request,
+                                                const std::string& main_name,
+                                                CHashBundle& bundle) {
 #ifdef Z7_EXTERNAL_CODECS
   const HRESULT load_codecs_res = ::LoadGlobalCodecs();
   if (load_codecs_res != S_OK) {
@@ -34,7 +21,6 @@ HashResult NativeArchiveBackend::run_hash_entries(
   }
 #endif
 
-  CHashBundle bundle;
   if (!main_name.empty()) {
     bundle.MainName = utf8_to_ustring(main_name);
   }
@@ -48,6 +34,49 @@ HashResult NativeArchiveBackend::run_hash_entries(
     return make_operation_failure<HashResult>(ArchiveErrorDomain::kInvalidArguments,
                                               "Unsupported hash method",
                                               2);
+  }
+  return std::nullopt;
+}
+
+uint64_t hash_entry_file_count(const std::vector<HashInputEntry>& entries) {
+  uint64_t total_files = 0;
+  for (const HashInputEntry& entry : entries) {
+    if (!entry.is_dir) {
+      ++total_files;
+    }
+  }
+  return total_files;
+}
+
+uint64_t hash_entry_total_bytes(const std::vector<HashInputEntry>& entries) {
+  uint64_t total_bytes = 0;
+  for (const HashInputEntry& entry : entries) {
+    if (!entry.is_dir) {
+      total_bytes += entry.file_size;
+    }
+  }
+  return total_bytes;
+}
+
+}  // namespace
+
+HashResult NativeArchiveBackend::run_hash_entries(
+    const HashRequest& request,
+    const ArchiveBackendHooks& hooks,
+    const std::vector<HashInputEntry>& entries,
+    const std::string& main_name) {
+  const uint64_t total_files = hash_entry_file_count(entries);
+  const uint64_t total_bytes = hash_entry_total_bytes(entries);
+
+  uint64_t error_count = 0;
+  emit_hash_progress(
+      hooks, "Hashing", true, total_bytes, 0, total_files, 0, 0, {});
+
+  CHashBundle bundle;
+  if (std::optional<HashResult> configure_error =
+          configure_hash_bundle(request, main_name, bundle);
+      configure_error.has_value()) {
+    return std::move(*configure_error);
   }
 
   uint64_t completed_bytes = 0;
@@ -147,6 +176,91 @@ HashResult NativeArchiveBackend::run_hash_entries(
   }
   result.hash_summary = result.summary_data;
   return result;
+}
+
+HashResult NativeArchiveBackend::run_hash_archive_entries(
+    const HashRequest& request,
+    const ArchiveBackendHooks& hooks,
+    IInArchive* archive,
+    const std::vector<HashInputEntry>& entries,
+    const std::string& main_name,
+    const std::string& archive_display_path,
+    const std::string& password) {
+  if (archive == nullptr) {
+    return make_operation_failure<HashResult>(
+        ArchiveErrorDomain::kInvalidArguments,
+        "Archive hash requires an open archive",
+        7);
+  }
+
+  const uint64_t total_files = hash_entry_file_count(entries);
+  const uint64_t total_bytes = hash_entry_total_bytes(entries);
+  emit_hash_progress(
+      hooks, "Hashing", true, total_bytes, 0, total_files, 0, 0, {});
+
+  CHashBundle bundle;
+  if (std::optional<HashResult> configure_error =
+          configure_hash_bundle(request, main_name, bundle);
+      configure_error.has_value()) {
+    return std::move(*configure_error);
+  }
+
+  std::vector<UInt32> indices;
+  indices.reserve(entries.size());
+  for (const HashInputEntry& entry : entries) {
+    if (entry.archive_index != static_cast<UInt32>(-1)) {
+      indices.push_back(entry.archive_index);
+    }
+  }
+  if (indices.empty() && !entries.empty()) {
+    return make_operation_failure<HashResult>(
+        ArchiveErrorDomain::kInvalidArguments,
+        "Archive hash entries do not have archive indices",
+        7);
+  }
+
+  auto* callback = new NativeTestExtractCallback(
+      archive,
+      hooks,
+      &cancel_requested_,
+      [this]() { return this->wait_while_paused(); },
+      archive_display_path,
+      total_files,
+      0,
+      false,
+      password);
+  callback->set_hash_bundle(&bundle);
+
+  const ExtractInvocationStatus status = invoke_archive_extract_with_callback(
+      archive,
+      indices.empty() ? nullptr : indices.data(),
+      indices.empty() ? static_cast<UInt32>(-1)
+                      : static_cast<UInt32>(indices.size()),
+      false,
+      callback);
+
+  auto attach_summary = [&](HashResult result) {
+    result.summary_data = make_hash_summary(bundle);
+    result.summary_data.num_archives = 1;
+    result.hash_summary = result.summary_data;
+    return result;
+  };
+
+  return finalize_extract_operation_result<HashResult>(
+      hooks,
+      cancel_requested_,
+      total_files,
+      status,
+      [&](const ExtractInvocationStatus& done) {
+        HashResult out =
+            done.diagnostic.empty()
+                ? make_operation_partial_success<HashResult>()
+                : make_operation_partial_success<HashResult>(done.diagnostic);
+        return attach_summary(std::move(out));
+      },
+      [&](const ExtractInvocationStatus&) {
+        return attach_summary(make_operation_success<HashResult>("Success"));
+      });
 }
 
 HashResult NativeArchiveBackend::run_hash_internal(const HashRequest& request,

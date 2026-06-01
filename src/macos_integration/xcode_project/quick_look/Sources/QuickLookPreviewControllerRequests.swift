@@ -3,6 +3,35 @@ import AppKit
 private let brokerStatusPasswordRequired = 6
 
 extension QuickLookPreviewController {
+  func isBrokerPasswordRequiredStatus(_ status: Int) -> Bool {
+    return status == brokerStatusPasswordRequired
+  }
+
+  func hasActivePasswordPrompt() -> Bool {
+    if case .showing = passwordPromptState {
+      return true
+    }
+    return false
+  }
+
+  func finishPasswordRequiredListRequest(_ context: ListRequestContext) {
+    guard !hasActivePasswordPrompt() else {
+      context.completion(true)
+      return
+    }
+
+    hideInlineOverlay()
+    if !nestedStack.isEmpty {
+      let frame = nestedStack.removeLast()
+      virtualDir = frame.enteredFromVirtualDir
+      reloadCurrentDirectory { _ in }
+    } else {
+      virtualDir = ""
+      showSyntheticArchiveRootRow(pendingInitialReveal: false)
+    }
+    context.completion(false)
+  }
+
   func trackContext(_ context: AsyncTaskContext) {
     contextLock.lock()
     activeContexts[ObjectIdentifier(context)] = context
@@ -155,17 +184,8 @@ extension QuickLookPreviewController {
       }
 
       let message = errorMessage ?? QuickLookLocalization.text("quicklook.unknown_list_error")
-      if result.status == brokerStatusPasswordRequired {
-        owner.hideInlineOverlay()
-        if !owner.nestedStack.isEmpty {
-          let frame = owner.nestedStack.removeLast()
-          owner.virtualDir = frame.enteredFromVirtualDir
-          owner.reloadCurrentDirectory { _ in }
-        } else {
-          owner.virtualDir = ""
-          owner.showSyntheticArchiveRootRow(pendingInitialReveal: false)
-        }
-        context.completion(false)
+      if owner.isBrokerPasswordRequiredStatus(result.status) {
+        owner.finishPasswordRequiredListRequest(context)
         return
       }
 
@@ -198,6 +218,12 @@ extension QuickLookPreviewController {
   }
 
   func showError(_ message: String) {
+#if Z7_TESTING
+    if let z7TestingShowErrorHandler {
+      z7TestingShowErrorHandler(message)
+      return
+    }
+#endif
     DispatchQueue.main.async { [weak self] in
       guard let self else {
         return
@@ -239,6 +265,7 @@ extension QuickLookPreviewController {
     guard !items.isEmpty else {
       completion(.failure(QuickLookOperationFailure(
         message: QuickLookLocalization.text("quicklook.no_items_selected"),
+        isPasswordRequired: false,
         completedItemCount: 0,
         totalItemCount: 0,
         failedItemIndex: -1,
@@ -303,8 +330,10 @@ extension QuickLookPreviewController {
         guard result.ok else {
           let message = result.errorMessage ?? QuickLookLocalization.text(
             "quicklook.quicklook_export_failed")
+          let owner = context.owner
           context.completion(.failure(QuickLookOperationFailure(
             message: message,
+            isPasswordRequired: owner?.isBrokerPasswordRequiredStatus(result.status) ?? false,
             completedItemCount: result.completedItemCount,
             totalItemCount: result.totalItemCount,
             failedItemIndex: result.failedItemIndex,

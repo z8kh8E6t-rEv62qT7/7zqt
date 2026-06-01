@@ -34,6 +34,7 @@ struct AsyncTaskState {
   std::atomic<bool> callback_dispatched = false;
   std::atomic<bool> password_prompt_canceled = false;
   std::atomic<bool> password_prompt_missing_callback = false;
+  std::atomic<uint32_t> password_prompt_request_count = 0;
 };
 
 struct NestedSessionChain {

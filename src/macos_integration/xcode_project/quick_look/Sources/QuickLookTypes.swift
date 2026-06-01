@@ -22,6 +22,7 @@ struct QuickLookNavigationSnapshot {
 
 struct QuickLookOperationFailure: Error {
   let message: String
+  let isPasswordRequired: Bool
   let completedItemCount: Int
   let totalItemCount: Int
   let failedItemIndex: Int

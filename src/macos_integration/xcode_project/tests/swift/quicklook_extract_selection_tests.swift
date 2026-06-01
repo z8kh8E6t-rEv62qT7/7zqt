@@ -116,6 +116,7 @@ final class Z7BrokerQuickLookBatchExportProgress {
 
 final class Z7BrokerQuickLookBatchExportResult {
   let ok: Bool
+  let status: Int
   let errorMessage: String?
   let completedItemCount: Int
   let totalItemCount: Int
@@ -124,6 +125,7 @@ final class Z7BrokerQuickLookBatchExportResult {
   let failedDestinationPath: String?
 
   init(ok: Bool,
+       status: Int = 0,
        errorMessage: String?,
        completedItemCount: Int,
        totalItemCount: Int,
@@ -132,6 +134,7 @@ final class Z7BrokerQuickLookBatchExportResult {
        failedDestinationPath: String?)
   {
     self.ok = ok
+    self.status = status
     self.errorMessage = errorMessage
     self.completedItemCount = completedItemCount
     self.totalItemCount = totalItemCount
@@ -144,27 +147,59 @@ final class Z7BrokerQuickLookBatchExportResult {
 final class BrokerClient {
   static let shared = BrokerClient()
   static var nextListResult: Z7BrokerQuickLookListResult?
+  static var nextListPasswordPromptEvent: Z7BrokerPasswordPromptEvent?
+  static var nextListResultAfterPasswordProvided: Z7BrokerQuickLookListResult?
+  static var pendingListCompletion: ((Z7BrokerQuickLookListResult) -> Void)?
   static var nextBatchExportProgress: Z7BrokerQuickLookBatchExportProgress?
+  static var nextBatchExportPasswordPromptEvent: Z7BrokerPasswordPromptEvent?
   static var nextBatchExportResult: Z7BrokerQuickLookBatchExportResult?
+  static var nextBatchExportResultAfterPasswordProvided: Z7BrokerQuickLookBatchExportResult?
+  static var pendingBatchExportCompletion: ((Z7BrokerQuickLookBatchExportResult) -> Void)?
   static var lastListRequestID: String?
   static var lastBatchExportRequestID: String?
   static var lastProvidedPromptID: String?
   static var lastProvidedPassword: String?
   static var lastCanceledPromptID: String?
+  static var passwordPromptHandler: ((Z7BrokerPasswordPromptEvent) -> Void)?
 
   static func resetTestingBehavior() {
     nextListResult = nil
+    nextListPasswordPromptEvent = nil
+    nextListResultAfterPasswordProvided = nil
+    pendingListCompletion = nil
     nextBatchExportProgress = nil
+    nextBatchExportPasswordPromptEvent = nil
     nextBatchExportResult = nil
+    nextBatchExportResultAfterPasswordProvided = nil
+    pendingBatchExportCompletion = nil
     lastListRequestID = nil
     lastBatchExportRequestID = nil
     lastProvidedPromptID = nil
     lastProvidedPassword = nil
     lastCanceledPromptID = nil
+    passwordPromptHandler = nil
+  }
+
+  static func sendPasswordPrompt(_ event: Z7BrokerPasswordPromptEvent) {
+    passwordPromptHandler?(event)
+  }
+
+  static func finishPendingList(_ result: Z7BrokerQuickLookListResult) {
+    let completion = pendingListCompletion
+    pendingListCompletion = nil
+    nextListResultAfterPasswordProvided = nil
+    completion?(result)
+  }
+
+  static func finishPendingBatchExport(_ result: Z7BrokerQuickLookBatchExportResult) {
+    let completion = pendingBatchExportCompletion
+    pendingBatchExportCompletion = nil
+    nextBatchExportResultAfterPasswordProvided = nil
+    completion?(result)
   }
 
   func setPasswordPromptHandler(_ handler: ((Z7BrokerPasswordPromptEvent) -> Void)?) {
-    _ = handler
+    Self.passwordPromptHandler = handler
   }
 
   func invalidate() {}
@@ -176,6 +211,12 @@ final class BrokerClient {
   func providePassword(promptID: String, password: String) {
     Self.lastProvidedPromptID = promptID
     Self.lastProvidedPassword = password
+    if let result = Self.nextListResultAfterPasswordProvided {
+      Self.finishPendingList(result)
+    }
+    if let result = Self.nextBatchExportResultAfterPasswordProvided {
+      Self.finishPendingBatchExport(result)
+    }
   }
 
   func cancelPasswordPrompt(promptID: String) {
@@ -191,6 +232,14 @@ final class BrokerClient {
   {
     _ = (archivePath, virtualDir, archiveTypeHint, nestedArchiveEntries)
     Self.lastListRequestID = requestID
+    if let event = Self.nextListPasswordPromptEvent {
+      Self.nextListPasswordPromptEvent = nil
+      Self.sendPasswordPrompt(event)
+    }
+    if Self.nextListResultAfterPasswordProvided != nil {
+      Self.pendingListCompletion = completion
+      return
+    }
     if let result = Self.nextListResult {
       Self.nextListResult = nil
       completion(result)
@@ -207,6 +256,14 @@ final class BrokerClient {
   {
     _ = (archivePath, archiveTypeHint, nestedArchiveEntries, items)
     Self.lastBatchExportRequestID = requestID
+    if let event = Self.nextBatchExportPasswordPromptEvent {
+      Self.nextBatchExportPasswordPromptEvent = nil
+      Self.sendPasswordPrompt(event)
+    }
+    if Self.nextBatchExportResultAfterPasswordProvided != nil {
+      Self.pendingBatchExportCompletion = completion
+      return
+    }
     if let update = Self.nextBatchExportProgress {
       Self.nextBatchExportProgress = nil
       progress?(update)
@@ -289,6 +346,39 @@ private func successListResult(_ items: [Z7BrokerQuickLookItem]) -> Z7BrokerQuic
   Z7BrokerQuickLookListResult(ok: true, status: 0, errorMessage: nil, items: items)
 }
 
+private func passwordRequiredListResult() -> Z7BrokerQuickLookListResult {
+  Z7BrokerQuickLookListResult(
+    ok: false,
+    status: 6,
+    errorMessage: "Password required",
+    items: [])
+}
+
+private func passwordRequiredExportResult(totalItemCount: Int = 1) -> Z7BrokerQuickLookBatchExportResult {
+  Z7BrokerQuickLookBatchExportResult(
+    ok: false,
+    status: 6,
+    errorMessage: "Password required",
+    completedItemCount: 0,
+    totalItemCount: totalItemCount,
+    failedItemIndex: 0,
+    failedEntryPath: "notes.txt",
+    failedDestinationPath: "/tmp/archive-folder/notes.txt")
+}
+
+private func passwordPromptEvent(promptID: String = "prompt-1",
+                                 archivePath: String = "/tmp/secret.7z",
+                                 nestedChain: [String] = [],
+                                 reasonKey: String = "password_required")
+  -> Z7BrokerPasswordPromptEvent
+{
+  Z7BrokerPasswordPromptEvent(
+    promptID: promptID,
+    archivePath: archivePath,
+    nestedChain: nestedChain,
+    reasonKey: reasonKey)
+}
+
 @MainActor
 private func makeController(items: [QuickLookItem],
                             selected: IndexSet,
@@ -307,6 +397,42 @@ private func makeController(items: [QuickLookItem],
   controller.viewModel.mode = .browse
   controller.updatePresentation()
   return controller
+}
+
+private func temporaryArchiveURL(named archiveName: String = "demo.7z") throws -> (root: URL, archive: URL) {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("z7-quicklook-code-flow-\(UUID().uuidString)", isDirectory: true)
+  try FileManager.default.createDirectory(
+    at: root,
+    withIntermediateDirectories: true,
+    attributes: nil)
+  let archive = root.appendingPathComponent(archiveName, isDirectory: false)
+  try Data("quicklook test archive".utf8).write(to: archive, options: .atomic)
+  return (root, archive)
+}
+
+@MainActor
+private func prepareControllerForArchive(_ controller: QuickLookPreviewController,
+                                         archiveURL: URL) throws {
+  var didComplete = false
+  var previewError: Error?
+  controller.preparePreviewOfFile(at: archiveURL) { error in
+    didComplete = true
+    previewError = error
+  }
+  try expect(didComplete, "preparePreviewOfFile should complete for the synthetic root")
+  if let previewError {
+    throw TestFailure(description: "preparePreviewOfFile failed: \(previewError)")
+  }
+}
+
+@MainActor
+private func enterSyntheticRootViaPrimaryAction(_ controller: QuickLookPreviewController) throws {
+  try expect(controller.items.count == 1, "prepared preview should start with one synthetic root row")
+  try expect(controller.items[0].isSyntheticArchiveRoot,
+             "prepared preview should start at the synthetic archive root")
+  controller.setSelectedItemIndexes(IndexSet(integer: 0))
+  controller.performPrimarySelectionAction()
 }
 
 @MainActor
@@ -356,6 +482,14 @@ private func currentPasswordPrompt(_ controller: QuickLookPreviewController)
     throw TestFailure(description: "expected password prompt overlay")
   }
   return prompt
+}
+
+@MainActor
+private func expectNoInlineOverlay(_ controller: QuickLookPreviewController) throws {
+  if case .none = controller.viewModel.inlineOverlay {
+    return
+  }
+  throw TestFailure(description: "expected no inline overlay")
 }
 
 private func expectActivePasswordPrompt(_ controller: QuickLookPreviewController,
@@ -427,7 +561,7 @@ enum QuickLookExtractSelectionTestMain {
             onExtractSelected: { tapCount += 1 },
             onSelectionChange: { _ in },
             onPrimaryAction: {},
-            onPasswordReadClipboard: {},
+            onPasswordConfirm: {},
             onPasswordCancel: {},
             onInlinePrimaryAction: {},
             onExportPrimaryAction: {},
@@ -437,7 +571,7 @@ enum QuickLookExtractSelectionTestMain {
           try expect(tapCount == 1, "testing tap should invoke the same extract callback used by the button")
         }),
       ExtractSelectionTestCase(
-        name: "password_prompt_read_clipboard_callback_invokes_controller_action",
+        name: "password_prompt_confirm_callback_invokes_controller_action",
         body: {
           var tapCount = 0
           let view = QuickLookPreviewRootView(
@@ -447,17 +581,35 @@ enum QuickLookExtractSelectionTestMain {
             onExtractSelected: {},
             onSelectionChange: { _ in },
             onPrimaryAction: {},
-            onPasswordReadClipboard: { tapCount += 1 },
+            onPasswordConfirm: { tapCount += 1 },
             onPasswordCancel: {},
             onInlinePrimaryAction: {},
             onExportPrimaryAction: {},
             onExportSecondaryAction: {})
 
-          view.z7TestingTapPasswordReadClipboard()
-          try expect(tapCount == 1, "testing tap should invoke the password read clipboard callback")
+          view.z7TestingTapPasswordConfirm()
+          try expect(tapCount == 1, "testing tap should invoke the password confirm callback")
         }),
       ExtractSelectionTestCase(
-        name: "password_prompt_reads_clipboard_and_submits_untrimmed_text",
+        name: "password_prompt_handler_is_installed_before_view_did_load",
+        body: {
+          BrokerClient.resetTestingBehavior()
+          defer { BrokerClient.resetTestingBehavior() }
+
+          let controller = QuickLookPreviewController()
+          controller.z7TestingClipboardPasswordProvider = { "" }
+          BrokerClient.sendPasswordPrompt(passwordPromptEvent(promptID: "prompt-early"))
+
+          try expectActivePasswordPrompt(
+            controller,
+            promptID: "prompt-early",
+            reasonKey: "password_required")
+          let prompt = try currentPasswordPrompt(controller)
+          try expect(prompt.promptID == "prompt-early",
+                     "early broker password prompt should be visible before viewDidLoad")
+        }),
+      ExtractSelectionTestCase(
+        name: "password_prompt_confirms_clipboard_and_submits_untrimmed_text",
         body: {
           BrokerClient.resetTestingBehavior()
           defer { BrokerClient.resetTestingBehavior() }
@@ -470,24 +622,117 @@ enum QuickLookExtractSelectionTestMain {
             nestedChain: [],
             reasonKey: "password_required")
 
-          controller.readClipboardPasswordForActivePrompt()
+          var prompt = try currentPasswordPrompt(controller)
+          try expect(prompt.clipboardText == "  secret\n",
+                     "password prompt should immediately show the clipboard text")
+          try expect(prompt.clipboardSourceText == QuickLookLocalization.text("quicklook.password_clipboard_source"),
+                     "password prompt should explain that the preview comes from the clipboard")
+          try expect(prompt.confirmTitle == QuickLookLocalization.text("quicklook.password_confirm"),
+                     "password prompt should use the confirm action title")
+
+          controller.confirmClipboardPasswordForActivePrompt()
 
           try expect(BrokerClient.lastProvidedPromptID == "prompt-1",
                      "clipboard password should be submitted for the active prompt")
           try expect(BrokerClient.lastProvidedPassword == "  secret\n",
                      "clipboard password should be submitted without trimming")
-          let prompt = try currentPasswordPrompt(controller)
+          prompt = try currentPasswordPrompt(controller)
           try expect(prompt.clipboardText == "  secret\n",
                      "submitted clipboard password should remain visible in the prompt")
-          try expect(prompt.readClipboardTitle == QuickLookLocalization.text("quicklook.password_read_clipboard"),
-                     "password prompt should use the read clipboard action title")
           if case .idle = controller.passwordPromptState {
           } else {
             throw TestFailure(description: "password prompt state should be idle after submission")
           }
         }),
       ExtractSelectionTestCase(
-        name: "password_prompt_empty_clipboard_keeps_prompt_active_as_wrong_password",
+        name: "password_prompt_confirm_submits_empty_clipboard",
+        body: {
+          BrokerClient.resetTestingBehavior()
+          defer { BrokerClient.resetTestingBehavior() }
+
+          let controller = makeController(items: [], selected: [])
+          controller.z7TestingClipboardPasswordProvider = { nil }
+          controller.showPasswordPrompt(
+            promptID: "prompt-empty",
+            archivePath: "/tmp/secret.7z",
+            nestedChain: [],
+            reasonKey: "password_required")
+
+          let prompt = try currentPasswordPrompt(controller)
+          try expect(prompt.clipboardText.isEmpty,
+                     "missing clipboard text should be shown as an empty clipboard preview")
+
+          controller.confirmClipboardPasswordForActivePrompt()
+
+          try expect(BrokerClient.lastProvidedPromptID == "prompt-empty",
+                     "empty clipboard should still submit for the active prompt")
+          try expect(BrokerClient.lastProvidedPassword == "",
+                     "nil clipboard text should be submitted as an empty string")
+          if case .idle = controller.passwordPromptState {
+          } else {
+            throw TestFailure(description: "empty clipboard submission should finish the active prompt")
+          }
+        }),
+      ExtractSelectionTestCase(
+        name: "password_prompt_polling_refreshes_visible_clipboard_text",
+        body: {
+          BrokerClient.resetTestingBehavior()
+          defer { BrokerClient.resetTestingBehavior() }
+
+          var clipboardValue: String? = "first password"
+          let controller = makeController(items: [], selected: [])
+          controller.z7TestingClipboardPasswordProvider = { clipboardValue }
+          controller.showPasswordPrompt(
+            promptID: "prompt-poll",
+            archivePath: "/tmp/secret.7z",
+            nestedChain: [],
+            reasonKey: "password_required")
+
+          var prompt = try currentPasswordPrompt(controller)
+          try expect(prompt.clipboardText == "first password",
+                     "prompt should show the clipboard text as soon as it appears")
+
+          clipboardValue = "new password"
+          controller.z7TestingRefreshPasswordClipboardPreview()
+
+          prompt = try currentPasswordPrompt(controller)
+          try expect(prompt.clipboardText == "new password",
+                     "polling should refresh the visible clipboard text")
+
+          controller.cancelActivePasswordPrompt()
+          clipboardValue = "after cancel"
+          controller.z7TestingRefreshPasswordClipboardPreview()
+          try expectNoInlineOverlay(controller)
+        }),
+      ExtractSelectionTestCase(
+        name: "password_prompt_wrong_password_confirm_submits_latest_clipboard",
+        body: {
+          BrokerClient.resetTestingBehavior()
+          defer { BrokerClient.resetTestingBehavior() }
+
+          let controller = makeController(items: [], selected: [])
+          controller.z7TestingClipboardPasswordProvider = { "new password" }
+          controller.showPasswordPrompt(
+            promptID: "prompt-retry",
+            archivePath: "/tmp/secret.7z",
+            nestedChain: [],
+            reasonKey: "wrong_password")
+
+          let prompt = try currentPasswordPrompt(controller)
+          try expect(prompt.showsRetryHint,
+                     "broker wrong-password prompt should keep current wrong-password presentation")
+          try expect(prompt.clipboardText == "new password",
+                     "wrong-password prompt should show the latest clipboard value")
+
+          controller.confirmClipboardPasswordForActivePrompt()
+
+          try expect(BrokerClient.lastProvidedPromptID == "prompt-retry",
+                     "retry should submit for the same prompt id")
+          try expect(BrokerClient.lastProvidedPassword == "new password",
+                     "retry should submit the latest clipboard value")
+        }),
+      ExtractSelectionTestCase(
+        name: "password_prompt_cancel_cancels_broker_prompt_and_hides_overlay",
         body: {
           BrokerClient.resetTestingBehavior()
           defer { BrokerClient.resetTestingBehavior() }
@@ -495,58 +740,271 @@ enum QuickLookExtractSelectionTestMain {
           let controller = makeController(items: [], selected: [])
           controller.z7TestingClipboardPasswordProvider = { "" }
           controller.showPasswordPrompt(
-            promptID: "prompt-empty",
+            promptID: "prompt-cancel",
             archivePath: "/tmp/secret.7z",
             nestedChain: [],
             reasonKey: "password_required")
 
-          controller.readClipboardPasswordForActivePrompt()
+          controller.cancelActivePasswordPrompt()
 
-          try expect(BrokerClient.lastProvidedPromptID == nil,
-                     "empty clipboard should not submit a password")
-          try expectActivePasswordPrompt(
-            controller,
-            promptID: "prompt-empty",
-            reasonKey: "wrong_password")
-          let prompt = try currentPasswordPrompt(controller)
-          try expect(prompt.showsRetryHint, "empty clipboard should show the retry hint")
-          try expect(prompt.clipboardText.isEmpty, "empty clipboard should leave visible clipboard text empty")
+          try expect(BrokerClient.lastCanceledPromptID == "prompt-cancel",
+                     "canceling the active prompt should cancel the broker prompt")
+          if case .idle = controller.passwordPromptState {
+          } else {
+            throw TestFailure(description: "password prompt state should be idle after cancel")
+          }
+          if case .none = controller.viewModel.inlineOverlay {
+          } else {
+            throw TestFailure(description: "canceling the active prompt should hide the password overlay")
+          }
         }),
       ExtractSelectionTestCase(
-        name: "password_prompt_retry_rereads_clipboard_and_submits_new_value",
+        name: "password_required_list_result_preserves_active_prompt_overlay",
         body: {
           BrokerClient.resetTestingBehavior()
           defer { BrokerClient.resetTestingBehavior() }
 
-          var clipboardValue: String? = nil
           let controller = makeController(items: [], selected: [])
-          controller.z7TestingClipboardPasswordProvider = { clipboardValue }
-          controller.showPasswordPrompt(
-            promptID: "prompt-retry",
-            archivePath: "/tmp/secret.7z",
-            nestedChain: [],
-            reasonKey: "wrong_password")
+          controller.z7TestingClipboardPasswordProvider = { "" }
+          controller.virtualDir = "docs"
+          BrokerClient.nextListPasswordPromptEvent = passwordPromptEvent(promptID: "prompt-list")
+          BrokerClient.nextListResult = passwordRequiredListResult()
 
-          controller.readClipboardPasswordForActivePrompt()
-          try expect(BrokerClient.lastProvidedPromptID == nil,
-                     "missing clipboard text should not submit during wrong-password retry")
+          var completed: Bool?
+          controller.reloadCurrentDirectory { succeeded in
+            completed = succeeded
+          }
+
+          try expect(completed == true,
+                     "active password prompt should keep Quick Look preview alive")
+          try expect(controller.virtualDir == "docs",
+                     "active password prompt should not force navigation fallback")
           try expectActivePasswordPrompt(
             controller,
-            promptID: "prompt-retry",
-            reasonKey: "wrong_password")
-
-          clipboardValue = "new password"
-          controller.readClipboardPasswordForActivePrompt()
-
-          try expect(BrokerClient.lastProvidedPromptID == "prompt-retry",
-                     "retry should submit for the same prompt id")
-          try expect(BrokerClient.lastProvidedPassword == "new password",
-                     "retry should re-read the latest clipboard value")
+            promptID: "prompt-list",
+            reasonKey: "password_required")
           let prompt = try currentPasswordPrompt(controller)
-          try expect(prompt.showsRetryHint,
-                     "broker wrong-password prompt should keep current wrong-password presentation")
-          try expect(prompt.clipboardText == "new password",
-                     "retry should update the visible clipboard text")
+          try expect(prompt.promptID == "prompt-list",
+                     "password-required list completion should not clear the prompt overlay")
+        }),
+      ExtractSelectionTestCase(
+        name: "code_level_list_password_prompt_confirms_clipboard_and_finishes_listing",
+        body: {
+          BrokerClient.resetTestingBehavior()
+          defer { BrokerClient.resetTestingBehavior() }
+
+          let archiveFixture = try temporaryArchiveURL()
+          defer { try? FileManager.default.removeItem(at: archiveFixture.root) }
+
+          var showErrors = [String]()
+          let controller = QuickLookPreviewController()
+          controller.z7TestingClipboardPasswordProvider = { "list secret" }
+          controller.z7TestingShowErrorHandler = { showErrors.append($0) }
+          try prepareControllerForArchive(controller, archiveURL: archiveFixture.archive)
+
+          BrokerClient.nextListPasswordPromptEvent = passwordPromptEvent(
+            promptID: "prompt-list-flow",
+            archivePath: archiveFixture.archive.path)
+          BrokerClient.nextListResultAfterPasswordProvided = successListResult([
+            Z7BrokerQuickLookItem(
+              path: "payload.txt",
+              name: "payload.txt",
+              directory: false,
+              size: 17,
+              mtimeMsUtc: 0,
+              archiveLike: false),
+          ])
+
+          try enterSyntheticRootViaPrimaryAction(controller)
+
+          try expect(BrokerClient.pendingListCompletion != nil,
+                     "list request should stay pending while the password prompt is active")
+          try expect(controller.virtualDir == "demo",
+                     "activating the synthetic root should enter the archive listing")
+          try expect(controller.viewModel.progressState != nil,
+                     "list should keep its loading state while waiting for the password")
+          try expectActivePasswordPrompt(
+            controller,
+            promptID: "prompt-list-flow",
+            reasonKey: "password_required")
+          let prompt = try currentPasswordPrompt(controller)
+          try expect(prompt.promptID == "prompt-list-flow",
+                     "list password prompt should be visible before clipboard submission")
+          try expect(showErrors.isEmpty,
+                     "list password prompt should not be rendered as a normal error")
+
+          controller.confirmClipboardPasswordForActivePrompt()
+
+          try expect(BrokerClient.lastProvidedPromptID == "prompt-list-flow",
+                     "list password flow should submit the active prompt id")
+          try expect(BrokerClient.lastProvidedPassword == "list secret",
+                     "list password flow should submit the clipboard password")
+          try expect(BrokerClient.pendingListCompletion == nil,
+                     "list completion should finish after password submission")
+          try expect(controller.activeContexts.isEmpty,
+                     "list context should be untracked after password-backed success")
+          try expect(controller.viewModel.progressState == nil,
+                     "successful list completion should clear the loading state")
+          try expect(controller.items.map(\.name) == ["payload.txt"],
+                     "password-backed list completion should populate archive rows")
+          try expect(controller.viewModel.rows.map(\.title) == ["payload.txt"],
+                     "password-backed list completion should update the visible row models")
+          try expectNoInlineOverlay(controller)
+          try expect(showErrors.isEmpty,
+                     "successful password-backed list should never call showError")
+        }),
+      ExtractSelectionTestCase(
+        name: "export_running_password_prompt_confirms_clipboard_and_submits",
+        body: {
+          BrokerClient.resetTestingBehavior()
+          defer { BrokerClient.resetTestingBehavior() }
+
+          let controller = makeController(
+            items: [item(path: "notes.txt", name: "notes.txt", directory: false, size: 12)],
+            selected: IndexSet(integer: 0))
+          controller.z7TestingClipboardPasswordProvider = { "export secret" }
+          BrokerClient.nextBatchExportPasswordPromptEvent = passwordPromptEvent(promptID: "prompt-export")
+
+          controller.onExtractSelected()
+
+          try expect(BrokerClient.lastBatchExportRequestID?.isEmpty == false,
+                     "export request should be started before waiting for password")
+          if case .exportRunning = controller.viewModel.mode {
+          } else {
+            throw TestFailure(description: "password prompt should be shown while export is running")
+          }
+          try expectActivePasswordPrompt(
+            controller,
+            promptID: "prompt-export",
+            reasonKey: "password_required")
+
+          controller.confirmClipboardPasswordForActivePrompt()
+
+          try expect(BrokerClient.lastProvidedPromptID == "prompt-export",
+                     "export password prompt should submit to the broker")
+          try expect(BrokerClient.lastProvidedPassword == "export secret",
+                     "export password prompt should submit the clipboard password")
+          controller.cancelAllActiveContexts()
+        }),
+      ExtractSelectionTestCase(
+        name: "code_level_export_password_prompt_confirms_clipboard_and_finishes_export",
+        body: {
+          BrokerClient.resetTestingBehavior()
+          defer { BrokerClient.resetTestingBehavior() }
+
+          var showErrors = [String]()
+          let controller = makeController(
+            items: [item(path: "notes.txt", name: "notes.txt", directory: false, size: 12)],
+            selected: IndexSet(integer: 0))
+          controller.z7TestingClipboardPasswordProvider = { "export secret" }
+          controller.z7TestingShowErrorHandler = { showErrors.append($0) }
+          BrokerClient.nextBatchExportPasswordPromptEvent = passwordPromptEvent(promptID: "prompt-export-flow")
+          BrokerClient.nextBatchExportResultAfterPasswordProvided = successResult(count: 1)
+
+          controller.onExtractSelected()
+
+          try expect(BrokerClient.pendingBatchExportCompletion != nil,
+                     "export request should stay pending while the password prompt is active")
+          try expect(controller.extractSelectedBatchRunning,
+                     "export batch should remain running while waiting for the password")
+          if case .exportRunning = controller.viewModel.mode {
+          } else {
+            throw TestFailure(description: "export should stay in running mode while the password prompt is visible")
+          }
+          try expectActivePasswordPrompt(
+            controller,
+            promptID: "prompt-export-flow",
+            reasonKey: "password_required")
+          try expect(showErrors.isEmpty,
+                     "export password prompt should not be rendered as a normal error")
+
+          controller.confirmClipboardPasswordForActivePrompt()
+
+          try expect(BrokerClient.lastProvidedPromptID == "prompt-export-flow",
+                     "export password flow should submit the active prompt id")
+          try expect(BrokerClient.lastProvidedPassword == "export secret",
+                     "export password flow should submit the clipboard password")
+          try expect(BrokerClient.pendingBatchExportCompletion == nil,
+                     "export completion should finish after password submission")
+          try expect(!controller.extractSelectedBatchRunning,
+                     "successful export should reset the running guard")
+          try expect(controller.activeContexts.isEmpty,
+                     "export context should be untracked after password-backed success")
+          try expectNoInlineOverlay(controller)
+          guard case .exportSuccess(let result) = controller.viewModel.mode else {
+            throw TestFailure(description: "password-backed export should finish in exportSuccess mode")
+          }
+          try expect(result.primaryButtonEnabled,
+                     "password-backed export success should enable its primary action")
+          try expect(showErrors.isEmpty,
+                     "successful password-backed export should never call showError")
+        }),
+      ExtractSelectionTestCase(
+        name: "code_level_cancel_list_and_export_password_prompts_do_not_show_error",
+        body: {
+          BrokerClient.resetTestingBehavior()
+          defer { BrokerClient.resetTestingBehavior() }
+
+          let archiveFixture = try temporaryArchiveURL()
+          defer { try? FileManager.default.removeItem(at: archiveFixture.root) }
+
+          var listShowErrors = [String]()
+          let listController = QuickLookPreviewController()
+          listController.z7TestingClipboardPasswordProvider = { "" }
+          listController.z7TestingShowErrorHandler = { listShowErrors.append($0) }
+          try prepareControllerForArchive(listController, archiveURL: archiveFixture.archive)
+          BrokerClient.nextListPasswordPromptEvent = passwordPromptEvent(
+            promptID: "prompt-list-cancel",
+            archivePath: archiveFixture.archive.path)
+          BrokerClient.nextListResultAfterPasswordProvided = successListResult([])
+
+          try enterSyntheticRootViaPrimaryAction(listController)
+          listController.cancelActivePasswordPrompt()
+
+          try expect(BrokerClient.lastCanceledPromptID == "prompt-list-cancel",
+                     "canceling a list password prompt should cancel the broker prompt")
+          try expectNoInlineOverlay(listController)
+          BrokerClient.finishPendingList(passwordRequiredListResult())
+          try expect(listController.activeContexts.isEmpty,
+                     "canceled list context should be untracked after broker completion")
+          try expect(listController.virtualDir.isEmpty,
+                     "canceled list password failure should return to the synthetic root")
+          try expect(listController.items.count == 1 && listController.items[0].isSyntheticArchiveRoot,
+                     "canceled list password failure should restore the synthetic root row")
+          try expectNoInlineOverlay(listController)
+          try expect(listShowErrors.isEmpty,
+                     "canceled list password prompt should not call showError")
+
+          BrokerClient.resetTestingBehavior()
+
+          var exportShowErrors = [String]()
+          let exportController = makeController(
+            items: [item(path: "notes.txt", name: "notes.txt", directory: false, size: 12)],
+            selected: IndexSet(integer: 0))
+          exportController.z7TestingClipboardPasswordProvider = { "" }
+          exportController.z7TestingShowErrorHandler = { exportShowErrors.append($0) }
+          BrokerClient.nextBatchExportPasswordPromptEvent = passwordPromptEvent(promptID: "prompt-export-cancel")
+          BrokerClient.nextBatchExportResultAfterPasswordProvided = successResult(count: 1)
+
+          exportController.onExtractSelected()
+          exportController.cancelActivePasswordPrompt()
+
+          try expect(BrokerClient.lastCanceledPromptID == "prompt-export-cancel",
+                     "canceling an export password prompt should cancel the broker prompt")
+          try expectNoInlineOverlay(exportController)
+          BrokerClient.finishPendingBatchExport(passwordRequiredExportResult())
+          try expect(exportController.activeContexts.isEmpty,
+                     "canceled export context should be untracked after broker completion")
+          try expect(!exportController.extractSelectedBatchRunning,
+                     "canceled export completion should reset the running guard")
+          guard case .exportFailure(let result) = exportController.viewModel.mode else {
+            throw TestFailure(description: "canceled export password completion should surface as exportFailure")
+          }
+          try expect(!result.primaryButtonEnabled,
+                     "canceled export password failure should keep the done action disabled")
+          try expectNoInlineOverlay(exportController)
+          try expect(exportShowErrors.isEmpty,
+                     "canceled export password prompt should not call showError")
         }),
       ExtractSelectionTestCase(
         name: "extract_selected_single_file_exports_file_destination",

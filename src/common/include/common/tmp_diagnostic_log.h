@@ -114,7 +114,11 @@ inline TmpDiagnosticLogField make_field(std::string_view key,
 }  // namespace tmp_diagnostic_log_detail
 
 inline std::string_view tmp_diagnostic_log_path() noexcept {
+#ifdef Z7_ENABLE_TMP_DIAGNOSTIC_LOG
   return tmp_diagnostic_log_detail::kTmpDiagnosticLogPath;
+#else
+  return {};
+#endif
 }
 
 inline TmpDiagnosticLogField make_tmp_diagnostic_log_field(
@@ -192,6 +196,7 @@ inline void append_tmp_diagnostic_log(
     std::string_view stage,
     std::string_view detail = {},
     const TmpDiagnosticLogContext& context = {}) noexcept {
+#ifdef Z7_ENABLE_TMP_DIAGNOSTIC_LOG
   try {
     std::ostringstream thread_stream;
     thread_stream << std::this_thread::get_id();
@@ -225,6 +230,11 @@ inline void append_tmp_diagnostic_log(
     output << '\n';
   } catch (...) {
   }
+#else
+  (void)stage;
+  (void)detail;
+  (void)context;
+#endif
 }
 
 inline void append_tmp_diagnostic_log_fields(

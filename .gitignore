@@ -5,3 +5,4 @@ temp/
 *.local.*
 .idea/
 .claude/
+memo.md

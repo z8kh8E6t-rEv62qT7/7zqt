@@ -81,6 +81,7 @@ struct HashInputEntry {
   std::string relative_path;
   bool is_dir = false;
   uint64_t file_size = 0;
+  UInt32 archive_index = static_cast<UInt32>(-1);
 };
 
 std::string path_leaf_name(const fs::path& path);
@@ -300,6 +301,13 @@ class NativeArchiveBackend final : public INativeArchiveBackend {
                               const ArchiveBackendHooks& hooks,
                               const std::vector<HashInputEntry>& entries,
                               const std::string& main_name = {});
+  HashResult run_hash_archive_entries(const HashRequest& request,
+                                      const ArchiveBackendHooks& hooks,
+                                      IInArchive* archive,
+                                      const std::vector<HashInputEntry>& entries,
+                                      const std::string& main_name,
+                                      const std::string& archive_display_path,
+                                      const std::string& password);
 
   std::atomic<bool> cancel_requested_{false};
   std::atomic<bool> hashing_active_{false};

@@ -101,11 +101,13 @@ append_change() {
   fi
 
   local existing
-  for existing in "${change_old_loads[@]}"; do
-    if [ "$existing" = "$old_load" ]; then
-      return
-    fi
-  done
+  if [ "${#change_old_loads[@]}" -gt 0 ]; then
+    for existing in "${change_old_loads[@]}"; do
+      if [ "$existing" = "$old_load" ]; then
+        return
+      fi
+    done
+  fi
 
   change_old_loads+=("$old_load")
   change_args+=(-change "$old_load" "$new_load")

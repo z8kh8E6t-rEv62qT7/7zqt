@@ -7,7 +7,7 @@ struct QuickLookPreviewRootView: View {
   let onExtractSelected: () -> Void
   let onSelectionChange: (IndexSet) -> Void
   let onPrimaryAction: () -> Void
-  let onPasswordReadClipboard: () -> Void
+  let onPasswordConfirm: () -> Void
   let onPasswordCancel: () -> Void
   let onInlinePrimaryAction: () -> Void
   let onExportPrimaryAction: () -> Void
@@ -283,7 +283,7 @@ struct QuickLookPreviewRootView: View {
   private func passwordCard(_ prompt: QuickLookPasswordPromptModel) -> some View {
     QuickLookPasswordPromptView(
       prompt: prompt,
-      onReadClipboard: onPasswordReadClipboard,
+      onConfirm: onPasswordConfirm,
       onCancel: onPasswordCancel)
   }
 
@@ -337,7 +337,7 @@ struct QuickLookPreviewRootView: View {
 
 private struct QuickLookPasswordPromptView: View {
   let prompt: QuickLookPasswordPromptModel
-  let onReadClipboard: () -> Void
+  let onConfirm: () -> Void
   let onCancel: () -> Void
 
   var body: some View {
@@ -358,6 +358,10 @@ private struct QuickLookPasswordPromptView: View {
           .font(.caption.weight(.medium))
           .foregroundStyle(.red)
       }
+
+      Text(prompt.clipboardSourceText)
+        .font(.caption.weight(.medium))
+        .foregroundStyle(QuickLookPreviewTheme.secondaryText)
 
       ScrollView {
         Text(verbatim: prompt.clipboardText.isEmpty ? " " : prompt.clipboardText)
@@ -381,9 +385,9 @@ private struct QuickLookPasswordPromptView: View {
           action: onCancel)
         Spacer(minLength: 0)
         QuickLookActionButton(
-          title: prompt.readClipboardTitle,
+          title: prompt.confirmTitle,
           style: .prominent,
-          action: onReadClipboard)
+          action: onConfirm)
       }
     }
     .padding(20)
@@ -547,8 +551,8 @@ extension QuickLookPreviewRootView {
     onExtractSelected()
   }
 
-  func z7TestingTapPasswordReadClipboard() {
-    onPasswordReadClipboard()
+  func z7TestingTapPasswordConfirm() {
+    onPasswordConfirm()
   }
 }
 #endif

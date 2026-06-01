@@ -2,10 +2,11 @@
 // Role: Extract callback operation result accounting.
 
 #include "core/internal.h"
-#include "core/filesystem_replace.h"
 #include "third_party_adapter/third_party_adapter.h"
 #include "third_party_adapter/callbacks_extract_run.h"
 #include "third_party_adapter/callbacks_extract_stream.h"
+#include "Windows/FileDir.h"
+#include "Windows/FileIO.h"
 
 #include <fstream>
 #include <iterator>
@@ -71,7 +72,134 @@ void write_zone_identifier_stream(const fs::path& output_path,
 
 #endif
 
+FString filesystem_path_to_fstring(const fs::path& path) {
+  return us2fs(utf8_to_ustring(path.string()));
+}
+
+std::string normalize_link_target_separators(std::string target) {
+  std::replace(target.begin(), target.end(), '\\', '/');
+  std::string out;
+  out.reserve(target.size());
+  bool last_was_slash = false;
+  for (char ch : target) {
+    if (ch == '/') {
+      if (last_was_slash) {
+        continue;
+      }
+      last_was_slash = true;
+    } else {
+      last_was_slash = false;
+    }
+    out.push_back(ch);
+  }
+  return out;
+}
+
+bool path_is_within_root(const fs::path& candidate, const fs::path& root) {
+  const std::string root_text =
+      fs::absolute(root).lexically_normal().generic_string();
+  const std::string candidate_text =
+      fs::absolute(candidate).lexically_normal().generic_string();
+  if (root_text == "/") {
+    return !candidate_text.empty() && candidate_text.front() == '/';
+  }
+  if (candidate_text == root_text) {
+    return true;
+  }
+  return candidate_text.size() > root_text.size() &&
+         candidate_text.compare(0, root_text.size(), root_text) == 0 &&
+         candidate_text[root_text.size()] == '/';
+}
+
+std::optional<std::string> normalize_archive_relative_link_target(
+    const std::string& target) {
+  std::vector<std::string> parts;
+  size_t start = 0;
+  while (start <= target.size()) {
+    const size_t slash = target.find('/', start);
+    const std::string token =
+        target.substr(start,
+                      slash == std::string::npos ? std::string::npos
+                                                  : slash - start);
+    if (!token.empty() && token != ".") {
+      if (token == "..") {
+        if (parts.empty()) {
+          return std::nullopt;
+        }
+        parts.pop_back();
+      } else {
+        parts.push_back(token);
+      }
+    }
+    if (slash == std::string::npos) {
+      break;
+    }
+    start = slash + 1;
+  }
+
+  std::string normalized;
+  for (const std::string& part : parts) {
+    if (!normalized.empty()) {
+      normalized.push_back('/');
+    }
+    normalized += part;
+  }
+  if (normalized.empty()) {
+    return std::nullopt;
+  }
+  return normalized;
+}
+
+enum class HardLinkTargetState {
+  kReady,
+  kMissing,
+  kInvalid
+};
+
+HardLinkTargetState inspect_hard_link_target(const fs::path& target_path,
+                                             std::string& warning) {
+  warning.clear();
+  std::error_code ec;
+  const fs::file_status status = fs::symlink_status(target_path, ec);
+  if (ec == std::errc::no_such_file_or_directory) {
+    return HardLinkTargetState::kMissing;
+  }
+  if (ec) {
+    warning = "Cannot query hard link target: " +
+              target_path.generic_string() + "; " + ec.message();
+    return HardLinkTargetState::kInvalid;
+  }
+  if (!fs::status_known(status) || status.type() == fs::file_type::not_found) {
+    return HardLinkTargetState::kMissing;
+  }
+  if (fs::is_symlink(status)) {
+    warning = "Hard link target is a symbolic link and was skipped: " +
+              target_path.generic_string();
+    return HardLinkTargetState::kInvalid;
+  }
+  if (!fs::is_regular_file(status)) {
+    warning = "Hard link target is not a regular file and was skipped: " +
+              target_path.generic_string();
+    return HardLinkTargetState::kInvalid;
+  }
+  return HardLinkTargetState::kReady;
+}
+
 }  // namespace
+
+void NativeExtractCallback::record_nonfatal_warning(const std::string& message) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!diagnostic_message_.empty()) {
+      diagnostic_message_ += '\n';
+    }
+    diagnostic_message_ += message;
+  }
+  emit_log_event(hooks_,
+                 OperationStage::kRunning,
+                 OutputChannel::kStdErr,
+                 message);
+}
 
 bool NativeExtractCallback::close_pending_entry_stream_locked(
     PendingEntry& pending_entry,
@@ -91,70 +219,278 @@ bool NativeExtractCallback::close_pending_entry_stream_locked(
   if (close_error_message != nullptr) {
     *close_error_message =
         "Failed to finalize extracted output: " +
-        pending_entry.staged_output_path.generic_string();
+        pending_entry.output_path.generic_string();
   }
   return false;
 }
 
-bool NativeExtractCallback::commit_pending_entry_locked(
-    PendingEntry& pending_entry,
-    std::string* commit_error_message) {
-  AtomicReplaceOptions replace_options;
-  replace_options.preserve_backup_on_success =
-      pending_entry.preserve_committed_backup_for_rollback;
-  const AtomicReplaceResult replace_result = replace_file_atomically(
-      pending_entry.staged_output_path,
-      pending_entry.output_path,
-      ".z7-extract-rollback-",
-      nullptr,
-      &replace_options);
-  if (replace_result.success) {
-    if (replace_result.destination_existed) {
-      if (replace_result.backup_retained) {
-        pending_entry.backup_path = replace_result.backup_path;
-      } else if (!pending_entry.preserve_backup_on_commit) {
-        pending_entry.backup_path.clear();
+HRESULT NativeExtractCallback::read_item_attributes(
+    UInt32 index,
+    ExtractItemAttributes& attributes) const {
+  attributes = ExtractItemAttributes{};
+
+  {
+    NWindows::NCOM::CPropVariant prop;
+    const HRESULT hr = archive_->GetProperty(index, kpidPosixAttrib, &prop);
+    if (hr != S_OK) {
+      return hr;
+    }
+    if (prop.vt == VT_UI4) {
+      attributes.defined = true;
+      attributes.attrib =
+          static_cast<UInt32>((prop.ulVal << 16) | FILE_ATTRIBUTE_UNIX_EXTENSION);
+    } else if (prop.vt != VT_EMPTY) {
+      return E_FAIL;
+    }
+  }
+
+  {
+    NWindows::NCOM::CPropVariant prop;
+    const HRESULT hr = archive_->GetProperty(index, kpidAttrib, &prop);
+    if (hr != S_OK) {
+      return hr;
+    }
+    if (prop.vt == VT_UI4) {
+      attributes.defined = true;
+      attributes.attrib = prop.ulVal;
+    } else if (prop.vt != VT_EMPTY) {
+      return E_FAIL;
+    }
+  }
+
+  return S_OK;
+}
+
+HRESULT NativeExtractCallback::read_item_link_info(
+    UInt32 index,
+    ExtractItemLinkInfo& link_info) const {
+  link_info = ExtractItemLinkInfo{};
+
+  {
+    NWindows::NCOM::CPropVariant prop;
+    const HRESULT hr = archive_->GetProperty(index, kpidHardLink, &prop);
+    if (hr != S_OK) {
+      return hr;
+    }
+    if (prop.vt == VT_BSTR) {
+      UString target;
+      target.SetFromBstr(prop.bstrVal);
+      link_info.type = ExtractItemLinkInfo::Type::kHardLink;
+      link_info.target = ustring_to_utf8(target);
+    } else if (prop.vt != VT_EMPTY) {
+      return E_FAIL;
+    }
+  }
+
+  {
+    NWindows::NCOM::CPropVariant prop;
+    const HRESULT hr = archive_->GetProperty(index, kpidSymLink, &prop);
+    if (hr != S_OK) {
+      return hr;
+    }
+    if (prop.vt == VT_BSTR) {
+      UString target;
+      target.SetFromBstr(prop.bstrVal);
+      link_info.type = ExtractItemLinkInfo::Type::kSymLink;
+      link_info.target = ustring_to_utf8(target);
+    } else if (prop.vt != VT_EMPTY) {
+      return E_FAIL;
+    }
+  }
+
+  return S_OK;
+}
+
+std::optional<std::string> NativeExtractCallback::apply_item_attributes(
+    const fs::path& output_path,
+    const ExtractItemAttributes& attributes) const {
+  if (!attributes.defined) {
+    return std::nullopt;
+  }
+
+  const FString native_path = filesystem_path_to_fstring(output_path);
+  if (NWindows::NFile::NDir::SetFileAttrib_PosixHighDetect(
+          native_path, attributes.attrib)) {
+    return std::nullopt;
+  }
+  return "Cannot set file attribute: " + output_path.generic_string();
+}
+
+std::optional<std::string> NativeExtractCallback::prepare_link_creation_plan(
+    const OutputTarget& output_target,
+    const ExtractItemLinkInfo& link_info,
+    LinkCreationPlan& plan) const {
+  plan = LinkCreationPlan{};
+  std::string target = normalize_link_target_separators(link_info.target);
+  if (target.empty()) {
+    return "Empty link target was skipped: " + output_target.archive_entry_path;
+  }
+  if (is_absolute_item_path(target)) {
+    return "Unsafe absolute link target was skipped: " +
+           output_target.archive_entry_path + " -> " + target;
+  }
+
+  if (link_info.type == ExtractItemLinkInfo::Type::kSymLink) {
+    const fs::path resolved_target =
+        (output_target.output_path.parent_path() / fs::path(target))
+            .lexically_normal();
+    if (!path_is_within_root(resolved_target, output_dir_)) {
+      return "Unsafe symbolic link target was skipped: " +
+             output_target.archive_entry_path + " -> " + target;
+    }
+    plan.type = ExtractItemLinkInfo::Type::kSymLink;
+    plan.symlink_target = std::move(target);
+    return std::nullopt;
+  }
+
+  if (link_info.type == ExtractItemLinkInfo::Type::kHardLink) {
+    const std::optional<std::string> normalized_target =
+        normalize_archive_relative_link_target(target);
+    if (!normalized_target.has_value() ||
+        !archive_virtual_path_is_safe_for_materialization(*normalized_target)) {
+      return "Unsafe hard link target was skipped: " +
+             output_target.archive_entry_path + " -> " + target;
+    }
+
+    const ResolvedPath resolved_target =
+        resolve_destination_path(*normalized_target);
+    if (!path_is_within_root(resolved_target.destination_path, output_dir_)) {
+      return "Hard link target outside extraction root was skipped: " +
+             output_target.archive_entry_path + " -> " + *normalized_target;
+    }
+
+    plan.type = ExtractItemLinkInfo::Type::kHardLink;
+    plan.hardlink_target_path = resolved_target.destination_path;
+    return std::nullopt;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<std::string> NativeExtractCallback::create_symbolic_link(
+    const fs::path& output_path,
+    const std::string& target) const {
+#if defined(_WIN32)
+  (void)output_path;
+  (void)target;
+  return "Symbolic link extraction is not supported on this platform.";
+#else
+  const FString native_output_path = filesystem_path_to_fstring(output_path);
+  if (NWindows::NFile::NIO::SetSymLink_UString(native_output_path,
+                                               utf8_to_ustring(target))) {
+    return std::nullopt;
+  }
+  return "Cannot create symbolic link: " + output_path.generic_string() +
+         " -> " + target;
+#endif
+}
+
+std::optional<std::string> NativeExtractCallback::create_hard_link(
+    const fs::path& output_path,
+    const fs::path& target_path) const {
+#if defined(_WIN32)
+  (void)output_path;
+  (void)target_path;
+  return "Hard link extraction is not supported on this platform.";
+#else
+  if (NWindows::NFile::NDir::MyCreateHardLink(
+          filesystem_path_to_fstring(output_path),
+          filesystem_path_to_fstring(target_path))) {
+    return std::nullopt;
+  }
+  return "Cannot create hard link: " + output_path.generic_string() +
+         " -> " + target_path.generic_string();
+#endif
+}
+
+void NativeExtractCallback::record_materialized_output_locked(
+    const OutputTarget& target,
+    uint64_t bytes_written,
+    bool is_directory) {
+  ExtractMaterializedEntry materialized_entry;
+  materialized_entry.archive_entry_path = target.archive_entry_path;
+  materialized_entry.absolute_output_path = target.absolute_output_path;
+  materialized_entry.is_directory = is_directory;
+  materialized_entry.bytes_written = bytes_written;
+  materialized_entry.overwrote_existing = target.overwrote_existing;
+  materialized_entry.renamed_from_collision = target.renamed_from_collision;
+  materialized_entries_.push_back(std::move(materialized_entry));
+
+  ExtractRollbackEntry rollback_entry;
+  rollback_entry.output_path = target.output_path;
+  rollback_entry.destination_path = target.destination_path;
+  rollback_entry.backup_path = target.backup_path;
+  rollback_entry.had_original = target.had_original;
+  rollback_entry.preserve_backup_on_commit = target.preserve_backup_on_commit;
+  rollback_entry.is_directory = is_directory;
+  rollback_entries_.push_back(std::move(rollback_entry));
+}
+
+std::optional<std::string> NativeExtractCallback::materialize_link(
+    const OutputTarget& output_target,
+    const LinkCreationPlan& plan,
+    bool allow_defer) {
+  if (plan.type == ExtractItemLinkInfo::Type::kSymLink) {
+    std::optional<std::string> warning =
+        create_symbolic_link(output_target.output_path, plan.symlink_target);
+    if (warning.has_value()) {
+      return warning;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    record_materialized_output_locked(output_target, 0, false);
+    return std::nullopt;
+  }
+
+  if (plan.type == ExtractItemLinkInfo::Type::kHardLink) {
+    std::string target_warning;
+    const HardLinkTargetState target_state =
+        inspect_hard_link_target(plan.hardlink_target_path, target_warning);
+    if (target_state == HardLinkTargetState::kMissing) {
+      if (allow_defer) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        DeferredHardLink deferred;
+        deferred.output_target = output_target;
+        deferred.target_path = plan.hardlink_target_path;
+        deferred_hard_links_.push_back(std::move(deferred));
+        return std::nullopt;
       }
+      return "Hard link target is missing and was skipped: " +
+             output_target.archive_entry_path + " -> " +
+             plan.hardlink_target_path.generic_string();
     }
-    pending_entry.destination_path = pending_entry.output_path;
-    return true;
-  }
+    if (target_state == HardLinkTargetState::kInvalid) {
+      return target_warning;
+    }
 
-  if (commit_error_message != nullptr) {
-    if (replace_result.error.has_value() &&
-        !replace_result.error->error.message.empty()) {
-      *commit_error_message = replace_result.error->error.message;
-    } else {
-      *commit_error_message =
-          "Failed to commit extracted output: " +
-          pending_entry.output_path.generic_string();
+    std::optional<std::string> warning =
+        create_hard_link(output_target.output_path, plan.hardlink_target_path);
+    if (warning.has_value()) {
+      return warning;
     }
+    std::lock_guard<std::mutex> lock(mutex_);
+    record_materialized_output_locked(output_target, 0, false);
   }
-  return false;
+  return std::nullopt;
 }
 
-bool NativeExtractCallback::restore_pending_entry_original_locked(
-    PendingEntry& pending_entry,
-    std::string* restore_error_message) {
-  std::error_code cleanup_ec;
-  remove_path_any(pending_entry.staged_output_path, cleanup_ec);
-
-  if (!pending_entry.restore_backup_on_failure ||
-      pending_entry.backup_path.empty()) {
-    return true;
+void NativeExtractCallback::finish_deferred_links() {
+  std::vector<DeferredHardLink> deferred_links;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    deferred_links = std::move(deferred_hard_links_);
+    deferred_hard_links_.clear();
   }
 
-  std::error_code restore_ec;
-  fs::rename(pending_entry.backup_path, pending_entry.destination_path, restore_ec);
-  if (!restore_ec) {
-    return true;
+  for (const DeferredHardLink& deferred : deferred_links) {
+    LinkCreationPlan plan;
+    plan.type = ExtractItemLinkInfo::Type::kHardLink;
+    plan.hardlink_target_path = deferred.target_path;
+    if (const std::optional<std::string> warning =
+            materialize_link(deferred.output_target, plan, false);
+        warning.has_value()) {
+      record_nonfatal_warning(*warning);
+    }
   }
-
-  if (restore_error_message != nullptr) {
-    *restore_error_message =
-        "Failed to restore overwritten output: " + restore_ec.message();
-  }
-  return false;
 }
 
 void NativeExtractCallback::apply_zone_identifier_to_file(
@@ -182,6 +518,7 @@ STDMETHODIMP NativeExtractCallback::SetOperationResult(Int32 op_res) throw() {
   bool force_hresult_failure = false;
   bool encrypted_item = false;
   std::optional<fs::path> zone_identifier_target;
+  std::optional<std::string> attribute_warning;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     auto append_diagnostic_locked = [this](const std::string& message) {
@@ -204,23 +541,16 @@ STDMETHODIMP NativeExtractCallback::SetOperationResult(Int32 op_res) throw() {
                                                &close_error_message)) {
           failure_message = std::move(close_error_message);
         } else {
-          std::string commit_error_message;
-          if (!commit_pending_entry_locked(*pending_entry_,
-                                           &commit_error_message)) {
-            failure_message = std::move(commit_error_message);
-          } else {
-            zone_identifier_target = pending_entry_->output_path;
+          attribute_warning = apply_item_attributes(pending_entry_->output_path,
+                                                    pending_entry_->attributes);
+          if (attribute_warning.has_value()) {
+            append_diagnostic_locked(*attribute_warning);
           }
+          zone_identifier_target = pending_entry_->output_path;
         }
       }
 
       if (!failure_message.empty()) {
-        std::string restore_error_message;
-        if (pending_entry_.has_value() &&
-            !restore_pending_entry_original_locked(*pending_entry_,
-                                                   &restore_error_message)) {
-          append_diagnostic_locked(restore_error_message);
-        }
         io_error_ = true;
         if (io_error_message_.empty()) {
           io_error_message_ = failure_message;
@@ -277,16 +607,6 @@ STDMETHODIMP NativeExtractCallback::SetOperationResult(Int32 op_res) throw() {
         }
         append_diagnostic_locked(close_error_message);
       }
-
-      std::string restore_error_message;
-      if (pending_entry_.has_value() &&
-          !restore_pending_entry_original_locked(*pending_entry_, &restore_error_message)) {
-        io_error_ = true;
-        if (io_error_message_.empty()) {
-          io_error_message_ = restore_error_message;
-        }
-        append_diagnostic_locked(restore_error_message);
-      }
       pending_entry_.reset();
       ++error_count_;
       if (op_res == NArchive::NExtract::NOperationResult::kWrongPassword ||
@@ -308,6 +628,12 @@ STDMETHODIMP NativeExtractCallback::SetOperationResult(Int32 op_res) throw() {
 
   if (zone_identifier_target.has_value()) {
     apply_zone_identifier_to_file(*zone_identifier_target);
+  }
+  if (attribute_warning.has_value()) {
+    emit_log_event(hooks_,
+                   OperationStage::kRunning,
+                   OutputChannel::kStdErr,
+                   *attribute_warning);
   }
 
   if (op_res != NArchive::NExtract::NOperationResult::kOK ||

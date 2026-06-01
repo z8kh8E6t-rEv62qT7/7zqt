@@ -7,6 +7,66 @@
 
 namespace z7::app {
 
+class NativeHashOutStream final : public ISequentialOutStream {
+ public:
+  explicit NativeHashOutStream(NativeTestExtractCallback* owner)
+      : owner_(owner) {
+    if (owner_ != nullptr) {
+      owner_->AddRef();
+    }
+  }
+
+  NativeHashOutStream(const NativeHashOutStream&) = delete;
+  NativeHashOutStream& operator=(const NativeHashOutStream&) = delete;
+
+  ~NativeHashOutStream() {
+    if (owner_ != nullptr) {
+      owner_->Release();
+    }
+  }
+
+  STDMETHOD(QueryInterface)(REFIID iid, void** out_object) throw() override {
+    if (out_object == nullptr) {
+      return E_INVALIDARG;
+    }
+    *out_object = nullptr;
+    if (iid == IID_IUnknown || iid == IID_ISequentialOutStream) {
+      *out_object = static_cast<ISequentialOutStream*>(this);
+      AddRef();
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  STDMETHOD_(ULONG, AddRef)() throw() override {
+    return ++ref_count_;
+  }
+
+  STDMETHOD_(ULONG, Release)() throw() override {
+    const ULONG next = --ref_count_;
+    if (next == 0) {
+      delete this;
+    }
+    return next;
+  }
+
+  STDMETHOD(Write)(const void* data,
+                   UInt32 size,
+                   UInt32* processed_size) throw() override {
+    if (owner_ == nullptr) {
+      if (processed_size != nullptr) {
+        *processed_size = 0;
+      }
+      return E_FAIL;
+    }
+    return owner_->write_hash_data(data, size, processed_size);
+  }
+
+ private:
+  std::atomic<ULONG> ref_count_{1};
+  NativeTestExtractCallback* owner_ = nullptr;
+};
+
 NativeTestExtractCallback::NativeTestExtractCallback(
     IInArchive* archive,
     const ArchiveBackendHooks& hooks,
@@ -15,7 +75,8 @@ NativeTestExtractCallback::NativeTestExtractCallback(
     std::string archive_path,
     uint64_t total_files,
     uint64_t configured_memory_limit_bytes,
-    bool configured_memory_limit_defined)
+    bool configured_memory_limit_defined,
+    std::string initial_password)
     : CallbackBase(cancel_requested, std::move(wait_while_paused)),
       archive_(archive),
       hooks_(hooks),
@@ -23,7 +84,19 @@ NativeTestExtractCallback::NativeTestExtractCallback(
       configured_memory_limit_bytes_(configured_memory_limit_bytes),
       configured_memory_limit_defined_(configured_memory_limit_defined &&
                                        configured_memory_limit_bytes != 0),
-      total_files_(total_files) {}
+      total_files_(total_files),
+      password_(std::move(initial_password)),
+      password_defined_(!password_.empty()) {}
+
+void NativeTestExtractCallback::set_hash_bundle(CHashBundle* hash_bundle) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  hash_bundle_ = hash_bundle;
+  hash_current_active_ = false;
+  hash_current_is_dir_ = false;
+  hash_first_file_set_ = false;
+  hash_file_progress_prev_ = 0;
+  hash_current_path_.clear();
+}
 
 uint64_t NativeTestExtractCallback::completed_files() const {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -135,7 +208,9 @@ STDMETHODIMP NativeTestExtractCallback::SetCompleted(
     const UInt64* complete_value) throw() {
   if (complete_value != nullptr) {
     std::lock_guard<std::mutex> lock(mutex_);
-    completed_bytes_ = *complete_value;
+    if (hash_bundle_ == nullptr) {
+      completed_bytes_ = *complete_value;
+    }
   }
   emit_progress_snapshot();
   return check_canceled();
@@ -175,14 +250,56 @@ STDMETHODIMP NativeTestExtractCallback::GetStream(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     current_path_ = path;
+    if (hash_bundle_ != nullptr) {
+      bool is_dir = false;
+      (void)archive_get_prop_bool(archive_, index, kpidIsDir, is_dir);
+      hash_current_active_ = true;
+      hash_current_is_dir_ = is_dir;
+      hash_current_path_ = path;
+      hash_file_progress_prev_ = 0;
+      hash_bundle_->InitForNewFile();
+      if (!is_dir && !hash_first_file_set_) {
+        hash_first_file_set_ = true;
+        hash_bundle_->FirstFileName = utf8_to_ustring(path);
+      }
+    }
   }
   emit_progress_snapshot();
+
+  bool should_return_hash_stream = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    should_return_hash_stream =
+        hash_bundle_ != nullptr && hash_current_active_ && !hash_current_is_dir_;
+  }
+  if (should_return_hash_stream) {
+    *out_stream = new NativeHashOutStream(this);
+  }
   return check_canceled();
 }
 
 STDMETHODIMP NativeTestExtractCallback::PrepareOperation(
     Int32 ask_extract_mode) throw() {
-  if (ask_extract_mode == NArchive::NExtract::NAskMode::kTest) {
+  bool hash_mode = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hash_mode = hash_bundle_ != nullptr;
+  }
+  if (hash_mode &&
+      (ask_extract_mode == NArchive::NExtract::NAskMode::kExtract ||
+       ask_extract_mode == NArchive::NExtract::NAskMode::kTest)) {
+    std::string path;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      path = current_path_;
+    }
+    if (!path.empty()) {
+      emit_log_event(hooks_,
+                     OperationStage::kRunning,
+                     OutputChannel::kNone,
+                     "Hashing " + path);
+    }
+  } else if (ask_extract_mode == NArchive::NExtract::NAskMode::kTest) {
     std::string path;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -201,20 +318,32 @@ STDMETHODIMP NativeTestExtractCallback::PrepareOperation(
 
 STDMETHODIMP NativeTestExtractCallback::SetOperationResult(Int32 op_res) throw() {
   std::string path;
-  uint64_t completed_files_snapshot = 0;
-  uint64_t error_count_snapshot = 0;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    ++completed_files_;
+    const bool hash_mode = hash_bundle_ != nullptr;
+    const bool hash_active = hash_current_active_;
+    const bool hash_is_dir = hash_current_is_dir_;
+    if (!hash_mode || (hash_active && !hash_is_dir)) {
+      ++completed_files_;
+    }
     if (op_res != NArchive::NExtract::NOperationResult::kOK) {
       ++error_count_;
+      if (hash_mode && hash_bundle_ != nullptr) {
+        ++hash_bundle_->NumErrors;
+      }
       if (op_res == NArchive::NExtract::NOperationResult::kWrongPassword) {
         wrong_password_ = true;
       }
+    } else if (hash_mode && hash_bundle_ != nullptr && hash_active) {
+      hash_bundle_->Final(hash_is_dir, false, utf8_to_ustring(hash_current_path_));
     }
     path = current_path_;
-    completed_files_snapshot = completed_files_;
-    error_count_snapshot = error_count_;
+    if (hash_mode) {
+      hash_current_active_ = false;
+      hash_current_path_.clear();
+      hash_current_is_dir_ = false;
+      hash_file_progress_prev_ = 0;
+    }
   }
 
   if (op_res != NArchive::NExtract::NOperationResult::kOK) {
@@ -235,8 +364,6 @@ STDMETHODIMP NativeTestExtractCallback::SetOperationResult(Int32 op_res) throw()
                    message);
   }
 
-  (void)completed_files_snapshot;
-  (void)error_count_snapshot;
   emit_progress_snapshot();
   return check_canceled();
 }
@@ -449,6 +576,38 @@ void NativeTestExtractCallback::emit_progress_snapshot() const {
 
 HRESULT NativeTestExtractCallback::check_canceled() const {
   return should_abort() ? E_ABORT : S_OK;
+}
+
+HRESULT NativeTestExtractCallback::write_hash_data(const void* data,
+                                                   UInt32 size,
+                                                   UInt32* processed_size) {
+  if (processed_size != nullptr) {
+    *processed_size = 0;
+  }
+  if (data == nullptr && size != 0) {
+    return E_INVALIDARG;
+  }
+
+  bool should_emit = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (hash_bundle_ == nullptr || !hash_current_active_ || hash_current_is_dir_) {
+      return E_FAIL;
+    }
+    hash_bundle_->Update(data, size);
+    completed_bytes_ += size;
+    if (hash_bundle_->CurSize - hash_file_progress_prev_ >= kHashProgressStepBytes) {
+      hash_file_progress_prev_ = hash_bundle_->CurSize;
+      should_emit = true;
+    }
+  }
+  if (processed_size != nullptr) {
+    *processed_size = size;
+  }
+  if (should_emit) {
+    emit_progress_snapshot();
+  }
+  return check_canceled();
 }
 
 }  // namespace z7::app

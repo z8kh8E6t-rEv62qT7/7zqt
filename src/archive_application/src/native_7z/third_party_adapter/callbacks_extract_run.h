@@ -57,6 +57,7 @@ class NativeExtractCallback final : public IArchiveExtractCallback,
   // 7z Extract() invocation completes (and before Release()).
   std::vector<ExtractMaterializedEntry> take_materialized_entries();
   std::vector<ExtractRollbackEntry> take_rollback_entries();
+  void finish_deferred_links();
 
   // Budget state accessors (called after Extract() returns, before Release()).
   bool budget_triggered() const;
@@ -101,18 +102,80 @@ class NativeExtractCallback final : public IArchiveExtractCallback,
     std::string current_path;
     std::optional<ProgressRatioInfo> ratio_info;
   };
+  struct ExtractItemAttributes {
+    bool defined = false;
+    UInt32 attrib = 0;
+  };
+  struct ExtractItemLinkInfo {
+    enum class Type {
+      kNone,
+      kSymLink,
+      kHardLink
+    };
+    Type type = Type::kNone;
+    std::string target;
+
+    bool is_link() const {
+      return type != Type::kNone;
+    }
+  };
+  struct OutputTarget {
+    std::string archive_entry_path;
+    std::string absolute_output_path;
+    fs::path output_path;
+    fs::path destination_path;
+    fs::path backup_path;
+    bool had_original = false;
+    bool overwrote_existing = false;
+    bool renamed_from_collision = false;
+    bool preserve_backup_on_commit = false;
+  };
+  struct LinkCreationPlan {
+    ExtractItemLinkInfo::Type type = ExtractItemLinkInfo::Type::kNone;
+    std::string symlink_target;
+    fs::path hardlink_target_path;
+  };
+  struct DeferredHardLink {
+    OutputTarget output_target;
+    fs::path target_path;
+  };
   struct PendingEntry;
 
   ProgressSnapshot snapshot_progress() const;
   void emit_progress_snapshot() const;
   void record_io_error(const std::string& message);
+  void record_nonfatal_warning(const std::string& message);
   bool close_pending_entry_stream_locked(PendingEntry& pending_entry,
                                          std::string* close_error_message);
-  bool commit_pending_entry_locked(PendingEntry& pending_entry,
-                                   std::string* commit_error_message);
-  bool restore_pending_entry_original_locked(
-      PendingEntry& pending_entry,
-      std::string* restore_error_message);
+  HRESULT read_item_attributes(UInt32 index,
+                               ExtractItemAttributes& attributes) const;
+  HRESULT read_item_link_info(UInt32 index,
+                              ExtractItemLinkInfo& link_info) const;
+  std::optional<std::string> apply_item_attributes(
+      const fs::path& output_path,
+      const ExtractItemAttributes& attributes) const;
+  HRESULT prepare_output_target(UInt32 index,
+                                const std::string& output_item_path,
+                                const ResolvedPath& resolved_path,
+                                OutputTarget& target,
+                                bool& skipped);
+  std::optional<std::string> prepare_link_creation_plan(
+      const OutputTarget& output_target,
+      const ExtractItemLinkInfo& link_info,
+      LinkCreationPlan& plan) const;
+  std::optional<std::string> materialize_link(
+      const OutputTarget& output_target,
+      const LinkCreationPlan& plan,
+      bool allow_defer);
+  std::optional<std::string> create_symbolic_link(
+      const fs::path& output_path,
+      const std::string& target) const;
+  std::optional<std::string> create_hard_link(
+      const fs::path& output_path,
+      const fs::path& target_path) const;
+  void record_materialized_output_locked(const OutputTarget& target,
+                                         uint64_t bytes_written,
+                                         bool is_directory);
   void apply_zone_identifier_to_file(const fs::path& output_path) const;
   HRESULT check_canceled() const;
   OverwriteDecision ask_overwrite_decision(const fs::path& destination_path,
@@ -168,20 +231,19 @@ class NativeExtractCallback final : public IArchiveExtractCallback,
     std::string archive_entry_path;
     std::string absolute_output_path;
     fs::path output_path;
-    fs::path staged_output_path;
     fs::path destination_path;
     fs::path backup_path;
     bool had_original = false;
     bool overwrote_existing = false;
     bool renamed_from_collision = false;
-    bool restore_backup_on_failure = false;
     bool preserve_backup_on_commit = false;
-    bool preserve_committed_backup_for_rollback = false;
     uint64_t declared_size = 0;  // kpidSize from archive header
+    ExtractItemAttributes attributes;
     NativeFileOutStream* owned_stream = nullptr;
   };
   std::vector<ExtractMaterializedEntry> materialized_entries_;
   std::vector<ExtractRollbackEntry> rollback_entries_;
+  std::vector<DeferredHardLink> deferred_hard_links_;
   std::optional<PendingEntry> pending_entry_;
 
   // Budget enforcement (optional). Set by constructor when request.budget is present.

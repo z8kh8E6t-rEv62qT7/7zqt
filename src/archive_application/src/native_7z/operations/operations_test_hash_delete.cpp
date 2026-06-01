@@ -8,46 +8,11 @@
 #include "session/session_registry_internal.h"
 
 #include <algorithm>
-#include <chrono>
 #include <optional>
 
 namespace z7::app {
 
 namespace {
-
-struct ScopedHashWorkspaceDir final {
-  fs::path path;
-
-  ~ScopedHashWorkspaceDir() {
-    if (path.empty()) {
-      return;
-    }
-    std::error_code ec;
-    fs::remove_all(path, ec);
-  }
-};
-
-fs::path make_hash_workspace_dir() {
-  std::error_code ec;
-  fs::path base = fs::temp_directory_path(ec);
-  if (ec || base.empty()) {
-    base = fs::current_path(ec);
-  }
-  const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-  fs::path candidate =
-      base / (std::string("z7-hash-") + std::to_string(static_cast<long long>(ticks)));
-  for (int i = 0; i < 32; ++i) {
-    std::error_code dir_ec;
-    if (fs::create_directories(candidate, dir_ec)) {
-      return candidate;
-    }
-    candidate =
-        base /
-        (std::string("z7-hash-") +
-         std::to_string(static_cast<long long>(ticks + i + 1)));
-  }
-  return {};
-}
 
 void merge_test_hash_summary(HashSummary* merged, const HashSummary& step) {
   if (merged == nullptr) {
@@ -173,6 +138,7 @@ std::vector<HashInputEntry> collect_archive_hash_entries(
     entry.relative_path = item_path;
     entry.is_dir = is_dir;
     entry.file_size = size;
+    entry.archive_index = i;
     entries.push_back(std::move(entry));
   }
   return entries;
@@ -496,41 +462,26 @@ HashResult NativeArchiveBackend::hash(const HashRequest& request,
           7);
     }
 
-    const bool has_files = std::any_of(
-        hash_entries.begin(),
-        hash_entries.end(),
-        [](const HashInputEntry& entry) { return !entry.is_dir; });
-    ScopedHashWorkspaceDir workspace_dir;
+    const bool has_files =
+        std::any_of(hash_entries.begin(),
+                    hash_entries.end(),
+                    [](const HashInputEntry& entry) { return !entry.is_dir; });
     if (has_files) {
-      workspace_dir.path = make_hash_workspace_dir();
-      if (workspace_dir.path.empty()) {
-        return make_operation_failure<HashResult>(
-            ArchiveErrorDomain::kIo,
-            "Failed to create temporary hash workspace",
-            2);
+      const ArchiveBackendHooks session_hooks =
+          make_session_password_hooks(*session, hooks);
+      const std::string password =
+          session->password_defined() ? session->password() : std::string();
+      HashResult result = run_hash_archive_entries(request,
+                                                   session_hooks,
+                                                   arc->Archive,
+                                                   hash_entries,
+                                                   single_selected_entry,
+                                                   session->display_path(),
+                                                   password);
+      if (!result.ok && result.error.domain == ArchiveErrorDomain::kPassword) {
+        session->clear_password();
       }
-
-      ExtractRequest extract_request;
-      extract_request.session_token = request.session_token;
-      extract_request.output_dir = workspace_dir.path.string();
-      extract_request.overwrite_mode = OverwriteMode::kOverwrite;
-      extract_request.path_mode = ExtractPathMode::kFullPaths;
-      extract_request.entries = request.entries;
-
-      ArchiveBackendHooks extract_hooks = hooks;
-      extract_hooks.on_event = {};
-      const ExtractResult extract_result = extract(extract_request, extract_hooks);
-      if (!extract_result.ok) {
-        return from_base_result<HashResult>(
-            static_cast<OperationResult>(extract_result));
-      }
-
-      for (HashInputEntry& entry : hash_entries) {
-        if (entry.is_dir) {
-          continue;
-        }
-        entry.absolute_path = workspace_dir.path / fs::path(entry.relative_path);
-      }
+      return result;
     }
 
     return run_hash_entries(request, hooks, hash_entries, single_selected_entry);

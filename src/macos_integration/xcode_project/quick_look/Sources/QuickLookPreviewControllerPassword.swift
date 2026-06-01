@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 
+private let passwordClipboardPollInterval: TimeInterval = 0.5
+
 enum PasswordPromptState {
   case idle
   case showing(promptID: String, archivePath: String, nestedChain: [String], reasonKey: String)
@@ -11,13 +13,27 @@ extension QuickLookPreviewController {
                           archivePath: String,
                           nestedChain: [String],
                           reasonKey: String,
-                          clipboardText: String = "") {
+                          clipboardText: String? = nil) {
     passwordPromptState = .showing(
       promptID: promptID,
       archivePath: archivePath,
       nestedChain: nestedChain,
       reasonKey: reasonKey)
 
+    renderPasswordPrompt(
+      promptID: promptID,
+      archivePath: archivePath,
+      nestedChain: nestedChain,
+      reasonKey: reasonKey,
+      clipboardText: clipboardText ?? currentClipboardPasswordText())
+    startPasswordClipboardPolling(promptID: promptID)
+  }
+
+  func renderPasswordPrompt(promptID: String,
+                            archivePath: String,
+                            nestedChain: [String],
+                            reasonKey: String,
+                            clipboardText: String) {
     toastDismissWorkItem?.cancel()
     toastDismissWorkItem = nil
     inlineOverlayAction = nil
@@ -31,35 +47,34 @@ extension QuickLookPreviewController {
         showsRetryHint: reasonKey == "wrong_password",
         retryText: QuickLookLocalization.text(
           "quicklook.password_retry"),
+        clipboardSourceText: QuickLookLocalization.text(
+          "quicklook.password_clipboard_source"),
         clipboardText: clipboardText,
-        readClipboardTitle: QuickLookLocalization.text(
-          "quicklook.password_read_clipboard"),
+        confirmTitle: QuickLookLocalization.text(
+          "quicklook.password_confirm"),
         cancelTitle: QuickLookLocalization.text(
           "quicklook.password_cancel")))
   }
 
-  func readClipboardPasswordForActivePrompt() {
+  func confirmClipboardPasswordForActivePrompt() {
     guard case .showing(let promptID, let archivePath, let nestedChain, let reasonKey) = passwordPromptState else {
       return
     }
 
-    guard let password = clipboardPasswordText(), !password.isEmpty else {
-      showPasswordPrompt(
-        promptID: promptID,
-        archivePath: archivePath,
-        nestedChain: nestedChain,
-        reasonKey: "wrong_password")
-      return
-    }
-
-    showPasswordPrompt(
+    let password = currentClipboardPasswordText()
+    stopPasswordClipboardPolling()
+    renderPasswordPrompt(
       promptID: promptID,
       archivePath: archivePath,
       nestedChain: nestedChain,
       reasonKey: reasonKey,
       clipboardText: password)
-    brokerClient.providePassword(promptID: promptID, password: password)
     passwordPromptState = .idle
+    brokerClient.providePassword(promptID: promptID, password: password)
+  }
+
+  func currentClipboardPasswordText() -> String {
+    clipboardPasswordText() ?? ""
   }
 
   func clipboardPasswordText() -> String? {
@@ -70,6 +85,59 @@ extension QuickLookPreviewController {
 #endif
     return NSPasteboard.general.string(forType: .string)
   }
+
+  func startPasswordClipboardPolling(promptID: String) {
+    stopPasswordClipboardPolling()
+    schedulePasswordClipboardPolling(promptID: promptID)
+  }
+
+  func stopPasswordClipboardPolling() {
+    passwordClipboardPollGeneration &+= 1
+    passwordClipboardPollWorkItem?.cancel()
+    passwordClipboardPollWorkItem = nil
+  }
+
+  func schedulePasswordClipboardPolling(promptID: String) {
+    passwordClipboardPollGeneration &+= 1
+    let generation = passwordClipboardPollGeneration
+    let workItem = DispatchWorkItem { [weak self] in
+      self?.refreshPasswordClipboardPreview(
+        promptID: promptID,
+        generation: generation)
+    }
+    passwordClipboardPollWorkItem = workItem
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + passwordClipboardPollInterval,
+      execute: workItem)
+  }
+
+  func refreshPasswordClipboardPreview(promptID: String, generation: UInt64) {
+    passwordClipboardPollWorkItem = nil
+    guard passwordClipboardPollGeneration == generation,
+          case .showing(let activePromptID, let archivePath, let nestedChain, let reasonKey) = passwordPromptState,
+          activePromptID == promptID else {
+      return
+    }
+
+    renderPasswordPrompt(
+      promptID: activePromptID,
+      archivePath: archivePath,
+      nestedChain: nestedChain,
+      reasonKey: reasonKey,
+      clipboardText: currentClipboardPasswordText())
+    schedulePasswordClipboardPolling(promptID: activePromptID)
+  }
+
+#if Z7_TESTING
+  func z7TestingRefreshPasswordClipboardPreview() {
+    guard case .showing(let promptID, _, _, _) = passwordPromptState else {
+      return
+    }
+    refreshPasswordClipboardPreview(
+      promptID: promptID,
+      generation: passwordClipboardPollGeneration)
+  }
+#endif
 
   func passwordPromptTitle(reasonKey: String) -> String {
     if reasonKey == "wrong_password" {

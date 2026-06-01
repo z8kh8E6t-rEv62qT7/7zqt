@@ -89,6 +89,9 @@ class QuickLookPasswordRelayDelegate final : public z7::app::IArchiveDelegate {
       return reply;
     }
     ++retry_count_;
+    if (task_state_) {
+      task_state_->password_prompt_request_count.fetch_add(1);
+    }
 
     std::shared_ptr<PromptSlot> slot;
     std::shared_ptr<PromptDispatchEntry> dispatch;
