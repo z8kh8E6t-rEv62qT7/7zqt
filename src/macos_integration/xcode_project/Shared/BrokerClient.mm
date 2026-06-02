@@ -115,22 +115,20 @@ static NSInteger const Z7BrokerStatusInternalError = 4;
     }
 }
 
-- (nullable Z7BrokerMenuPlan *)fetchMenuPlanWithPaths:(NSArray<NSString *> *)paths
-                                               locale:(NSString *)locale {
+- (nullable Z7BrokerMenuPlan *)fetchMenuPlanWithPaths:(NSArray<NSString *> *)paths {
     __block Z7BrokerMenuPlan *plan = nil;
     NSXPCConnection *connection = [self connection];
     id<BrokerXPCProtocol> broker = [connection synchronousRemoteObjectProxyWithErrorHandler:^(NSError *error) {
         (void)error;
     }];
-    [broker fetchMenuPlanWithPaths:paths ?: @[] locale:locale reply:^(Z7BrokerMenuPlan *replyPlan) {
+    [broker fetchMenuPlanWithPaths:paths ?: @[] reply:^(Z7BrokerMenuPlan *replyPlan) {
         plan = replyPlan;
     }];
     return plan;
 }
 
 - (nullable Z7BrokerActionResult *)runMenuActionWithActionID:(NSString *)actionID
-                                                       paths:(NSArray<NSString *> *)paths
-                                                      locale:(NSString *)locale {
+                                                       paths:(NSArray<NSString *> *)paths {
     __block Z7BrokerActionResult *result = nil;
     NSXPCConnection *connection = [self connection];
     id<BrokerXPCProtocol> broker = [connection synchronousRemoteObjectProxyWithErrorHandler:^(NSError *error) {
@@ -138,7 +136,6 @@ static NSInteger const Z7BrokerStatusInternalError = 4;
     }];
     [broker runMenuActionWithActionID:actionID ?: @""
                                 paths:paths ?: @[]
-                               locale:locale
                                 reply:^(Z7BrokerActionResult *replyResult) {
         result = replyResult;
     }];

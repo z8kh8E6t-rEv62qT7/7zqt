@@ -18,12 +18,10 @@ NS_ASSUME_NONNULL_BEGIN
 @protocol BrokerXPCProtocol
 
 - (void)fetchMenuPlanWithPaths:(NSArray<NSString *> *)paths
-                        locale:(nullable NSString *)locale
                          reply:(void (^)(Z7BrokerMenuPlan *plan))reply;
 
 - (void)runMenuActionWithActionID:(NSString *)actionID
                             paths:(NSArray<NSString *> *)paths
-                           locale:(nullable NSString *)locale
                             reply:(void (^)(Z7BrokerActionResult *result))reply;
 
 - (void)listWithRequest:(Z7BrokerQuickLookListRequest *)request;

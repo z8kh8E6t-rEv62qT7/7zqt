@@ -99,7 +99,7 @@ struct z7_mi_task {
 
 namespace z7::macos_integration::capi_internal {
 
-using z7::macos_integration::MacOSIntegrationConfigSnapshot;
+using z7::macos_integration::MacOSIntegrationConfig;
 using z7::shell_integration::ShellIntegrationConfig;
 
 inline constexpr uint64_t kQuicklookDirectoryMaxFiles = 10000;
@@ -184,10 +184,8 @@ void release_nested_session_chain(const std::shared_ptr<z7_mi_session_state>& st
 void close_nested_session_chain(const std::shared_ptr<NestedSessionChain>& chain);
 std::vector<std::shared_ptr<NestedSessionChain>> take_nested_session_cache_for_destroy(
     const std::shared_ptr<z7_mi_session_state>& state);
-ShellIntegrationConfig runtime_config_from_snapshot(
-    const MacOSIntegrationConfigSnapshot& snapshot);
-bool ensure_portable_settings(z7_mi_session_t* session,
-                              QString* error_message);
+ShellIntegrationConfig runtime_config_from_settings(
+    const MacOSIntegrationConfig& config);
 void init_menu_plan_error(z7_mi_menu_plan_t* out_plan,
                           z7_mi_status_t status,
                           const QString& error);

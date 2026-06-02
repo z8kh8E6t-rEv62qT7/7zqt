@@ -120,7 +120,7 @@ final class FinderSync: FIFinderSync {
       return nil
     }
 
-    guard let plan = BrokerClient.shared.fetchPlan(paths: paths, locale: Self.brokerLocaleHint()) else {
+    guard let plan = BrokerClient.shared.fetchPlan(paths: paths) else {
       logger.error(
         "Finder menu skipped: no plan returned, selected_count=\(paths.count), first_path=\(paths.first ?? "(nil)", privacy: .public)")
       return nil
@@ -162,8 +162,7 @@ final class FinderSync: FIFinderSync {
 
     guard let response = BrokerClient.shared.run(
       actionID: actionID,
-      paths: paths,
-      locale: Self.brokerLocaleHint()) else {
+      paths: paths) else {
       logger.error(
         "Finder action failed: no response from bridge, action=\(actionID, privacy: .public), selected_count=\(paths.count), first_path=\(paths.first ?? "(nil)", privacy: .public), targeted=\(targetedPath, privacy: .public)")
       return
@@ -310,10 +309,6 @@ final class FinderSync: FIFinderSync {
     return item
   }
 
-  private static func brokerLocaleHint() -> String? {
-    nil
-  }
-
   private func selectedPaths() -> [String] {
     if let urls = controller.selectedItemURLs(), !urls.isEmpty {
       return urls.map(\.path).sorted()
@@ -336,11 +331,11 @@ extension FinderSync {
   }
 
   static func z7TestingFetchPlan(paths: [String]) -> Z7BrokerMenuPlan? {
-    BrokerClient.shared.fetchPlan(paths: paths, locale: brokerLocaleHint())
+    BrokerClient.shared.fetchPlan(paths: paths)
   }
 
   static func z7TestingRun(actionID: String, paths: [String]) -> Z7BrokerActionResult? {
-    BrokerClient.shared.run(actionID: actionID, paths: paths, locale: brokerLocaleHint())
+    BrokerClient.shared.run(actionID: actionID, paths: paths)
   }
 }
 #endif

@@ -65,7 +65,6 @@ void OptionsDialog::on_apply() {
       initial_language_id_ = selected_language_id;
       update_texts();
       update_language_info();
-      sync_finder_extension_snapshot_from_options(this);
       changed = true;
     }
   }

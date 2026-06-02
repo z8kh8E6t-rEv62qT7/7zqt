@@ -2,7 +2,6 @@
 #include <QStringList>
 
 #include "internal.h"
-#include "portable_settings.h"
 
 namespace z7::macos_integration::capi_internal
 {
@@ -59,31 +58,16 @@ namespace z7::macos_integration::capi_internal
         return QDir(cleaned_process_dir).absoluteFilePath(program_name);
     }
 
-    ShellIntegrationConfig runtime_config_from_snapshot(MacOSIntegrationConfigSnapshot const& snapshot)
+    ShellIntegrationConfig runtime_config_from_settings(MacOSIntegrationConfig const& settings)
     {
         ShellIntegrationConfig config;
-        config.enabled = snapshot.enabled;
-        config.visible_actions_configured = snapshot.visible_actions_configured;
-        config.visible_actions = snapshot.visible_actions;
-        config.cascaded_menu = snapshot.cascaded_menu;
-        config.show_menu_icons = snapshot.show_menu_icons;
-        config.locale_preferred = snapshot.locale_preferred;
+        config.enabled = settings.enabled;
+        config.visible_actions_configured = settings.visible_actions_configured;
+        config.visible_actions = settings.visible_actions;
+        config.cascaded_menu = settings.cascaded_menu;
+        config.show_menu_icons = settings.show_menu_icons;
+        config.locale_preferred = settings.locale_preferred;
         return config;
-    }
-
-    bool ensure_portable_settings(z7_mi_session_t* session, QString* error_message)
-    {
-        Q_UNUSED(session);
-        QString init_error;
-        if (!z7::platform::qt::initialize_portable_settings(&init_error))
-        {
-            if (error_message != nullptr)
-            {
-                *error_message = QStringLiteral("Cannot initialize portable settings: %1").arg(init_error);
-            }
-            return false;
-        }
-        return true;
     }
 
 } // namespace z7::macos_integration::capi_internal

@@ -9,8 +9,7 @@ namespace z7::shell_integration {
 
 ShellIntegrationMenuPlan build_shell_integration_menu_plan(
     const ShellIntegrationSelection& selection,
-    const ShellIntegrationConfig& config,
-    const QString& locale_hint) {
+    const ShellIntegrationConfig& config) {
   ShellIntegrationMenuPlan plan;
   plan.selected_paths = selection.selected_paths;
 
@@ -74,8 +73,8 @@ ShellIntegrationMenuPlan build_shell_integration_menu_plan(
     }
   }
 
-  const QString locale_key = menu_internal::locale_key_from_hint(
-      locale_hint.isEmpty() ? config.locale_preferred : locale_hint);
+  const QString locale_key =
+      menu_internal::locale_key_from_hint(config.locale_preferred);
 
   if (plan.show_open) {
     menu_internal::append_action_if_visible(
@@ -189,11 +188,10 @@ ShellIntegrationMenuPlan build_shell_integration_menu_plan(
 ShellIntegrationValidationResult validate_shell_integration_action(
     const QString& action_id,
     const ShellIntegrationSelection& selection,
-    const ShellIntegrationConfig& config,
-    const QString& locale_hint) {
+    const ShellIntegrationConfig& config) {
   ShellIntegrationValidationResult out;
   const ShellIntegrationMenuPlan plan = build_shell_integration_menu_plan(
-      selection, config, locale_hint);
+      selection, config);
   if (!plan.menu_visible) {
     out.error = QStringLiteral(
         "Shell menu is unavailable for current selection.");

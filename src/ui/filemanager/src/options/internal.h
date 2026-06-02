@@ -108,7 +108,6 @@ void append_limited_lines(QStringList* out,
                           const QStringList& lines,
                           const QString& title,
                           int max_lines = 40);
-void sync_finder_extension_snapshot_from_options(QWidget* parent);
 
 }  // namespace options_internal
 }  // namespace z7::ui::filemanager

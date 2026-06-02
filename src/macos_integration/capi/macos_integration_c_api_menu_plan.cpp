@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-using z7::macos_integration::MacOSIntegrationConfigSnapshot;
+using z7::macos_integration::MacOSIntegrationConfig;
 using z7::shell_integration::ShellIntegrationConfig;
 using z7::shell_integration::ShellIntegrationMenuPlan;
 using z7::shell_integration::ShellIntegrationSelection;
@@ -23,33 +23,23 @@ z7_mi_status_t z7_mi_build_menu_plan(z7_mi_session_t* session,
   capi::ensure_qt_core_app();
   std::memset(out_plan, 0, sizeof(*out_plan));
 
-  QString settings_error;
-  if (!capi::ensure_portable_settings(session, &settings_error)) {
-    capi::init_menu_plan_error(out_plan, Z7_MI_STATUS_IO_ERROR, settings_error);
-    return Z7_MI_STATUS_IO_ERROR;
-  }
-
-  QString snapshot_error;
-  const MacOSIntegrationConfigSnapshot snapshot =
-      z7::macos_integration::load_macos_integration_config_snapshot(
-          &snapshot_error);
-  ShellIntegrationConfig config = capi::runtime_config_from_snapshot(snapshot);
+  const MacOSIntegrationConfig settings =
+      z7::macos_integration::load_macos_integration_config_from_settings();
+  ShellIntegrationConfig config = capi::runtime_config_from_settings(settings);
 
   ShellIntegrationSelection native_selection;
   native_selection.selected_paths = capi::string_list_from_utf8(
       selection->selected_paths, selection->selected_path_count);
   native_selection.shift_pressed = selection->shift_pressed;
   native_selection.working_directory = capi::to_qstring(selection->working_directory);
-  const QString locale_hint = capi::to_qstring(selection->locale_hint);
 
   const ShellIntegrationMenuPlan plan =
       z7::shell_integration::build_shell_integration_menu_plan(
-          native_selection, config, locale_hint);
+          native_selection, config);
 
-  out_plan->ok = snapshot_error.trimmed().isEmpty();
-  out_plan->status =
-      out_plan->ok ? Z7_MI_STATUS_OK : Z7_MI_STATUS_INTERNAL_ERROR;
-  out_plan->error_message = capi::duplicate_c_string(snapshot_error.trimmed());
+  out_plan->ok = true;
+  out_plan->status = Z7_MI_STATUS_OK;
+  out_plan->error_message = nullptr;
   out_plan->menu_visible = plan.menu_visible;
   out_plan->base_folder = capi::duplicate_c_string(plan.base_folder);
   out_plan->extract_subdir = capi::duplicate_c_string(plan.extract_subdir);

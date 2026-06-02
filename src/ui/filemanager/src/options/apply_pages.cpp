@@ -7,10 +7,6 @@
 
 #include <cstdint>
 
-#if defined(Q_OS_MAC)
-#include "macos_integration_config.h"
-#endif
-
 namespace z7::ui::filemanager {
 
 using namespace options_internal;
@@ -76,26 +72,6 @@ QString combine_tooltips(const QString& first, const QString& second) {
 }
 
 }  // namespace
-
-namespace options_internal {
-
-void sync_finder_extension_snapshot_from_options(QWidget* parent) {
-#if defined(Q_OS_MAC)
-  QString snapshot_error;
-  if (!z7::macos_integration::sync_macos_integration_config_snapshot_from_settings(
-          &snapshot_error) &&
-      !snapshot_error.trimmed().isEmpty()) {
-    QMessageBox::warning(parent,
-                         z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(2100)),
-                         QStringLiteral("Failed to update Finder extension snapshot:\n%1")
-                             .arg(snapshot_error));
-  }
-#else
-  Q_UNUSED(parent);
-#endif
-}
-
-}  // namespace options_internal
 
 void OptionsDialog::build_qt_page() {
   auto* layout = new QVBoxLayout(qt_page_);
@@ -425,8 +401,6 @@ bool OptionsDialog::apply_seven_zip_settings() {
       QVariant::fromValue(static_cast<qulonglong>(
           shell::shell_integration_context_menu_flags_from_visible_actions(
               capture_context_visible_actions(context_items_list_)))));
-
-  sync_finder_extension_snapshot_from_options(this);
 
   initial_integrate_shell_ = current_integrate_shell;
   initial_integrate_shell_32_ = current_integrate_shell_32;

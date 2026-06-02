@@ -508,7 +508,45 @@ enum QuickLookExtractSelectionTestMain {
   static func main() throws {
     let tests = [
       ExtractSelectionTestCase(
-        name: "quicklook_localization_prefers_7zfm_snapshot_language",
+        name: "quicklook_settings_root_resolver_uses_real_home_sources_only",
+        body: {
+          let posixRoot = QuickLookRealUserHome.z7TestingSettingsRootURL(
+            posixHome: "/Users/real",
+            environmentHome: "/Users/other")
+          try expect(
+            posixRoot?.path == "/Users/real/.config/7zqt",
+            "POSIX user home should win over HOME")
+
+          let homeFallback = QuickLookRealUserHome.z7TestingSettingsRootURL(
+            posixHome: nil,
+            environmentHome: "/Users/from-home")
+          try expect(
+            homeFallback?.path == "/Users/from-home/.config/7zqt",
+            "HOME should be used when POSIX home is unavailable")
+
+          let posixBeatsSandboxHome = QuickLookRealUserHome.z7TestingSettingsRootURL(
+            posixHome: "/Users/real",
+            environmentHome: "/Users/real/Library/Containers/app.sevenzip.extension/Data")
+          try expect(
+            posixBeatsSandboxHome?.path == "/Users/real/.config/7zqt",
+            "sandbox HOME should not replace POSIX user home")
+
+          let rejectedSandboxHome = QuickLookRealUserHome.z7TestingSettingsRootURL(
+            posixHome: nil,
+            environmentHome: "/Users/real/Library/Containers/app.sevenzip.extension/Data")
+          try expect(
+            rejectedSandboxHome == nil,
+            "sandbox HOME should not be treated as a real user home")
+
+          let rejectedRelativeHome = QuickLookRealUserHome.z7TestingSettingsRootURL(
+            posixHome: nil,
+            environmentHome: "relative/home")
+          try expect(
+            rejectedRelativeHome == nil,
+            "relative HOME should not be treated as a real user home")
+        }),
+      ExtractSelectionTestCase(
+        name: "quicklook_localization_ignores_legacy_snapshot_and_reads_settings",
         body: {
           let root = try temporarySettingsRoot()
           defer { try? FileManager.default.removeItem(at: root) }
@@ -522,9 +560,9 @@ enum QuickLookExtractSelectionTestMain {
           try writeQuickLookStrings(root: root, localeKey: "zh-CN", back: "返回")
 
           let localeKey = QuickLookLocalization.preferredLocaleKey(settingsRootURLs: [root])
-          try expect(localeKey == "zh-CN", "snapshot locale should win over portable settings")
+          try expect(localeKey == "en", "legacy macOS integration snapshot should be ignored")
           let table = QuickLookLocalization.loadTable(localeKey: localeKey, resourceRootURL: root)
-          try expect(table["quicklook.back"] == "返回", "zh-CN table should load from selected locale")
+          try expect(table["quicklook.back"] == "Back", "English table should load from settings fallback")
         }),
       ExtractSelectionTestCase(
         name: "quicklook_localization_reads_7zfm_lang_and_defaults_to_english",
@@ -545,10 +583,18 @@ enum QuickLookExtractSelectionTestMain {
             QuickLookLocalization.preferredLocaleKey(settingsRootURLs: [root]) == "en",
             "default 7zFM Lang marker should use English")
 
+          try Data("{".utf8).write(to: root.appendingPathComponent("settings.json"))
+          try expect(
+            QuickLookLocalization.preferredLocaleKey(settingsRootURLs: [root]) == "en",
+            "invalid settings JSON should use English")
+
           try FileManager.default.removeItem(at: root.appendingPathComponent("settings.json"))
           try expect(
             QuickLookLocalization.preferredLocaleKey(settingsRootURLs: [root]) == "en",
             "missing 7zFM Lang should use English")
+          try expect(
+            !FileManager.default.fileExists(atPath: root.appendingPathComponent("settings.json").path),
+            "Quick Look localization should not create missing settings.json")
         }),
       ExtractSelectionTestCase(
         name: "extract_button_callback_invokes_controller_action",

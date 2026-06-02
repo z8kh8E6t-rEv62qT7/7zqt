@@ -257,7 +257,7 @@ bool OfficialLangCatalog::set_language_internal(const QString& lang_id,
   if (normalized == QStringLiteral("-")) {
     current_language_id_ = normalized;
     active_ = english_;
-    z7::i18n::internal::set_current_locale_hint(current_language_id_);
+    z7::i18n::internal::set_current_language_hint(current_language_id_);
     if (persist) {
       save_settings_language(normalized);
     }
@@ -274,7 +274,7 @@ bool OfficialLangCatalog::set_language_internal(const QString& lang_id,
 
   current_language_id_ = normalized;
   active_ = map;
-  z7::i18n::internal::set_current_locale_hint(current_language_id_);
+  z7::i18n::internal::set_current_language_hint(current_language_id_);
   if (persist) {
     save_settings_language(normalized);
   }

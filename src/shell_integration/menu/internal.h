@@ -6,7 +6,7 @@
 
 namespace z7::shell_integration::menu_internal {
 
-QString locale_key_from_hint(QString locale_hint);
+QString locale_key_from_hint(QString language_hint);
 
 QString open_as_type_for_action(const QString& action_id);
 QString crc_method_for_action(const QString& action_id);

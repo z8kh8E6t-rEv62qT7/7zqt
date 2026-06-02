@@ -21,9 +21,9 @@ QString i18n_action_key(const QString& action_id) {
 
 }  // namespace
 
-QString locale_key_from_hint(QString locale_hint) {
-  locale_hint = locale_hint.trimmed().toLower();
-  if (locale_hint.startsWith(QStringLiteral("zh"))) {
+QString locale_key_from_hint(QString language_hint) {
+  language_hint = language_hint.trimmed().toLower();
+  if (language_hint.startsWith(QStringLiteral("zh"))) {
     return QStringLiteral("zh-CN");
   }
   return QStringLiteral("en");

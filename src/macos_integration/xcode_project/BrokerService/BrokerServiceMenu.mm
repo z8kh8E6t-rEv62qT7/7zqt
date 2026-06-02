@@ -4,7 +4,7 @@
 
 @implementation BrokerService (Menu)
 
-- (Z7BrokerMenuPlan *)buildMenuPlanOnQueueWithPaths:(NSArray<NSString *> *)paths locale:(NSString *)locale {
+- (Z7BrokerMenuPlan *)buildMenuPlanOnQueueWithPaths:(NSArray<NSString *> *)paths {
     if (_invalidated || _session == nullptr) {
         return [[Z7BrokerMenuPlan alloc] initWithOK:NO
                                              status:Z7_MI_STATUS_INTERNAL_ERROR
@@ -14,13 +14,11 @@
     }
 
     Z7CStringArray selectedPaths(paths);
-    std::string localeHint = Z7ToStdString(locale);
     z7_mi_selection_t selection = {
         selectedPaths.data(),
         selectedPaths.size(),
         false,
-        nullptr,
-        locale == nil ? nullptr : localeHint.c_str()
+        nullptr
     };
 
     z7_mi_menu_plan_t plan = {};
@@ -47,8 +45,7 @@
 }
 
 - (Z7BrokerActionResult *)runMenuActionOnQueueWithActionID:(NSString *)actionID
-                                                     paths:(NSArray<NSString *> *)paths
-                                                    locale:(NSString *)locale {
+                                                     paths:(NSArray<NSString *> *)paths {
     if (_invalidated || _session == nullptr) {
         return [[Z7BrokerActionResult alloc] initWithOK:NO
                                                  status:Z7_MI_STATUS_INTERNAL_ERROR
@@ -58,13 +55,11 @@
 
     Z7CStringArray selectedPaths(paths);
     std::string action = Z7ToStdString(actionID);
-    std::string localeHint = Z7ToStdString(locale);
     z7_mi_selection_t selection = {
         selectedPaths.data(),
         selectedPaths.size(),
         false,
-        nullptr,
-        locale == nil ? nullptr : localeHint.c_str()
+        nullptr
     };
 
     z7_mi_action_result_t result = {};

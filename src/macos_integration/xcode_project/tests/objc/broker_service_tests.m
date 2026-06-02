@@ -150,7 +150,15 @@ static void write_portable_7zfm_language(NSString *language) {
                     @"apps" : @{ @"7zFM" : @{ @"Lang" : language } },
                     @"shared" : @{}
                   });
-  remove_file_if_exists([root stringByAppendingPathComponent:@"macos_integration.json"]);
+}
+
+static void write_legacy_macos_integration_language(NSString *language) {
+  NSString *root = portable_settings_root();
+  write_json_file([root stringByAppendingPathComponent:@"macos_integration.json"],
+                  @{
+                    @"version" : @1,
+                    @"locale_preferred" : language
+                  });
 }
 
 static void run_task_or_fail(NSString *launchPath,
@@ -244,22 +252,11 @@ static NSString *menu_plan_action_title(Z7BrokerMenuPlan *plan, NSString *action
   return nil;
 }
 
-static Z7BrokerMenuPlan *fetch_menu_plan_with_locale(BrokerService *service,
-                                                     NSArray<NSString *> *paths,
-                                                     NSString *locale);
-
 static Z7BrokerMenuPlan *fetch_menu_plan(BrokerService *service,
                                          NSArray<NSString *> *paths) {
-  return fetch_menu_plan_with_locale(service, paths, @"en");
-}
-
-static Z7BrokerMenuPlan *fetch_menu_plan_with_locale(BrokerService *service,
-                                                     NSArray<NSString *> *paths,
-                                                     NSString *locale) {
   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
   __block Z7BrokerMenuPlan *plan = nil;
   [service fetchMenuPlanWithPaths:paths
-                            locale:locale
                              reply:^(Z7BrokerMenuPlan *replyPlan) {
                                plan = replyPlan;
                                dispatch_semaphore_signal(semaphore);
@@ -280,7 +277,6 @@ static Z7BrokerActionResult *run_menu_action(BrokerService *service,
   __block Z7BrokerActionResult *result = nil;
   [(id<BrokerXPCProtocol>)service runMenuActionWithActionID:actionID
                                                        paths:paths
-                                                      locale:@"en"
                                                        reply:^(Z7BrokerActionResult *replyResult) {
                                                          result = replyResult;
                                                          dispatch_semaphore_signal(semaphore);
@@ -448,8 +444,8 @@ static void expect_menu_hides_extract_group(Z7BrokerMenuPlan *plan, NSString *la
               [NSString stringWithFormat:@"%@ should hide Test Archive", label]);
 }
 
-static void test_broker_service_nil_locale_uses_7zfm_language_setting(void) {
-  NSString *root = temporary_root(@"z7-broker-menu-locale");
+static void test_broker_service_uses_7zfm_language_setting(void) {
+  NSString *root = temporary_root(@"z7-broker-menu-language");
   NSString *archive = [root stringByAppendingPathComponent:@"payload.7z"];
   write_text_file(archive, @"archive-like");
 
@@ -457,17 +453,18 @@ static void test_broker_service_nil_locale_uses_7zfm_language_setting(void) {
   BrokerService *service = [[BrokerService alloc] initWithCallback:callback];
 
   write_portable_7zfm_language(@"zh-cn");
-  Z7BrokerMenuPlan *zhPlan = fetch_menu_plan_with_locale(service, @[ archive ], nil);
+  write_legacy_macos_integration_language(@"en");
+  Z7BrokerMenuPlan *zhPlan = fetch_menu_plan(service, @[ archive ]);
   expect_true(zhPlan.ok,
               [NSString stringWithFormat:@"zh menu plan should be ok: %@",
                                          zhPlan.errorMessage ?: @""]);
   expect_true([menu_plan_action_title(zhPlan, @"open") isEqualToString:@"打开"],
-              @"nil locale should use 7zFM Lang for menu title");
+              @"menu title should use 7zFM Lang");
   expect_true([menu_plan_action_title(zhPlan, @"extract_files") isEqualToString:@"解压文件..."],
-              @"nil locale should localize extract title from 7zFM Lang");
+              @"extract title should use 7zFM Lang");
 
   write_portable_7zfm_language(@"-");
-  Z7BrokerMenuPlan *enPlan = fetch_menu_plan_with_locale(service, @[ archive ], nil);
+  Z7BrokerMenuPlan *enPlan = fetch_menu_plan(service, @[ archive ]);
   expect_true(enPlan.ok,
               [NSString stringWithFormat:@"English menu plan should be ok: %@",
                                          enPlan.errorMessage ?: @""]);
@@ -475,6 +472,36 @@ static void test_broker_service_nil_locale_uses_7zfm_language_setting(void) {
               @"default 7zFM Lang marker should fall back to English");
   expect_true([menu_plan_action_title(enPlan, @"extract_files") isEqualToString:@"Extract Files..."],
               @"default 7zFM Lang marker should keep extract title English");
+
+  [service invalidate];
+}
+
+static void test_broker_service_missing_settings_uses_defaults_without_writing(void) {
+  NSString *root = temporary_root(@"z7-broker-menu-missing-settings");
+  NSString *archive = [root stringByAppendingPathComponent:@"payload.7z"];
+  write_text_file(archive, @"archive-like");
+
+  NSString *settingsRoot = portable_settings_root();
+  NSString *settingsPath = [settingsRoot stringByAppendingPathComponent:@"settings.json"];
+  NSString *legacySnapshotPath = [settingsRoot stringByAppendingPathComponent:@"macos_integration.json"];
+  remove_file_if_exists(settingsPath);
+  remove_file_if_exists(legacySnapshotPath);
+
+  BrokerCallbackRecorder *callback = [[BrokerCallbackRecorder alloc] init];
+  BrokerService *service = [[BrokerService alloc] initWithCallback:callback];
+
+  Z7BrokerMenuPlan *plan = fetch_menu_plan(service, @[ archive ]);
+  expect_true(plan.ok,
+              [NSString stringWithFormat:@"missing settings menu plan should be ok: %@",
+                                         plan.errorMessage ?: @""]);
+  expect_true([menu_plan_action_title(plan, @"open") isEqualToString:@"Open"],
+              @"missing settings should use English menu title");
+  expect_true([menu_plan_action_title(plan, @"extract_files") isEqualToString:@"Extract Files..."],
+              @"missing settings should use default extract title");
+  expect_true(![[NSFileManager defaultManager] fileExistsAtPath:settingsPath],
+              @"Finder menu plan should not create missing settings.json");
+  expect_true(![[NSFileManager defaultManager] fileExistsAtPath:legacySnapshotPath],
+              @"Finder menu plan should not create macos_integration.json");
 
   [service invalidate];
 }
@@ -524,7 +551,6 @@ static void test_broker_service_invalidated_menu_plan_reports_error(void) {
   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
   __block Z7BrokerMenuPlan *plan = nil;
   [service fetchMenuPlanWithPaths:@[ @"/tmp/example.7z" ]
-                            locale:nil
                              reply:^(Z7BrokerMenuPlan *replyPlan) {
                                plan = replyPlan;
                                dispatch_semaphore_signal(semaphore);
@@ -637,8 +663,11 @@ int main(int argc, const char *argv[]) {
     run_test(@"broker_service_menu_plan_mixed_selection_keeps_crc_and_add", argc, argv, ^{
       test_broker_service_menu_plan_mixed_selection_keeps_crc_and_add();
     });
-    run_test(@"broker_service_nil_locale_uses_7zfm_language_setting", argc, argv, ^{
-      test_broker_service_nil_locale_uses_7zfm_language_setting();
+    run_test(@"broker_service_uses_7zfm_language_setting", argc, argv, ^{
+      test_broker_service_uses_7zfm_language_setting();
+    });
+    run_test(@"broker_service_missing_settings_uses_defaults_without_writing", argc, argv, ^{
+      test_broker_service_missing_settings_uses_defaults_without_writing();
     });
     run_test(@"broker_service_crc_special_actions_dispatch_task_payloads", argc, argv, ^{
       test_broker_service_crc_special_actions_dispatch_task_payloads();

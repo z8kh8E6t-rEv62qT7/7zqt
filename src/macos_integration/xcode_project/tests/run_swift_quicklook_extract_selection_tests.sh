@@ -15,6 +15,7 @@ trap 'rm -rf "$tmpdir"' EXIT
   "$repo_root/src/macos_integration/xcode_project/quick_look/Sources/QuickLookLocalButton.swift" \
   "$repo_root/src/macos_integration/xcode_project/quick_look/Sources/QuickLookLocalClickPairing.swift" \
   "$repo_root/src/macos_integration/xcode_project/quick_look/Sources/QuickLookLocalization.swift" \
+  "$repo_root/src/macos_integration/xcode_project/quick_look/Sources/QuickLookRealUserHome.swift" \
   "$repo_root/src/macos_integration/xcode_project/quick_look/Sources/QuickLookPreviewController.swift" \
   "$repo_root/src/macos_integration/xcode_project/quick_look/Sources/QuickLookPreviewControllerCollection.swift" \
   "$repo_root/src/macos_integration/xcode_project/quick_look/Sources/QuickLookPreviewControllerPassword.swift" \

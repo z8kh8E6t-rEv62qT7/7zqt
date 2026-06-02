@@ -47,20 +47,15 @@ final class BrokerClient {
   static let shared = BrokerClient()
   static var fetchCalled = false
   static var runCalled = false
-  static var lastFetchLocale: String?
-  static var lastRunLocale: String?
 
   static func resetTestingBehavior() {
     fetchCalled = false
     runCalled = false
-    lastFetchLocale = nil
-    lastRunLocale = nil
   }
 
-  func fetchPlan(paths: [String], locale: String?) -> Z7BrokerMenuPlan? {
+  func fetchPlan(paths: [String]) -> Z7BrokerMenuPlan? {
     _ = paths
     Self.fetchCalled = true
-    Self.lastFetchLocale = locale
     return Z7BrokerMenuPlan(
       ok: true,
       status: 0,
@@ -69,10 +64,9 @@ final class BrokerClient {
       actions: [])
   }
 
-  func run(actionID: String, paths: [String], locale: String?) -> Z7BrokerActionResult? {
+  func run(actionID: String, paths: [String]) -> Z7BrokerActionResult? {
     _ = (actionID, paths)
     Self.runCalled = true
-    Self.lastRunLocale = locale
     return Z7BrokerActionResult(ok: true, errorMessage: nil)
   }
 }
@@ -105,17 +99,15 @@ enum FinderSyncMenuTestMain {
   static func main() throws {
     let tests = [
       FinderSyncMenuTestCase(
-        name: "finder_sync_sends_no_system_locale_hint_to_broker",
+        name: "finder_sync_calls_broker_without_language_hint",
         body: {
           BrokerClient.resetTestingBehavior()
           _ = FinderSync.z7TestingFetchPlan(paths: ["/tmp/payload.7z"])
           try expect(BrokerClient.fetchCalled, "test fetch should invoke broker fetchPlan")
-          try expect(BrokerClient.lastFetchLocale == nil, "Finder Sync menu plan should not pass system locale")
 
           BrokerClient.resetTestingBehavior()
           _ = FinderSync.z7TestingRun(actionID: "extract_here", paths: ["/tmp/payload.7z"])
           try expect(BrokerClient.runCalled, "test run should invoke broker run")
-          try expect(BrokerClient.lastRunLocale == nil, "Finder Sync action should not pass system locale")
         }),
       FinderSyncMenuTestCase(
         name: "finder_menu_wraps_actions_in_seven_zip_root_item",

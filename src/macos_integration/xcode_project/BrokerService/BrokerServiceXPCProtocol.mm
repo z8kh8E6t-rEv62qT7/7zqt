@@ -1,10 +1,9 @@
 #import "BrokerService.h"
 
 @interface BrokerService (Menu)
-- (Z7BrokerMenuPlan *)buildMenuPlanOnQueueWithPaths:(NSArray<NSString *> *)paths locale:(NSString *)locale;
+- (Z7BrokerMenuPlan *)buildMenuPlanOnQueueWithPaths:(NSArray<NSString *> *)paths;
 - (Z7BrokerActionResult *)runMenuActionOnQueueWithActionID:(NSString *)actionID
-                                                     paths:(NSArray<NSString *> *)paths
-                                                    locale:(NSString *)locale;
+                                                     paths:(NSArray<NSString *> *)paths;
 @end
 
 @interface BrokerService (QuickLook)
@@ -18,19 +17,17 @@
 @implementation BrokerService (BrokerXPCProtocol)
 
 - (void)fetchMenuPlanWithPaths:(NSArray<NSString *> *)paths
-                        locale:(NSString *)locale
                          reply:(void (^)(Z7BrokerMenuPlan *plan))reply {
     dispatch_async(_queue, ^{
-        reply([self buildMenuPlanOnQueueWithPaths:paths ?: @[] locale:locale]);
+        reply([self buildMenuPlanOnQueueWithPaths:paths ?: @[]]);
     });
 }
 
 - (void)runMenuActionWithActionID:(NSString *)actionID
                             paths:(NSArray<NSString *> *)paths
-                           locale:(NSString *)locale
                             reply:(void (^)(Z7BrokerActionResult *result))reply {
     dispatch_async(_queue, ^{
-        reply([self runMenuActionOnQueueWithActionID:actionID ?: @"" paths:paths ?: @[] locale:locale]);
+        reply([self runMenuActionOnQueueWithActionID:actionID ?: @"" paths:paths ?: @[]]);
     });
 }
 

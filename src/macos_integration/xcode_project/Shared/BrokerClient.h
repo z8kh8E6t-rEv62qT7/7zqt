@@ -14,13 +14,11 @@ typedef void (^BrokerClientPasswordPromptHandler)(Z7BrokerPasswordPromptEvent *e
 @property (class, nonatomic, readonly, strong) BrokerClient *shared;
 
 - (nullable Z7BrokerMenuPlan *)fetchMenuPlanWithPaths:(NSArray<NSString *> *)paths
-                                               locale:(nullable NSString *)locale
-    NS_SWIFT_NAME(fetchPlan(paths:locale:));
+    NS_SWIFT_NAME(fetchPlan(paths:));
 
 - (nullable Z7BrokerActionResult *)runMenuActionWithActionID:(NSString *)actionID
                                                        paths:(NSArray<NSString *> *)paths
-                                                      locale:(nullable NSString *)locale
-    NS_SWIFT_NAME(run(actionID:paths:locale:));
+    NS_SWIFT_NAME(run(actionID:paths:));
 
 - (void)listArchivePath:(NSString *)archivePath
              virtualDir:(NSString *)virtualDir

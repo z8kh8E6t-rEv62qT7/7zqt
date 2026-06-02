@@ -72,20 +72,20 @@ NSXPCInterface *Z7BrokerCreateBrokerInterface(void) {
     NSXPCInterface *interface = [NSXPCInterface interfaceWithProtocol:@protocol(BrokerXPCProtocol)];
 
     [interface setClasses:Z7BrokerStringArrayClasses()
-              forSelector:@selector(fetchMenuPlanWithPaths:locale:reply:)
+              forSelector:@selector(fetchMenuPlanWithPaths:reply:)
             argumentIndex:0
                   ofReply:NO];
     [interface setClasses:Z7BrokerMenuPlanClasses()
-              forSelector:@selector(fetchMenuPlanWithPaths:locale:reply:)
+              forSelector:@selector(fetchMenuPlanWithPaths:reply:)
             argumentIndex:0
                   ofReply:YES];
 
     [interface setClasses:Z7BrokerStringArrayClasses()
-              forSelector:@selector(runMenuActionWithActionID:paths:locale:reply:)
+              forSelector:@selector(runMenuActionWithActionID:paths:reply:)
             argumentIndex:1
                   ofReply:NO];
     [interface setClasses:Z7BrokerActionResultClasses()
-              forSelector:@selector(runMenuActionWithActionID:paths:locale:reply:)
+              forSelector:@selector(runMenuActionWithActionID:paths:reply:)
             argumentIndex:0
                   ofReply:YES];
 

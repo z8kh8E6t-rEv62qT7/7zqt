@@ -27,7 +27,6 @@ typedef struct z7_mi_selection {
   size_t selected_path_count;
   bool shift_pressed;
   const char* working_directory;
-  const char* locale_hint;
 } z7_mi_selection_t;
 
 typedef struct z7_mi_menu_action {

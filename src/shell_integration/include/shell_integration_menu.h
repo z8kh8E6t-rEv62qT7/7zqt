@@ -113,12 +113,10 @@ QStringList shell_integration_visible_actions_from_context_menu_flags(
 
 ShellIntegrationMenuPlan build_shell_integration_menu_plan(
     const ShellIntegrationSelection& selection,
-    const ShellIntegrationConfig& config,
-    const QString& locale_hint = QString());
+    const ShellIntegrationConfig& config);
 ShellIntegrationValidationResult validate_shell_integration_action(
     const QString& action_id,
     const ShellIntegrationSelection& selection,
-    const ShellIntegrationConfig& config,
-    const QString& locale_hint = QString());
+    const ShellIntegrationConfig& config);
 
 }  // namespace z7::shell_integration

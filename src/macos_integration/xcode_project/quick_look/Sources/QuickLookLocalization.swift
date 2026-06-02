@@ -8,10 +8,8 @@ enum QuickLookLocalization {
   private static let tableLock = NSLock()
   private static var loadedTables: [String: [String: String]] = [:]
 
-  private static func defaultSettingsRootURL() -> URL {
-    FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent(".config", isDirectory: true)
-      .appendingPathComponent("7zqt", isDirectory: true)
+  private static func defaultSettingsRootURLs() -> [URL] {
+    QuickLookRealUserHome.settingsRootURL().map { [$0] } ?? []
   }
 
   static func localeKey(from hint: String?) -> String {
@@ -23,16 +21,9 @@ enum QuickLookLocalization {
   }
 
   static func preferredLocaleKey(
-    settingsRootURLs: [URL] = [defaultSettingsRootURL()]
+    settingsRootURLs: [URL] = defaultSettingsRootURLs()
   ) -> String {
     for rootURL in settingsRootURLs {
-      if let snapshotHint = normalizedLanguageHint(
-        jsonString(
-          at: rootURL.appendingPathComponent("macos_integration.json"),
-          path: ["locale_preferred"]))
-      {
-        return localeKey(from: snapshotHint)
-      }
       if let settingsHint = normalizedLanguageHint(
         jsonString(
           at: rootURL.appendingPathComponent("settings.json"),

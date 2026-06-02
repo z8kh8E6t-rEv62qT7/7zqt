@@ -29,6 +29,7 @@ enum QuickLookExportDestination {
 
   private static func fallbackBaseDirectoryURL() -> URL {
     FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ??
-      URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads", isDirectory: true)
+      QuickLookRealUserHome.downloadsURL() ??
+      URL(fileURLWithPath: "/tmp", isDirectory: true)
   }
 }

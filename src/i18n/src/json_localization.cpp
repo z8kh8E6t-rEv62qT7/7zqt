@@ -33,9 +33,9 @@ QHash<QString, LocaleDocument>& locale_cache() {
   return cache;
 }
 
-QString& current_locale_hint_storage() {
-  static QString locale_hint;
-  return locale_hint;
+QString& current_language_hint_storage() {
+  static QString language_hint;
+  return language_hint;
 }
 
 QString resource_path_for_locale(const QString& locale_key) {
@@ -112,10 +112,10 @@ QString marker_for_key(QStringView key) {
   return QStringLiteral("!%1!").arg(key.toString());
 }
 
-QString localized_text_for_key(QStringView key, QStringView locale_hint) {
+QString localized_text_for_key(QStringView key, QStringView language_hint) {
   const QString effective_hint =
-      locale_hint.isEmpty() ? z7::i18n::internal::current_locale_hint()
-                            : locale_hint.toString();
+      language_hint.isEmpty() ? z7::i18n::internal::current_language_hint()
+                              : language_hint.toString();
   const QString locale_key = z7::i18n::locale_key_from_hint(effective_hint);
   const QString localized = resolve_nested_value(locale_root(locale_key), key).trimmed();
   if (!localized.isEmpty()) {
@@ -151,17 +151,17 @@ QString text(QStringView key) {
   return text(key, {});
 }
 
-QString text(QStringView key, QStringView locale_hint) {
+QString text(QStringView key, QStringView language_hint) {
   ensure_resources_initialized();
-  return localized_text_for_key(key, locale_hint);
+  return localized_text_for_key(key, language_hint);
 }
 
 QString format(QStringView key, const QStringList& args) {
   return format(key, args, {});
 }
 
-QString format(QStringView key, const QStringList& args, QStringView locale_hint) {
-  return replace_placeholders(text(key, locale_hint), args);
+QString format(QStringView key, const QStringList& args, QStringView language_hint) {
+  return replace_placeholders(text(key, language_hint), args);
 }
 
 QString locale_key_from_hint(QString hint) {
@@ -179,14 +179,14 @@ QString locale_key_from_hint(QString hint) {
 
 namespace z7::i18n::internal {
 
-void set_current_locale_hint(QString locale_hint) {
+void set_current_language_hint(QString language_hint) {
   QMutexLocker locker(&i18n_mutex());
-  current_locale_hint_storage() = locale_hint.trimmed();
+  current_language_hint_storage() = language_hint.trimmed();
 }
 
-QString current_locale_hint() {
+QString current_language_hint() {
   QMutexLocker locker(&i18n_mutex());
-  return current_locale_hint_storage();
+  return current_language_hint_storage();
 }
 
 }  // namespace z7::i18n::internal
