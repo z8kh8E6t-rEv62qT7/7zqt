@@ -56,12 +56,14 @@ add_library(z7_ui_runtime_support STATIC
   include/archive_failure_messages.h
   include/extract_memory_settings.h
   include/custom_localization.h
+  include/delayed_progress_dialog_presenter.h
   include/large_pages_settings.h
   include/platform_support.h
   include/official_lang_catalog.h
   include/password_prompt_dialog.h
   include/task_progress_dialog_base.h
   src/archive_failure_messages.cpp
+  src/delayed_progress_dialog_presenter.cpp
   src/extract_memory_settings.cpp
   src/json_localization.cpp
   src/large_pages_settings.cpp

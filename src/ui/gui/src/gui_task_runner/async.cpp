@@ -9,7 +9,6 @@
 #include <QEventLoop>
 #include <QFutureWatcher>
 #include <QPointer>
-#include <QTimer>
 
 #include <memory>
 #include <optional>
@@ -21,6 +20,7 @@
 
 #include "archive_error.h"
 #include "archive_string_codec_qt.h"
+#include "delayed_progress_dialog_presenter.h"
 #include "gui_task_progress_dialog.h"
 #include "hash_result_dialog.h"
 #include "large_pages_settings.h"
@@ -33,8 +33,6 @@ namespace z7::ui::gui {
 using namespace gui_task_runner_shared;
 
 namespace {
-
-constexpr int kDelayedResultProgressShowDelayMs = 500;
 
 template <typename TResult, typename WorkFn, typename FinishFn>
 void run_background_task(QObject* owner,
@@ -205,6 +203,7 @@ class ArchiveTaskAsyncSequencer : public QObject {
       return;
     }
 
+    progress_presenter_.set_dialog(dialog_.data());
     prepare_progress_dialog(dialog_.data(), run_spec.title, run_spec.test_mode);
     background_connection_ = QObject::connect(
         dialog_.data(),
@@ -227,10 +226,7 @@ class ArchiveTaskAsyncSequencer : public QObject {
   }
 
   void show_dialog() {
-    if (!dialog_.isNull()) {
-      dialog_was_shown_ = true;
-      dialog_->show();
-    }
+    progress_presenter_.show_now();
   }
 
   z7::ui::runtime_support::TaskProgressDialogBase*
@@ -238,7 +234,6 @@ class ArchiveTaskAsyncSequencer : public QObject {
     if (dialog_.isNull()) {
       return nullptr;
     }
-    show_delay_armed_ = false;
     show_dialog();
     dialog_->raise();
     dialog_->activateWindow();
@@ -251,20 +246,11 @@ class ArchiveTaskAsyncSequencer : public QObject {
       show_dialog();
       return;
     }
-    if (show_delay_armed_ || dialog_was_shown_) {
+    if (progress_presenter_.is_pending() || progress_presenter_.was_shown()) {
       return;
     }
-    show_delay_armed_ = true;
-    QTimer::singleShot(
-        kDelayedResultProgressShowDelayMs,
-        this,
-        [this]() {
-          show_delay_armed_ = false;
-          if (finished_ || dialog_.isNull()) {
-            return;
-          }
-          show_dialog();
-        });
+    progress_presenter_.schedule(
+        this, z7::ui::runtime_support::kOriginal7ZipProgressDialogDelayMs);
   }
 
   void set_pause_available(bool available) {
@@ -395,7 +381,7 @@ class ArchiveTaskAsyncSequencer : public QObject {
     }
     finished_ = true;
     release_active_request();
-    show_delay_armed_ = false;
+    progress_presenter_.cancel_pending();
     const bool delayed_result_success =
         (test_mode_ || hash_mode_) &&
         out_.result.ok &&
@@ -404,9 +390,10 @@ class ArchiveTaskAsyncSequencer : public QObject {
       show_failure_progress_result();
       return;
     }
+    const bool dialog_was_shown = progress_presenter_.was_shown();
     if (!dialog_.isNull()) {
       dialog_->set_running(false);
-      if (!delayed_result_success || !dialog_was_shown_) {
+      if (!delayed_result_success || !dialog_was_shown) {
         dialog_->close();
       }
     }
@@ -435,17 +422,17 @@ class ArchiveTaskAsyncSequencer : public QObject {
     if (!callback_) {
       if (show_test_result) {
         gui_app_controller_helpers::show_test_result_dialog(
-            dialog_was_shown_ ? dialog_.data() : nullptr,
+            dialog_was_shown ? dialog_.data() : nullptr,
             z7::ui::runtime_support::strip_mnemonic(
                 z7::ui::runtime_support::L(3302)),
             test_result_message);
       }
       if (show_hash_result) {
-        HashResultDialog hash_dialog(dialog_was_shown_ ? dialog_.data() : nullptr);
+        HashResultDialog hash_dialog(dialog_was_shown ? dialog_.data() : nullptr);
         hash_dialog.set_rows(gui_app_controller_helpers::hash_result_dialog_rows(out_));
         hash_dialog.exec();
       }
-      if (dialog_was_shown_ && !dialog_.isNull()) {
+      if (dialog_was_shown && !dialog_.isNull()) {
         dialog_->close();
       }
       deleteLater();
@@ -453,19 +440,19 @@ class ArchiveTaskAsyncSequencer : public QObject {
     }
     if (show_test_result) {
       gui_app_controller_helpers::show_test_result_dialog(
-          dialog_was_shown_ ? dialog_.data() : nullptr,
+          dialog_was_shown ? dialog_.data() : nullptr,
           z7::ui::runtime_support::strip_mnemonic(
               z7::ui::runtime_support::L(3302)),
           test_result_message);
     }
     if (show_hash_result) {
-      HashResultDialog hash_dialog(dialog_was_shown_ ? dialog_.data() : nullptr);
+      HashResultDialog hash_dialog(dialog_was_shown ? dialog_.data() : nullptr);
       hash_dialog.set_rows(gui_app_controller_helpers::hash_result_dialog_rows(out_));
       hash_dialog.exec();
     }
     GuiTaskRunner::FinishedCallback callback = std::move(callback_);
     callback(std::move(out_));
-    if (dialog_was_shown_ && !dialog_.isNull()) {
+    if (dialog_was_shown && !dialog_.isNull()) {
       dialog_->close();
     }
     deleteLater();
@@ -601,9 +588,7 @@ class ArchiveTaskAsyncSequencer : public QObject {
     ensure_failure_result_messages();
     dialog_->set_failure_result_messages(out_.failure_messages);
     dialog_->set_failure_result_mode();
-    if (!dialog_was_shown_) {
-      show_dialog();
-    }
+    show_dialog();
     if (background_connection_) {
       QObject::disconnect(background_connection_);
     }
@@ -639,6 +624,7 @@ class ArchiveTaskAsyncSequencer : public QObject {
   }
 
   QPointer<z7::ui::runtime_support::TaskProgressDialogBase> dialog_;
+  z7::ui::runtime_support::DelayedProgressDialogPresenter progress_presenter_;
   GuiTaskRunResult out_;
   GuiTaskRunner::FinishedCallback callback_;
   SharedTaskCancellation cancel_requested_;
@@ -655,8 +641,6 @@ class ArchiveTaskAsyncSequencer : public QObject {
   std::function<void(ArchiveTaskAsyncSequencer*)> after_close_;
   std::shared_ptr<PasswordRetryState> password_retry_state_ =
       std::make_shared<PasswordRetryState>();
-  bool dialog_was_shown_ = false;
-  bool show_delay_armed_ = false;
   bool finished_ = false;
 };
 

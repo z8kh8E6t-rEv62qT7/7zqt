@@ -73,6 +73,7 @@
 #include "portable_settings.h"
 #include "archive_process_runner.h"
 #include "checksum_result_dialog.h"
+#include "delayed_progress_dialog_presenter.h"
 #include "official_lang_catalog.h"
 #include "options_dialog.h"
 #include "filemanager_task_progress_dialog.h"

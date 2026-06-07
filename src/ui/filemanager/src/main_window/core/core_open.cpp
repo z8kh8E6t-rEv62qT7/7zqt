@@ -102,10 +102,12 @@ void MainWindow::open_item(const QString& path,
           open_path_externally_untracked(fallback_path);
         };
       }
+      OpenArchiveInsideOptions options;
+      options.archive_type_hint = archive_type_hint;
+      options.open_failure_fallback = std::move(failure_fallback);
       open_archive_inside_for_panel(active_panel_index_,
                                     info.absoluteFilePath(),
-                                    archive_type_hint,
-                                    std::move(failure_fallback));
+                                    std::move(options));
       return;
     }
   }

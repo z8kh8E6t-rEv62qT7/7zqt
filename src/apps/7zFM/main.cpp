@@ -1,6 +1,9 @@
 #include <QMessageBox>
+#include <QPointer>
 #include <QSet>
 #include <QTimer>
+
+#include <utility>
 
 #include "app_startup_qt.h"
 #include "filemanager_instance_launcher.h"
@@ -40,11 +43,30 @@ QVector<z7::apps::filemanager::OpenRequest> take_undispatched_startup_requests(
   return undispatched_requests;
 }
 
+void open_startup_request_in_window(
+    z7::ui::filemanager::MainWindow* window,
+    const z7::apps::filemanager::OpenRequest& request) {
+  if (window == nullptr) {
+    return;
+  }
+
+  QPointer<z7::ui::filemanager::MainWindow> window_guard(window);
+  z7::ui::filemanager::MainWindow::StartupOpenTargetOptions options;
+  options.archive_type_hint = request.type_hint;
+  options.use_delayed_archive_progress = true;
+  options.fallback_to_parent_dir_on_archive_failure = true;
+  options.finished_cb = [window_guard](bool) {
+    if (!window_guard.isNull()) {
+      window_guard->show();
+    }
+  };
+  window->open_startup_target(request.path, std::move(options));
+}
+
 void open_request_in_new_window(
     const z7::apps::filemanager::OpenRequest& request) {
-  auto* window = new z7::ui::filemanager::MainWindow();
-  window->open_startup_target(request.path, request.type_hint);
-  window->show();
+  auto* const window = new z7::ui::filemanager::MainWindow();
+  open_startup_request_in_window(window, request);
 }
 
 void launch_open_request_in_new_process(
@@ -104,8 +126,7 @@ int main(int argc, char* argv[])
         {
             primary_window = new z7::ui::filemanager::MainWindow();
         }
-        primary_window->open_startup_target(request.path, request.type_hint);
-        primary_window->show();
+        open_startup_request_in_window(primary_window, request);
         primary_window_received_startup_request = true;
     };
 

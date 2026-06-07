@@ -131,46 +131,72 @@ void MainWindow::open_archive_file_inside_for_panel(int panel_index,
 
 void MainWindow::open_archive_inside(const QString& archive_path,
                                      const QString& archive_type_hint) {
-  open_archive_inside_for_panel(active_panel_index_,
-                                archive_path,
-                                archive_type_hint);
+  OpenArchiveInsideOptions options;
+  options.archive_type_hint = archive_type_hint;
+  open_archive_inside(archive_path, std::move(options));
 }
 
 void MainWindow::open_archive_inside_for_panel(int panel_index,
                                                const QString& archive_path,
-                                               const QString& archive_type_hint,
-                                               std::function<void()> open_failure_fallback) {
+                                               const QString& archive_type_hint) {
+  OpenArchiveInsideOptions options;
+  options.archive_type_hint = archive_type_hint;
+  open_archive_inside_for_panel(panel_index, archive_path, std::move(options));
+}
+
+void MainWindow::open_archive_inside(const QString& archive_path,
+                                     OpenArchiveInsideOptions options) {
+  open_archive_inside_for_panel(active_panel_index_,
+                                archive_path,
+                                std::move(options));
+}
+
+void MainWindow::open_archive_inside_for_panel(int panel_index,
+                                               const QString& archive_path,
+                                               OpenArchiveInsideOptions options) {
+  auto finish_failed = [options]() {
+    if (options.open_failure_fallback) {
+      options.open_failure_fallback();
+    }
+    if (options.finished_cb) {
+      options.finished_cb(false);
+    }
+  };
+
   const QFileInfo archive_info(archive_path);
   if (!archive_info.exists() || !archive_info.isFile()) {
     QMessageBox::warning(this, z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)), archive_path);
+    finish_failed();
     return;
   }
 
   const QString source_archive = archive_info.absoluteFilePath();
   const QString origin_dir = archive_info.absolutePath();
-  const QString type_hint = archive_type_hint.trimmed();
+  const QString type_hint = options.archive_type_hint.trimmed();
   if (in_archive_view_for_panel(panel_index)) {
     close_archive_view_for_panel(
         panel_index,
-        [this, panel_index, source_archive, type_hint, open_failure_fallback](bool ok) mutable {
+        [this, panel_index, source_archive, options](bool ok) mutable {
           if (!ok) {
-            if (open_failure_fallback) {
-              open_failure_fallback();
+            if (options.open_failure_fallback) {
+              options.open_failure_fallback();
+            }
+            if (options.finished_cb) {
+              options.finished_cb(false);
             }
             return;
           }
           open_archive_inside_for_panel(
               panel_index,
               source_archive,
-              type_hint,
-              std::move(open_failure_fallback));
+              std::move(options));
         });
     return;
   }
   auto out_session_result =
       std::make_shared<std::optional<z7::app::OpenArchiveSessionResult>>();
 
-  start_task_with_runner(
+  const bool started = start_task_with_runner(
       QStringLiteral("%1: %2").arg(z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)), source_archive),
       z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)),
       [source_archive, type_hint, out_session_result](
@@ -187,19 +213,28 @@ void MainWindow::open_archive_inside_for_panel(int panel_index,
        origin_dir,
        type_hint,
        out_session_result,
-       open_failure_fallback](bool ok,
+       options](bool ok,
                               int,
                               int,
                               const QString&,
                               const z7::app::OperationOutcome&) {
         if (!ok) {
-          if (open_failure_fallback) {
-            open_failure_fallback();
+          if (options.open_failure_fallback) {
+            options.open_failure_fallback();
+          }
+          if (options.finished_cb) {
+            options.finished_cb(false);
           }
           return;
         }
         if (out_session_result == nullptr || !out_session_result->has_value() ||
             !out_session_result->value().token.is_valid()) {
+          if (options.open_failure_fallback) {
+            options.open_failure_fallback();
+          }
+          if (options.finished_cb) {
+            options.finished_cb(false);
+          }
           return;
         }
 
@@ -212,29 +247,42 @@ void MainWindow::open_archive_inside_for_panel(int panel_index,
             origin_dir,
             type_hint,
             true,
-            [this, panel_index, session_token](bool loaded) {
+            [this, panel_index, session_token, options](bool loaded) {
               if (!loaded) {
                 close_archive_sessions_async(
                     QVector<z7::app::ArchiveSessionToken>{session_token});
+                if (options.open_failure_fallback) {
+                  options.open_failure_fallback();
+                }
+                if (options.finished_cb) {
+                  options.finished_cb(false);
+                }
                 return;
               }
               panel_controller(panel_index).archive.archive_entry_from_parent.clear();
               set_active_panel(panel_index);
+              if (options.finished_cb) {
+                options.finished_cb(true);
+              }
             },
             false,
             {},
             session_token,
-            source_archive);
+            source_archive,
+            options.task_ui_mode);
         if (!started) {
           close_archive_sessions_async(
               QVector<z7::app::ArchiveSessionToken>{session_token});
         }
       },
-      RunnerTaskUiMode::kSilent,
-      open_failure_fallback
+      options.task_ui_mode,
+      options.open_failure_fallback
           ? std::function<bool(int, const QString&)>(
                 [](int, const QString&) { return false; })
           : std::function<bool(int, const QString&)>());
+  if (!started) {
+    finish_failed();
+  }
 }
 
 }  // namespace z7::ui::filemanager

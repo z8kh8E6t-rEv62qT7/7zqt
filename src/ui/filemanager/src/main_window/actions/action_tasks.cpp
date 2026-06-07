@@ -354,6 +354,9 @@ bool MainWindow::start_task_with_runner(const QString& header,
       task_ui_mode == RunnerTaskUiMode::kSilent
           ? nullptr
           : new TaskProgressDialog(this);
+  const auto progress_presenter =
+      std::make_shared<z7::ui::runtime_support::DelayedProgressDialogPresenter>(
+          created_dialog);
   const std::shared_ptr<RunningTaskContext> task =
       std::make_shared<RunningTaskContext>();
   const auto failure_messages = std::make_shared<QStringList>();
@@ -403,11 +406,11 @@ bool MainWindow::start_task_with_runner(const QString& header,
 #endif
     created_dialog->set_test_mode(false);
     created_runner->set_prompt_parent_provider(
-        [dialog_guard]() -> QWidget* {
+        [dialog_guard, progress_presenter]() -> QWidget* {
           if (!dialog_guard) {
             return nullptr;
           }
-          dialog_guard->show();
+          progress_presenter->show_now();
           dialog_guard->raise();
           dialog_guard->activateWindow();
           QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -514,6 +517,7 @@ bool MainWindow::start_task_with_runner(const QString& header,
            remove_task,
            created_runner,
            dialog_guard,
+           progress_presenter,
            background_mode,
            failure_messages,
            failure_caption,
@@ -553,6 +557,7 @@ bool MainWindow::start_task_with_runner(const QString& header,
             if (keep_dialog_for_result) {
               dialog_guard->set_failure_result_messages(result_messages);
               dialog_guard->set_failure_result_mode();
+              progress_presenter->show_now();
             }
 
             if (!dialog_guard && !ok && !canceled &&
@@ -597,13 +602,19 @@ bool MainWindow::start_task_with_runner(const QString& header,
             }
 
             if (!keep_dialog_for_result) {
+              progress_presenter->cancel_pending();
               dialog_guard->deleteLater();
             }
           });
 
   if (created_dialog != nullptr) {
-    created_dialog->show();
     created_dialog->set_running(true);
+    if (task_ui_mode == RunnerTaskUiMode::kDelayed) {
+      progress_presenter->schedule(
+          this, z7::ui::runtime_support::kOriginal7ZipProgressDialogDelayMs);
+    } else {
+      progress_presenter->show_now();
+    }
   }
 
   // start_fn() now returns true whenever the runner has guaranteed a later
@@ -613,6 +624,7 @@ bool MainWindow::start_task_with_runner(const QString& header,
     background_mode->restore();
     remove_task();
     if (created_dialog != nullptr) {
+      progress_presenter->cancel_pending();
       created_dialog->set_running(false);
       created_dialog->deleteLater();
     }

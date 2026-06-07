@@ -44,29 +44,63 @@ MainWindow::~MainWindow() {
 
 void MainWindow::open_startup_target(const QString& path,
                                      const QString& archive_type_hint) {
+  StartupOpenTargetOptions options;
+  options.archive_type_hint = archive_type_hint;
+  open_startup_target(path, std::move(options));
+}
+
+void MainWindow::open_startup_target(const QString& path,
+                                     StartupOpenTargetOptions options) {
+  auto finish = [&options](bool ok) {
+    if (options.finished_cb) {
+      options.finished_cb(ok);
+    }
+  };
+
   const QString trimmed_path = path.trimmed();
   if (trimmed_path.isEmpty()) {
+    finish(false);
     return;
   }
 
   const QFileInfo info(trimmed_path);
   if (!info.exists()) {
+    finish(false);
     return;
   }
 
   if (info.isDir()) {
     set_current_directory(info.absoluteFilePath());
+    finish(true);
     return;
   }
 
   const QString target_file = info.absoluteFilePath();
-  const QString trimmed_type_hint = archive_type_hint.trimmed();
+  auto open_archive_target = [&](const QString& archive_type_hint) {
+    OpenArchiveInsideOptions archive_options;
+    archive_options.archive_type_hint = archive_type_hint;
+    archive_options.task_ui_mode = options.use_delayed_archive_progress
+                                       ? RunnerTaskUiMode::kDelayed
+                                       : RunnerTaskUiMode::kSilent;
+    archive_options.finished_cb = options.finished_cb;
+    if (options.fallback_to_parent_dir_on_archive_failure) {
+      const QString parent_path = info.absolutePath();
+      archive_options.open_failure_fallback = [this, parent_path]() {
+        if (!parent_path.isEmpty()) {
+          set_current_directory(parent_path);
+        }
+      };
+    }
+    open_archive_inside(target_file, std::move(archive_options));
+  };
+
+  const QString trimmed_type_hint = options.archive_type_hint.trimmed();
   if (!trimmed_type_hint.isEmpty()) {
-    open_archive_inside(target_file, trimmed_type_hint);
+    open_archive_target(trimmed_type_hint);
     return;
   }
   if (is_archive_file(target_file)) {
-    open_archive_inside(target_file);
+    open_archive_target(QString());
     return;
   }
 
@@ -74,6 +108,7 @@ void MainWindow::open_startup_target(const QString& path,
   if (!parent_path.isEmpty()) {
     set_current_directory(parent_path);
   }
+  finish(true);
 }
 
 }  // namespace z7::ui::filemanager

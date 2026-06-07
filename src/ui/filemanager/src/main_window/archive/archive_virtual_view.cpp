@@ -25,7 +25,8 @@ bool MainWindow::load_archive_virtual_directory_for_panel(
     bool suppress_unsupported_warning,
     const std::function<void(int, const QString&)>& failed_cb,
     z7::app::ArchiveSessionToken session_token,
-    const QString& virtual_display_source) {
+    const QString& virtual_display_source,
+    RunnerTaskUiMode task_ui_mode) {
   PanelController& panel = panel_controller(panel_index);
   if (panel.model == nullptr) {
     if (finished_cb) {
@@ -114,7 +115,7 @@ bool MainWindow::load_archive_virtual_directory_for_panel(
           finished_cb(loaded);
         }
       },
-      RunnerTaskUiMode::kSilent,
+      task_ui_mode,
       [suppress_unsupported_warning](int error_domain, const QString&) {
         if (!suppress_unsupported_warning) {
           return true;

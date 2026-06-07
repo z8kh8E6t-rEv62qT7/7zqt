@@ -79,6 +79,11 @@
   bool in_archive_view_for_panel(int panel_index) const;
   void clear_archive_view();
   QString archive_virtual_display_path_for_panel(int panel_index) const;
+  enum class RunnerTaskUiMode {
+    kDefault,
+    kSilent,
+    kDelayed
+  };
   bool load_archive_virtual_directory_for_panel(
       int panel_index,
       const QString& archive_path,
@@ -90,7 +95,8 @@
       bool suppress_unsupported_warning = false,
       const std::function<void(int, const QString&)>& failed_cb = {},
       z7::app::ArchiveSessionToken session_token = {},
-      const QString& virtual_display_source = {});
+      const QString& virtual_display_source = {},
+      RunnerTaskUiMode task_ui_mode = RunnerTaskUiMode::kSilent);
   bool apply_archive_list_result_for_panel(
       int panel_index,
       const QString& archive_path,
@@ -138,12 +144,22 @@
       int panel_index,
       const QString& entry_path,
       const QString& archive_type_hint);
+  struct OpenArchiveInsideOptions {
+    QString archive_type_hint;
+    std::function<void()> open_failure_fallback;
+    std::function<void(bool)> finished_cb;
+    RunnerTaskUiMode task_ui_mode = RunnerTaskUiMode::kSilent;
+  };
   void open_archive_inside(const QString& archive_path,
                            const QString& archive_type_hint = QString());
+  void open_archive_inside(const QString& archive_path,
+                           OpenArchiveInsideOptions options);
   void open_archive_inside_for_panel(int panel_index,
                                      const QString& archive_path,
-                                     const QString& archive_type_hint = QString(),
-                                     std::function<void()> open_failure_fallback = {});
+                                     const QString& archive_type_hint = QString());
+  void open_archive_inside_for_panel(int panel_index,
+                                     const QString& archive_path,
+                                     OpenArchiveInsideOptions options);
   struct ArchiveOpenSelectionTarget {
     QStringList entries;
     QString single_entry_path;
@@ -241,8 +257,16 @@
     QString current_type_hint() const;
   };
  public:
+  struct StartupOpenTargetOptions {
+    QString archive_type_hint;
+    std::function<void(bool)> finished_cb;
+    bool use_delayed_archive_progress = false;
+    bool fallback_to_parent_dir_on_archive_failure = false;
+  };
   void open_startup_target(const QString& path,
                            const QString& archive_type_hint = QString());
+  void open_startup_target(const QString& path,
+                           StartupOpenTargetOptions options);
   struct NativeProcessSnapshotEntry {
     quint32 process_id = 0;
     quint32 parent_process_id = 0;
@@ -749,10 +773,6 @@
                        bool recursive_dirs = true);
   QVector<QPair<QString, QString>> build_hash_result_rows(
       const z7::app::HashSummary& summary) const;
-  enum class RunnerTaskUiMode {
-    kDefault,
-    kSilent
-  };
   bool start_archive_source_extract_task(
       const QString& task_header,
       const QString& failure_caption,
