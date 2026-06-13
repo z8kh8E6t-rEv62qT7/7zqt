@@ -561,6 +561,10 @@ ExtractResult NativeArchiveBackend::extract(const ExtractRequest& request,
           2);
     }
     ExtractRequest session_request = request;
+    if (session_request.archive_path.empty()) {
+      session_request.archive_path =
+          ArchiveOpenSessionNativeAccess::source_archive_path(*session);
+    }
     if (!session_request.password.empty()) {
       session->set_password(session_request.password);
     } else if (session->password_defined()) {

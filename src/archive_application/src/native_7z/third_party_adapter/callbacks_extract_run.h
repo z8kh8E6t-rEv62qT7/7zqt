@@ -154,6 +154,9 @@ class NativeExtractCallback final : public IArchiveExtractCallback,
   std::optional<std::string> apply_item_attributes(
       const fs::path& output_path,
       const ExtractItemAttributes& attributes) const;
+  bool create_output_directories_with_zone_identifier(
+      const fs::path& directory_path,
+      std::error_code& ec) const;
   HRESULT prepare_output_target(UInt32 index,
                                 const std::string& output_item_path,
                                 const ResolvedPath& resolved_path,
@@ -176,7 +179,8 @@ class NativeExtractCallback final : public IArchiveExtractCallback,
   void record_materialized_output_locked(const OutputTarget& target,
                                          uint64_t bytes_written,
                                          bool is_directory);
-  void apply_zone_identifier_to_file(const fs::path& output_path) const;
+  void apply_zone_identifier_to_output(const fs::path& output_path,
+                                       bool is_directory) const;
   HRESULT check_canceled() const;
   OverwriteDecision ask_overwrite_decision(const fs::path& destination_path,
                                            UInt32 index,

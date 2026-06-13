@@ -8,8 +8,13 @@
 #include "Windows/FileDir.h"
 #include "Windows/FileIO.h"
 
+#include <cerrno>
 #include <fstream>
 #include <iterator>
+
+#if defined(__APPLE__)
+#include <sys/xattr.h>
+#endif
 
 namespace z7::app {
 
@@ -31,6 +36,10 @@ std::string read_zone_identifier_stream(const fs::path& base_path) {
   return std::string(std::istreambuf_iterator<char>(in),
                      std::istreambuf_iterator<char>());
 }
+
+#endif
+
+#if (defined(_WIN32) && !defined(UNDER_CE)) || defined(__APPLE__)
 
 bool is_office_document_path(const fs::path& output_path) {
   std::string ext = output_path.extension().string();
@@ -57,6 +66,10 @@ bool is_office_document_path(const fs::path& output_path) {
   return false;
 }
 
+#endif
+
+#if defined(_WIN32) && !defined(UNDER_CE)
+
 void write_zone_identifier_stream(const fs::path& output_path,
                                   const std::string& zone_data) {
   if (zone_data.empty()) {
@@ -68,6 +81,56 @@ void write_zone_identifier_stream(const fs::path& output_path,
     return;
   }
   out.write(zone_data.data(), static_cast<std::streamsize>(zone_data.size()));
+}
+
+#endif
+
+#if defined(__APPLE__)
+
+constexpr const char* kMacQuarantineAttributeName = "com.apple.quarantine";
+
+std::string read_quarantine_xattr(const fs::path& base_path) {
+  const std::string native_path = base_path.string();
+  errno = 0;
+  const ssize_t size =
+      ::getxattr(native_path.c_str(),
+                 kMacQuarantineAttributeName,
+                 nullptr,
+                 0,
+                 0,
+                 XATTR_NOFOLLOW);
+  if (size <= 0) {
+    return {};
+  }
+
+  std::string data(static_cast<size_t>(size), '\0');
+  errno = 0;
+  const ssize_t actual_size =
+      ::getxattr(native_path.c_str(),
+                 kMacQuarantineAttributeName,
+                 data.data(),
+                 data.size(),
+                 0,
+                 XATTR_NOFOLLOW);
+  if (actual_size <= 0) {
+    return {};
+  }
+  data.resize(static_cast<size_t>(actual_size));
+  return data;
+}
+
+void write_quarantine_xattr(const fs::path& output_path,
+                            const std::string& quarantine_data) {
+  if (quarantine_data.empty()) {
+    return;
+  }
+  const std::string native_path = output_path.string();
+  (void)::setxattr(native_path.c_str(),
+                   kMacQuarantineAttributeName,
+                   quarantine_data.data(),
+                   quarantine_data.size(),
+                   0,
+                   XATTR_NOFOLLOW);
 }
 
 #endif
@@ -493,9 +556,13 @@ void NativeExtractCallback::finish_deferred_links() {
   }
 }
 
-void NativeExtractCallback::apply_zone_identifier_to_file(
-    const fs::path& output_path) const {
+void NativeExtractCallback::apply_zone_identifier_to_output(
+    const fs::path& output_path,
+    bool is_directory) const {
 #if defined(_WIN32) && !defined(UNDER_CE)
+  if (is_directory) {
+    return;
+  }
   if (zone_id_mode_ == ExtractZoneIdMode::kNone || archive_path_.empty()) {
     return;
   }
@@ -507,8 +574,24 @@ void NativeExtractCallback::apply_zone_identifier_to_file(
   const std::string zone_data =
       read_zone_identifier_stream(fs::path(archive_path_));
   write_zone_identifier_stream(output_path, zone_data);
+#elif defined(__APPLE__)
+  if (zone_id_mode_ == ExtractZoneIdMode::kNone || archive_path_.empty()) {
+    return;
+  }
+  if (is_directory && zone_id_mode_ != ExtractZoneIdMode::kAll) {
+    return;
+  }
+  if (!is_directory && zone_id_mode_ == ExtractZoneIdMode::kOffice &&
+      !is_office_document_path(output_path)) {
+    return;
+  }
+
+  const std::string quarantine_data =
+      read_quarantine_xattr(fs::path(archive_path_));
+  write_quarantine_xattr(output_path, quarantine_data);
 #else
   (void)output_path;
+  (void)is_directory;
 #endif
 }
 
@@ -627,7 +710,7 @@ STDMETHODIMP NativeExtractCallback::SetOperationResult(Int32 op_res) throw() {
   }
 
   if (zone_identifier_target.has_value()) {
-    apply_zone_identifier_to_file(*zone_identifier_target);
+    apply_zone_identifier_to_output(*zone_identifier_target, false);
   }
   if (attribute_warning.has_value()) {
     emit_log_event(hooks_,

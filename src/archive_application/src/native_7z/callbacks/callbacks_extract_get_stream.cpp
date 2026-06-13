@@ -94,6 +94,52 @@ bool remove_existing_output_for_overwrite(const fs::path& destination_path,
 
 }  // namespace
 
+bool NativeExtractCallback::create_output_directories_with_zone_identifier(
+    const fs::path& directory_path,
+    std::error_code& ec) const {
+  ec.clear();
+  if (directory_path.empty()) {
+    return true;
+  }
+
+  std::vector<fs::path> created_candidates;
+  for (fs::path cursor = directory_path; !cursor.empty();) {
+    std::error_code status_ec;
+    const fs::file_status status = fs::symlink_status(cursor, status_ec);
+    if (!status_ec && fs::status_known(status) &&
+        status.type() != fs::file_type::not_found) {
+      break;
+    }
+    if (status_ec && status_ec != std::errc::no_such_file_or_directory) {
+      ec = status_ec;
+      return false;
+    }
+
+    created_candidates.push_back(cursor);
+    const fs::path parent = cursor.parent_path();
+    if (parent.empty() || parent == cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+
+  fs::create_directories(directory_path, ec);
+  if (ec) {
+    return false;
+  }
+
+  for (auto it = created_candidates.rbegin();
+       it != created_candidates.rend();
+       ++it) {
+    std::error_code status_ec;
+    const fs::file_status status = fs::symlink_status(*it, status_ec);
+    if (!status_ec && fs::is_directory(status)) {
+      apply_zone_identifier_to_output(*it, true);
+    }
+  }
+  return true;
+}
+
 HRESULT NativeExtractCallback::prepare_output_target(
     UInt32 index,
     const std::string& output_item_path,
@@ -254,7 +300,9 @@ HRESULT NativeExtractCallback::prepare_output_target(
     return E_FAIL;
   }
 
-  if (!ensure_parent_dir(target.output_path, ec)) {
+  if (!create_output_directories_with_zone_identifier(
+          target.output_path.parent_path(),
+          ec)) {
     record_io_error("Cannot create output directory: " +
                     target.output_path.parent_path().generic_string());
     return E_FAIL;
@@ -364,8 +412,7 @@ STDMETHODIMP NativeExtractCallback::GetStream(UInt32 index,
                       destination_path.generic_string());
       return E_FAIL;
     }
-    fs::create_directories(destination_path, ec);
-    if (ec) {
+    if (!create_output_directories_with_zone_identifier(destination_path, ec)) {
       record_io_error("Cannot create output directory: " +
                       destination_path.generic_string());
       return E_FAIL;
