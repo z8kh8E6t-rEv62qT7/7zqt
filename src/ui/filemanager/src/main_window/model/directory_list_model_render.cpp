@@ -167,6 +167,7 @@ DirectoryListModel::Entry DirectoryListModel::make_virtual_entry(
   Entry entry;
   entry.path = virtual_entry.path;
   entry.display_name = virtual_entry.display_name;
+  entry.archive_index = virtual_entry.archive_index;
   entry.is_virtual = true;
   entry.is_dir = virtual_entry.is_dir;
   entry.is_parent_link = virtual_entry.is_parent_link;

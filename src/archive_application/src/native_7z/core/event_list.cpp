@@ -31,6 +31,113 @@ namespace z7::app
             return normalize_archive_virtual_directory(base + "/" + child);
         }
 
+        bool is_current_dir_segment(std::string const& name)
+        {
+            return z7::common::trim_ascii_space_copy(name) == ".";
+        }
+
+        std::string proxy_dir_name(CProxyDir const& dir)
+        {
+            return z7::common::trim_ascii_space_copy(
+                ustring_to_utf8(UString(dir.Name)));
+        }
+
+        std::string proxy_file_name(CProxyFile const& file)
+        {
+            return z7::common::trim_ascii_space_copy(
+                ustring_to_utf8(UString(file.Name)));
+        }
+
+        std::string proxy2_file_name(CProxyFile2 const& file)
+        {
+            return z7::common::trim_ascii_space_copy(
+                ustring_to_utf8(UString(file.Name)));
+        }
+
+        std::optional<unsigned> find_subdir_through_current_dirs(
+            CProxyArc const& proxy,
+            unsigned dir_index,
+            std::string const& name)
+        {
+            UString const name_u = utf8_to_ustring(name);
+            int const direct = proxy.FindSubDir(dir_index, name_u.Ptr());
+            if (direct >= 0)
+            {
+                return static_cast<unsigned>(direct);
+            }
+
+            CProxyDir const& dir = proxy.Dirs[dir_index];
+            for (unsigned i = 0; i < dir.SubDirs.Size(); ++i)
+            {
+                unsigned const child_dir_index = dir.SubDirs[i];
+                CProxyDir const& child = proxy.Dirs[child_dir_index];
+                if (!is_current_dir_segment(proxy_dir_name(child)))
+                {
+                    continue;
+                }
+                if (std::optional<unsigned> found =
+                        find_subdir_through_current_dirs(
+                            proxy, child_dir_index, name);
+                    found.has_value())
+                {
+                    return found;
+                }
+            }
+
+            return std::nullopt;
+        }
+
+        std::optional<unsigned> find_proxy2_subdir_through_current_dirs(
+            CProxyArc2 const& proxy,
+            unsigned dir_index,
+            std::string const& name)
+        {
+            UString const name_u = utf8_to_ustring(name);
+            int const direct = proxy.FindItem(dir_index, name_u.Ptr(), true);
+            if (direct >= 0)
+            {
+                CProxyDir2 const& dir = proxy.Dirs[dir_index];
+                if (static_cast<unsigned>(direct) < dir.Items.Size())
+                {
+                    UInt32 const arc_index =
+                        dir.Items[static_cast<unsigned>(direct)];
+                    CProxyFile2 const& file = proxy.Files[arc_index];
+                    if (file.IsDir() &&
+                        file.DirIndex >= 0 &&
+                        static_cast<unsigned>(file.DirIndex) < proxy.Dirs.Size())
+                    {
+                        return static_cast<unsigned>(file.DirIndex);
+                    }
+                }
+            }
+
+            CProxyDir2 const& dir = proxy.Dirs[dir_index];
+            for (unsigned i = 0; i < dir.Items.Size(); ++i)
+            {
+                UInt32 const arc_index = dir.Items[i];
+                CProxyFile2 const& file = proxy.Files[arc_index];
+                if (file.Ignore ||
+                    !file.IsDir() ||
+                    file.DirIndex < 0 ||
+                    static_cast<unsigned>(file.DirIndex) >= proxy.Dirs.Size() ||
+                    !is_current_dir_segment(proxy2_file_name(file)))
+                {
+                    continue;
+                }
+                if (std::optional<unsigned> found =
+                        find_proxy2_subdir_through_current_dirs(
+                            proxy,
+                            static_cast<unsigned>(file.DirIndex),
+                            name);
+                    found.has_value())
+                {
+                    return found;
+                }
+            }
+
+            return std::nullopt;
+        }
+
     } // namespace
 
     int list_archive_entries_from_arc(CArc const* arc,
@@ -113,26 +220,14 @@ namespace z7::app
                 {
                     return canceled;
                 }
-                UString const part_u = utf8_to_ustring(part);
-                int const pos = proxy.FindItem(target_dir_index, part_u.Ptr(), true);
-                if (pos < 0)
+                std::optional<unsigned> const next_dir =
+                    find_proxy2_subdir_through_current_dirs(
+                        proxy, target_dir_index, part);
+                if (!next_dir.has_value())
                 {
                     return S_OK;
                 }
-
-                CProxyDir2 const& current_dir = proxy.Dirs[target_dir_index];
-                if (static_cast<unsigned>(pos) >= current_dir.Items.Size())
-                {
-                    return S_OK;
-                }
-
-                UInt32 const arc_index = current_dir.Items[static_cast<unsigned>(pos)];
-                CProxyFile2 const& file = proxy.Files[arc_index];
-                if (!file.IsDir() || file.DirIndex < 0 || static_cast<unsigned>(file.DirIndex) >= proxy.Dirs.Size())
-                {
-                    return S_OK;
-                }
-                target_dir_index = static_cast<unsigned>(file.DirIndex);
+                target_dir_index = *next_dir;
             }
 
             auto emit_proxy2_dir = [&](unsigned dir_index,
@@ -153,27 +248,41 @@ namespace z7::app
                         continue;
                     }
 
-                    std::string const name = z7::common::trim_ascii_space_copy(
-                        ustring_to_utf8(UString(file.Name)));
+                    std::string const name = proxy2_file_name(file);
                     if (name.empty())
                     {
                         continue;
                     }
 
-                    std::string const child_relative_path = join_relative_path(relative_base, name);
-                    ArchiveListEntry entry;
-                    entry.path = child_relative_path;
-                    entry.is_dir = file.IsDir();
-                    entry.size = 0;
-
                     bool const can_recurse =
-                        entry.is_dir &&
+                        file.IsDir() &&
                         file.DirIndex >= 0 &&
                         static_cast<unsigned>(file.DirIndex) < proxy.Dirs.Size();
                     unsigned child_dir_index = 0;
                     if (can_recurse)
                     {
                         child_dir_index = static_cast<unsigned>(file.DirIndex);
+                        if (is_current_dir_segment(name))
+                        {
+                            if (const HRESULT hr =
+                                    self(child_dir_index, relative_base, self);
+                                hr != S_OK)
+                            {
+                                return hr;
+                            }
+                            continue;
+                        }
+                    }
+
+                    std::string const child_relative_path = join_relative_path(relative_base, name);
+                    ArchiveListEntry entry;
+                    entry.path = child_relative_path;
+                    entry.archive_index = arc_index;
+                    entry.is_dir = file.IsDir();
+                    entry.size = 0;
+
+                    if (can_recurse)
+                    {
                         CProxyDir2 const& child_dir = proxy.Dirs[child_dir_index];
                         entry.size = child_dir.Size;
                         if (include_detailed_props)
@@ -245,13 +354,13 @@ namespace z7::app
             {
                 return canceled;
             }
-            UString const part_u = utf8_to_ustring(part);
-            int const next = proxy.FindSubDir(target_dir_index, part_u.Ptr());
-            if (next < 0)
+            std::optional<unsigned> const next_dir =
+                find_subdir_through_current_dirs(proxy, target_dir_index, part);
+            if (!next_dir.has_value())
             {
                 return S_OK;
             }
-            target_dir_index = static_cast<unsigned>(next);
+            target_dir_index = *next_dir;
         }
 
         auto emit_proxy_dir = [&](unsigned dir_index,
@@ -268,13 +377,26 @@ namespace z7::app
                 }
                 unsigned const child_dir_index = dir.SubDirs[i];
                 CProxyDir const& dir_entry = proxy.Dirs[child_dir_index];
-                std::string const name = z7::common::trim_ascii_space_copy(
-                    ustring_to_utf8(UString(dir_entry.Name)));
+                std::string const name = proxy_dir_name(dir_entry);
                 if (!name.empty())
                 {
+                    if (is_current_dir_segment(name))
+                    {
+                        if (const HRESULT hr =
+                                self(child_dir_index, relative_base, self);
+                            hr != S_OK)
+                        {
+                            return hr;
+                        }
+                        continue;
+                    }
                     std::string const child_relative_path = join_relative_path(relative_base, name);
                     ArchiveListEntry entry;
                     entry.path = child_relative_path;
+                    if (dir_entry.ArcIndex >= 0)
+                    {
+                        entry.archive_index = static_cast<uint32_t>(dir_entry.ArcIndex);
+                    }
                     entry.is_dir = true;
                     entry.size = dir_entry.Size;
                     if (include_detailed_props)
@@ -310,8 +432,7 @@ namespace z7::app
                 }
                 UInt32 const arc_index = dir.SubFiles[i];
                 CProxyFile const& file = proxy.Files[arc_index];
-                std::string const name = z7::common::trim_ascii_space_copy(
-                    ustring_to_utf8(UString(file.Name)));
+                std::string const name = proxy_file_name(file);
                 if (name.empty())
                 {
                     continue;
@@ -322,6 +443,7 @@ namespace z7::app
                 std::string const child_relative_path = join_relative_path(relative_base, name);
                 ArchiveListEntry entry;
                 entry.path = child_relative_path;
+                entry.archive_index = arc_index;
                 entry.is_dir = false;
                 entry.size =
                     (arc->GetItem_Size(arc_index, item_size, size_defined) == S_OK && size_defined)

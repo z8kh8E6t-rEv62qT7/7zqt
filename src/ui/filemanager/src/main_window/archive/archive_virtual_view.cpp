@@ -199,6 +199,7 @@ bool MainWindow::apply_archive_list_result_for_panel(
     entry.path =
         z7::ui::archive_support::join_virtual_path(normalized_virtual_dir, name);
     entry.display_name = name;
+    entry.archive_index = item.archive_index;
     entry.is_dir = item.is_dir;
     entry.size = item.size;
     entry.packed_size = item.packed_size;

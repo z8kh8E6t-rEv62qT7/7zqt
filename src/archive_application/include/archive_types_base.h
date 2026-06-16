@@ -214,6 +214,7 @@ struct ListRequest {
 
 struct ArchiveListEntry {
   std::string path;
+  std::optional<uint32_t> archive_index;
   bool is_dir = false;
   uint64_t size = 0;
   std::optional<uint64_t> packed_size;

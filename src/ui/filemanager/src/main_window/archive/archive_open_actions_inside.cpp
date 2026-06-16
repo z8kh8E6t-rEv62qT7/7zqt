@@ -8,7 +8,8 @@ namespace z7::ui::filemanager {
 
 void MainWindow::open_archive_file_inside_for_panel(int panel_index,
                                                     const QString& entry_path,
-                                                    const QString& archive_type_hint) {
+                                                    const QString& archive_type_hint,
+                                                    std::optional<uint32_t> archive_index) {
   PanelController& panel = panel_controller(panel_index);
   if (!in_archive_view_for_panel(panel_index) ||
       panel.archive.source_archive.isEmpty() ||
@@ -43,16 +44,26 @@ void MainWindow::open_archive_file_inside_for_panel(int panel_index,
       [parent_token = panel.archive.current_token,
        normalized_entry,
        effective_hint,
+       archive_index,
        nested_display,
        out_session_result](ArchiveProcessRunner* runner) {
-        return runner != nullptr &&
-               runner->start_open_nested_by_path(
-                   parent_token,
-                   normalized_entry,
-                   effective_hint,
-                   0,
-                   nested_display,
-                   out_session_result);
+        if (runner == nullptr) {
+          return false;
+        }
+        if (archive_index.has_value()) {
+          return runner->start_open_nested(parent_token,
+                                           *archive_index,
+                                           effective_hint,
+                                           0,
+                                           nested_display,
+                                           out_session_result);
+        }
+        return runner->start_open_nested_by_path(parent_token,
+                                                normalized_entry,
+                                                effective_hint,
+                                                0,
+                                                nested_display,
+                                                out_session_result);
       },
       [this,
        panel_index,

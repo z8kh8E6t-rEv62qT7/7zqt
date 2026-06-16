@@ -56,16 +56,20 @@ MainWindow::resolve_archive_open_selection_target(int panel_index) const {
     target.entries << entry_path;
     if (target.entries.size() == 1) {
       target.single_entry_path = entry_path;
+      target.single_entry_archive_index =
+          panel.model->archive_index_for_row(row_index);
       target.single_entry_is_dir = panel.model->is_dir_for_row(row_index);
       continue;
     }
 
     target.single_entry_path.clear();
+    target.single_entry_archive_index.reset();
     target.single_entry_is_dir = false;
   }
 
   if (target.entries.size() != 1) {
     target.single_entry_path.clear();
+    target.single_entry_archive_index.reset();
     target.single_entry_is_dir = false;
   }
   return target;
@@ -129,7 +133,12 @@ void MainWindow::open_focused_item_as_internal(const QString& archive_type_hint)
       return;
     }
 
-    const QString entry_path = panel.focused_path();
+    const QModelIndex focused = panel.focused_source_index();
+    if (!focused.isValid()) {
+      return;
+    }
+
+    const QString entry_path = panel.model->path_for_row(focused.row());
     if (entry_path.isEmpty()) {
       return;
     }
@@ -137,7 +146,9 @@ void MainWindow::open_focused_item_as_internal(const QString& archive_type_hint)
     if (!panel.focused_item_is_dir()) {
       open_archive_file_inside_for_panel(active_panel_index_,
                                          entry_path,
-                                         archive_type_hint);
+                                         archive_type_hint,
+                                         panel.model->archive_index_for_row(
+                                             focused.row()));
       return;
     }
 
@@ -226,7 +237,8 @@ void MainWindow::open_selected_archive_entries(bool try_internal) {
 
   open_archive_file_inside_for_panel(active_panel_index_,
                                      selection.single_entry_path,
-                                     QString());
+                                     QString(),
+                                     selection.single_entry_archive_index);
 }
 
 void MainWindow::open_selected_filesystem_paths_including_parent_link(

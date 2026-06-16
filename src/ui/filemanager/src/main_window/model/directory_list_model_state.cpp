@@ -183,6 +183,13 @@ QString DirectoryListModel::path_for_row(int row) const {
   return entries_[row].path;
 }
 
+std::optional<uint32_t> DirectoryListModel::archive_index_for_row(int row) const {
+  if (row < 0 || row >= entries_.size()) {
+    return std::nullopt;
+  }
+  return entries_[row].archive_index;
+}
+
 bool DirectoryListModel::is_dir_for_row(int row) const {
   if (row < 0 || row >= entries_.size()) {
     return false;

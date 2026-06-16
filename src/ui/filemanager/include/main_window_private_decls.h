@@ -143,7 +143,8 @@
   void open_archive_file_inside_for_panel(
       int panel_index,
       const QString& entry_path,
-      const QString& archive_type_hint);
+      const QString& archive_type_hint,
+      std::optional<uint32_t> archive_index = std::nullopt);
   struct OpenArchiveInsideOptions {
     QString archive_type_hint;
     std::function<void()> open_failure_fallback;
@@ -163,6 +164,7 @@
   struct ArchiveOpenSelectionTarget {
     QStringList entries;
     QString single_entry_path;
+    std::optional<uint32_t> single_entry_archive_index;
     bool single_entry_is_dir = false;
   };
   bool activate_archive_parent_link_for_panel(

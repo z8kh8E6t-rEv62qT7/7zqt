@@ -144,6 +144,8 @@ ArchiveBackendHooks make_session_password_hooks(
     ArchiveOpenSession& session,
     const ArchiveBackendHooks& base_hooks);
 
+std::string archive_item_path_for_matching(const CArc& arc, UInt32 index);
+
 OpenArchiveSessionResult open_native_archive_session_from_path(
     ArchiveSessionRegistry& registry,
     const OpenArchiveFromPathRequest& request,

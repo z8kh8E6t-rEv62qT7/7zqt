@@ -216,8 +216,7 @@ OpenArchiveSessionResult open_native_archive_session_from_parent(
     const std::string needle = normalize_archive_item_path(request.entry_path);
     bool found = false;
     for (UInt32 i = 0; i < num_items; ++i) {
-      const std::string candidate = normalize_archive_item_path(
-          archive_get_prop_text(parent_arc->Archive, i, kpidPath));
+      const std::string candidate = archive_item_path_for_matching(*parent_arc, i);
       if (candidate == needle) {
         resolved_index = i;
         resolved_entry_path = candidate;
@@ -244,7 +243,7 @@ OpenArchiveSessionResult open_native_archive_session_from_parent(
       return result;
     }
     resolved_entry_path = normalize_archive_item_path(
-        archive_get_prop_text(parent_arc->Archive, resolved_index, kpidPath));
+        archive_item_path_for_matching(*parent_arc, resolved_index));
   }
 
   const std::string display_path = request.display_path_hint.empty()

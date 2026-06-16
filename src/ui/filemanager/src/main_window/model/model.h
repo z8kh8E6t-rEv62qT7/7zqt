@@ -36,6 +36,7 @@ class DirectoryListModel final : public QAbstractTableModel {
   struct VirtualEntry {
     QString path;
     QString display_name;
+    std::optional<uint32_t> archive_index;
     bool is_dir = false;
     bool is_parent_link = false;
     uint64_t size = 0;
@@ -125,6 +126,7 @@ class DirectoryListModel final : public QAbstractTableModel {
   bool is_virtual_mode() const;
 
   QString path_for_row(int row) const;
+  std::optional<uint32_t> archive_index_for_row(int row) const;
   bool is_dir_for_row(int row) const;
   bool is_parent_link_for_row(int row) const;
   bool set_filesystem_directory_stats(const QString& path,
@@ -154,6 +156,7 @@ class DirectoryListModel final : public QAbstractTableModel {
     QFileInfo info;
     QString path;
     QString display_name;
+    std::optional<uint32_t> archive_index;
     bool is_virtual = false;
     bool is_dir = false;
     bool is_parent_link = false;

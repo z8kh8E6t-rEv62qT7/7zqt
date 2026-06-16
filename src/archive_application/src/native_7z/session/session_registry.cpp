@@ -147,8 +147,7 @@ std::optional<UInt32> resolve_entry_index_in_parent(ArchiveOpenSession& parent,
   }
   const std::string needle = normalize_archive_item_path(entry_path);
   for (UInt32 i = 0; i < num_items; ++i) {
-    const std::string candidate = normalize_archive_item_path(
-        archive_get_prop_text(arc->Archive, i, kpidPath));
+    const std::string candidate = archive_item_path_for_matching(*arc, i);
     if (candidate == needle) {
       return i;
     }
@@ -447,6 +446,18 @@ std::optional<OperationResult> commit_archive_session_to_root(
 }
 
 }  // namespace
+
+std::string archive_item_path_for_matching(const CArc& arc, UInt32 index) {
+  UString path;
+  if (arc.GetItem_Path(index, path) == S_OK) {
+    return normalize_archive_item_path(ustring_to_utf8(path));
+  }
+  if (arc.Archive == nullptr) {
+    return {};
+  }
+  return normalize_archive_item_path(
+      archive_get_prop_text(arc.Archive, index, kpidPath));
+}
 
 ArchiveBackendHooks make_session_password_hooks(
     ArchiveOpenSession& session,

@@ -11,27 +11,25 @@ std::string normalize_archive_virtual_directory(std::string directory) {
 
   std::string out;
   out.reserve(directory.size());
-  bool last_was_slash = false;
-  for (char ch : directory) {
-    if (ch == '/') {
-      if (out.empty() || last_was_slash) {
-        last_was_slash = true;
-        continue;
+  size_t start = 0;
+  while (start <= directory.size()) {
+    const size_t slash = directory.find('/', start);
+    const std::string token =
+        directory.substr(start,
+                         slash == std::string::npos ? std::string::npos
+                                                     : slash - start);
+    if (!token.empty() && token != ".") {
+      if (!out.empty()) {
+        out.push_back('/');
       }
-      out.push_back(ch);
-      last_was_slash = true;
-    } else {
-      out.push_back(ch);
-      last_was_slash = false;
+      out += token;
     }
+    if (slash == std::string::npos) {
+      break;
+    }
+    start = slash + 1;
   }
 
-  while (!out.empty() && out.front() == '/') {
-    out.erase(out.begin());
-  }
-  while (!out.empty() && out.back() == '/') {
-    out.pop_back();
-  }
   return out;
 }
 
@@ -61,7 +59,7 @@ bool archive_virtual_path_is_safe_for_materialization(
     const std::string& normalized_path) {
   for (const std::string& part :
        split_archive_virtual_directory(normalized_path)) {
-    if (part == "." || part == "..") {
+    if (part == "..") {
       return false;
     }
   }
