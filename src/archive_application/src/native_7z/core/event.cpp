@@ -3,6 +3,8 @@
 
 #include "core/internal.h"
 
+#include "common/archive_type_normalization.h"
+
 namespace z7::app
 {
 
@@ -18,7 +20,14 @@ namespace z7::app
         types.Clear();
         if (!archive_type_hint.empty())
         {
-            UString const format = utf8_to_ustring(archive_type_hint);
+            std::string format_hint = archive_type_hint;
+            if (z7::common::is_gzip_family_archive_suffix(archive_type_hint)
+                || z7::common::is_bzip2_family_archive_suffix(archive_type_hint))
+            {
+                format_hint =
+                    z7::common::canonical_archive_type_from_filename_suffix_copy(archive_type_hint);
+            }
+            UString const format = utf8_to_ustring(format_hint);
             if (!ParseOpenTypes(codecs, format, types) || types.IsEmpty())
             {
                 return E_INVALIDARG;

@@ -141,14 +141,21 @@ static void run_task_or_fail(NSString *launchPath,
   }
 }
 
+static void create_archive_with_format(NSString *workingDirectory,
+                                       NSString *archivePath,
+                                       NSString *format,
+                                       NSArray<NSString *> *inputs) {
+  NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:@"a"];
+  [arguments addObject:archivePath.lastPathComponent];
+  [arguments addObject:[NSString stringWithFormat:@"-t%@", format]];
+  [arguments addObjectsFromArray:inputs];
+  run_task_or_fail(sevenzz_path(), arguments, workingDirectory);
+}
+
 static void create_7z_archive(NSString *workingDirectory,
                               NSString *archivePath,
                               NSArray<NSString *> *inputs) {
-  NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:@"a"];
-  [arguments addObject:archivePath.lastPathComponent];
-  [arguments addObject:@"-t7z"];
-  [arguments addObjectsFromArray:inputs];
-  run_task_or_fail(sevenzz_path(), arguments, workingDirectory);
+  create_archive_with_format(workingDirectory, archivePath, @"7z", inputs);
 }
 
 static void create_encrypted_7z_archive(NSString *workingDirectory,
@@ -421,6 +428,26 @@ static NSDictionary<NSString *, NSString *> *create_nested_archive_fixture(void)
   };
 }
 
+static NSDictionary<NSString *, NSString *> *create_tar_gzip_archive_fixture(void) {
+  NSString *root = temporary_root(@"z7-ql-targz-alias");
+  NSString *payloadName = @"payload.txt";
+  write_text_file([root stringByAppendingPathComponent:payloadName],
+                  @"quicklook-alias-payload");
+
+  NSString *tarName = @"quicklook-alias.tar";
+  NSString *tarPath = [root stringByAppendingPathComponent:tarName];
+  create_archive_with_format(root, tarPath, @"tar", @[ payloadName ]);
+
+  NSString *archivePath = [root stringByAppendingPathComponent:@"quicklook-alias.tar.gz"];
+  create_archive_with_format(root, archivePath, @"gzip", @[ tarName ]);
+
+  return @{
+    @"archive": archivePath,
+    @"tarEntry": tarName,
+    @"payload": payloadName
+  };
+}
+
 static NSDictionary<NSString *, NSString *> *create_encrypted_archive_fixture(void) {
   NSString *root = temporary_root(@"z7-ql-encrypted");
   write_text_file([root stringByAppendingPathComponent:@"secret.txt"], @"secret");
@@ -601,6 +628,43 @@ static void test_nested_list_supports_entries(void) {
               @"nested list should contain leaf file");
 
   z7_mi_destroy_quicklook_list_result(result.result);
+  z7_mi_session_destroy(session);
+}
+
+static void test_quicklook_list_accepts_suffix_alias_type_hints(void) {
+  NSDictionary<NSString *, NSString *> *fixture =
+      create_tar_gzip_archive_fixture();
+  z7_mi_session_t *session = z7_mi_session_create();
+  expect_true(session != NULL, @"failed to create suffix alias quicklook session");
+
+  QuickLookListCallResult root = quicklook_list(
+      session,
+      fixture[@"archive"],
+      @"",
+      @"gz",
+      @[]);
+  expect_true(root.status == Z7_MI_STATUS_OK && root.result->ok,
+              @"gz hinted tar.gz root list should succeed");
+  const z7_mi_quicklook_item_t *tarEntry =
+      find_item_named(root.result, fixture[@"tarEntry"]);
+  expect_true(tarEntry != NULL && !tarEntry->is_dir,
+              @"gz hinted tar.gz root list should expose wrapped tar");
+  expect_true([item_path(tarEntry) isEqualToString:fixture[@"tarEntry"]],
+              @"wrapped tar item path should match tar entry name");
+  z7_mi_destroy_quicklook_list_result(root.result);
+
+  QuickLookListCallResult nested = quicklook_list(
+      session,
+      fixture[@"archive"],
+      @"",
+      @"gz",
+      @[ fixture[@"tarEntry"] ]);
+  expect_true(nested.status == Z7_MI_STATUS_OK && nested.result->ok,
+              @"gz hinted tar.gz nested tar list should succeed");
+  expect_true([collect_item_names(nested.result) containsObject:fixture[@"payload"]],
+              @"nested tar list should expose wrapped payload");
+
+  z7_mi_destroy_quicklook_list_result(nested.result);
   z7_mi_session_destroy(session);
 }
 
@@ -1051,6 +1115,9 @@ int main(int argc, const char *argv[]) {
     });
     run_test(@"nested_list_supports_entries", argc, argv, ^{
       test_nested_list_supports_entries();
+    });
+    run_test(@"quicklook_list_accepts_suffix_alias_type_hints", argc, argv, ^{
+      test_quicklook_list_accepts_suffix_alias_type_hints();
     });
     run_test(@"encrypted_list_uses_password_prompt_and_caches_within_session", argc, argv, ^{
       test_encrypted_list_uses_password_prompt_and_caches_within_session();
