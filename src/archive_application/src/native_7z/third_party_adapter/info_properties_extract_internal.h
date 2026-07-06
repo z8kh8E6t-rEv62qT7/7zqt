@@ -3,28 +3,34 @@
 
 #pragma once
 
+#include <utility>
+
 #include "info_properties_detail.h"
 
 namespace z7::app::info_properties_detail {
 
-inline constexpr UInt32 kInvalidArcIndex = static_cast<UInt32>(-1);
+    inline constexpr UInt32 kInvalidArcIndex = static_cast<UInt32>(-1);
 
-bool cancel_requested_now(const std::atomic<bool>* cancel_requested);
-bool is_zero_error_flags_prop(PROPID prop_id,
-                              const NWindows::NCOM::CPropVariant& prop);
-bool append_property_variant_original(std::vector<ArchivePropertyLine>& out_lines,
-                                      ArchivePropertySection section,
-                                      ArchivePropertyDisplayGroup display_group,
-                                      std::optional<uint32_t> level,
-                                      PROPID prop_id,
-                                      const wchar_t* name,
-                                      const NWindows::NCOM::CPropVariant& prop);
+    template <typename Callable>
+    HRESULT safe_property_hresult(Callable&& callable) noexcept {
+        try {
+            return std::forward<Callable>(callable)();
+        } catch (...) {
+            return E_FAIL;
+        }
+    }
 
-uint64_t get_selected_item_unpacked_size(const CArc& arc,
-                                         const SelectedPropertyItem& item,
-                                         bool flat_view);
-uint64_t get_selected_item_pack_size(const CArc& arc,
-                                     const SelectedPropertyItem& item,
-                                     bool flat_view);
+    bool cancel_requested_now(std::atomic<bool> const* cancel_requested);
+    bool is_zero_error_flags_prop(PROPID prop_id, NWindows::NCOM::CPropVariant const& prop);
+    bool append_property_variant_original(std::vector<ArchivePropertyLine>& out_lines,
+                                          ArchivePropertySection section,
+                                          ArchivePropertyDisplayGroup display_group,
+                                          std::optional<uint32_t> level,
+                                          PROPID prop_id,
+                                          wchar_t const* name,
+                                          NWindows::NCOM::CPropVariant const& prop);
 
-}  // namespace z7::app::info_properties_detail
+    uint64_t get_selected_item_unpacked_size(CArc const& arc, SelectedPropertyItem const& item, bool flat_view);
+    uint64_t get_selected_item_pack_size(CArc const& arc, SelectedPropertyItem const& item, bool flat_view);
+
+} // namespace z7::app::info_properties_detail
