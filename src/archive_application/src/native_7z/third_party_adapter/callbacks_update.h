@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "core/internal.h"
-#include "third_party_adapter.h"
 #include "callbacks_update_benchmark.h"
 #include "callbacks_update_operation.h"
+#include "core/internal.h"
+#include "third_party_adapter.h"

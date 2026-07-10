@@ -6,7 +6,7 @@
 
 namespace z7::ui::runtime_support {
 
-QString J(QStringView key);
-QString JF(QStringView key, const QStringList& args);
+    QString J(QStringView key);
+    QString JF(QStringView key, QStringList const& args);
 
-}  // namespace z7::ui::runtime_support
+} // namespace z7::ui::runtime_support

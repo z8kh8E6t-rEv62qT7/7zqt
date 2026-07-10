@@ -23,10 +23,10 @@
 #include <QFileSystemModel>
 #include <QFileSystemWatcher>
 #include <QFormLayout>
-#include <QGuiApplication>
 #include <QGroupBox>
-#include <QHeaderView>
+#include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
@@ -45,10 +45,10 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QRegularExpression>
-#include <QScrollBar>
 #include <QScreen>
-#include <QSignalBlocker>
+#include <QScrollBar>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -62,22 +62,21 @@
 #include <QTreeView>
 #include <QUrl>
 #include <QVBoxLayout>
-
 #include <optional>
 
-#include "archive_session.h"
-#include "archive_error.h"
-#include "descript_ion_store.h"
 #include "app_startup_qt.h"
-#include "drag_drop_policy_qt.h"
-#include "portable_settings.h"
+#include "archive_error.h"
 #include "archive_process_runner.h"
+#include "archive_session.h"
 #include "checksum_result_dialog.h"
 #include "delayed_progress_dialog_presenter.h"
+#include "descript_ion_store.h"
+#include "drag_drop/drag_aware_views.h"
+#include "drag_drop_policy_qt.h"
+#include "filemanager_task_progress_dialog.h"
 #include "official_lang_catalog.h"
 #include "options_dialog.h"
-#include "filemanager_task_progress_dialog.h"
-#include "task_ipc_runtime.h"
+#include "portable_settings.h"
 #include "shared/column_width_persistence.h"
-#include "drag_drop/drag_aware_views.h"
 #include "structured_list_proxy.h"
+#include "task_ipc_runtime.h"

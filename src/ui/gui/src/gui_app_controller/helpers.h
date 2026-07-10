@@ -3,10 +3,9 @@
 
 #pragma once
 
+#include <QString>
 #include <cstdint>
 #include <string>
-
-#include <QString>
 
 class QWidget;
 
@@ -16,33 +15,28 @@ class QWidget;
 
 namespace z7::ui::gui::gui_app_controller_helpers {
 
-enum class TaskSpecPreparationStatus {
-  kPrepared,
-  kCanceled,
-  kFailed
-};
+    enum class TaskSpecPreparationStatus {
+        kPrepared,
+        kCanceled,
+        kFailed
+    };
 
-struct TaskSpecPreparationResult {
-  TaskSpecPreparationStatus status = TaskSpecPreparationStatus::kFailed;
-  GuiTaskSpec spec;
-};
+    struct TaskSpecPreparationResult {
+        TaskSpecPreparationStatus status = TaskSpecPreparationStatus::kFailed;
+        GuiTaskSpec spec;
+    };
 
-uint32_t benchmark_iterations_or_default(const GuiTaskSpec& spec);
-QString task_title(const GuiTaskSpec& spec);
+    uint32_t benchmark_iterations_or_default(GuiTaskSpec const& spec);
+    QString task_title(GuiTaskSpec const& spec);
 
-TaskSpecPreparationResult prepare_task_spec_with_optional_dialog(
-    const GuiTaskSpec& requested_spec);
+    TaskSpecPreparationResult prepare_task_spec_with_optional_dialog(GuiTaskSpec const& requested_spec);
 
 #ifdef Z7_TESTING
-bool suppress_result_dialogs_for_tests();
+    bool suppress_result_dialogs_for_tests();
 #endif
 
-QString build_test_result_message(const z7::app::OperationResult& result,
-                                  uint64_t archive_count_hint);
-void show_test_result_dialog(QWidget* parent,
-                             const QString& title,
-                             const QString& text);
-QVector<QPair<QString, QString>> hash_result_dialog_rows(
-    const GuiTaskRunResult& run_result);
+    QString build_test_result_message(z7::app::OperationResult const& result, uint64_t archive_count_hint);
+    void show_test_result_dialog(QWidget* parent, QString const& title, QString const& text);
+    QVector<QPair<QString, QString>> hash_result_dialog_rows(GuiTaskRunResult const& run_result);
 
-}  // namespace z7::ui::gui::gui_app_controller_helpers
+} // namespace z7::ui::gui::gui_app_controller_helpers

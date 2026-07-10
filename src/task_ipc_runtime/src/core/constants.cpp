@@ -2,22 +2,21 @@
 
 namespace z7::task_ipc_runtime::task_ipc_internal {
 
-const quint32 kTaskIpcMagic = 0x5A374252U;  // "Z7BR"
-const quint16 kTaskIpcVersion = 5;
-const quint32 kTaskIpcPayloadMagic = 0x5A374250U;  // "Z7BP"
-const quint16 kTaskIpcPayloadVersion = 8;
-const quint32 kTaskIpcRequestPoolMagic = 0x5A375250U;  // "Z7RP"
-const quint16 kTaskIpcRequestPoolVersion = 1;
-const int kTaskIpcSlotCount = 16;
-const int kTaskIpcRequestPoolSlotSize = 1 * 1024 * 1024;
-const int kTaskIpcRequestPoolSharedMemorySize =
-    kTaskIpcRequestPoolPayloadOffset +
-    (kTaskIpcSlotCount * kTaskIpcRequestPoolSlotSize);
-const int kWorkerClaimWaitMsecs = 8000;
-const qint64 kClaimableDispatchedAgeMsecs = 15000;
-const qint64 kUnclaimedDispatchedReclaimMsecs = 15000;
-const int kCompletionPublishWaitMsecs = 2000;
-const qint64 kCompletedOrphanReclaimMsecs = 3000;
-const char kTaskIpcOwnerIdProperty[] = "z7.task_ipc.owner.instance.id";
+    quint32 const kTaskIpcMagic = 0x5A374252U; // "Z7BR"
+    quint16 const kTaskIpcVersion = 5;
+    quint32 const kTaskIpcPayloadMagic = 0x5A374250U; // "Z7BP"
+    quint16 const kTaskIpcPayloadVersion = 8;
+    quint32 const kTaskIpcRequestPoolMagic = 0x5A375250U; // "Z7RP"
+    quint16 const kTaskIpcRequestPoolVersion = 1;
+    int const kTaskIpcSlotCount = 16;
+    int const kTaskIpcRequestPoolSlotSize = 1 * 1024 * 1024;
+    int const kTaskIpcRequestPoolSharedMemorySize =
+        kTaskIpcRequestPoolPayloadOffset + (kTaskIpcSlotCount * kTaskIpcRequestPoolSlotSize);
+    int const kWorkerClaimWaitMsecs = 8000;
+    qint64 const kClaimableDispatchedAgeMsecs = 15000;
+    qint64 const kUnclaimedDispatchedReclaimMsecs = 15000;
+    int const kCompletionPublishWaitMsecs = 2000;
+    qint64 const kCompletedOrphanReclaimMsecs = 3000;
+    char const kTaskIpcOwnerIdProperty[] = "z7.task_ipc.owner.instance.id";
 
-}  // namespace z7::task_ipc_runtime::task_ipc_internal
+} // namespace z7::task_ipc_runtime::task_ipc_internal

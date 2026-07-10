@@ -10,31 +10,28 @@
 
 namespace z7::ui::filemanager {
 
-struct TempFilesDeletePathResult {
-  bool ok = true;
-  QString system_error_text;
-  QString failed_path;
-};
+    struct TempFilesDeletePathResult {
+        bool ok = true;
+        QString system_error_text;
+        QString failed_path;
+    };
 
-struct TempFilesDirectoryStats {
-  quint64 size = 0;
-  quint64 num_files = 0;
-  quint64 num_dirs = 0;
-  QString sub_file_name;
-};
+    struct TempFilesDirectoryStats {
+        quint64 size = 0;
+        quint64 num_files = 0;
+        quint64 num_dirs = 0;
+        QString sub_file_name;
+    };
 
-TempFilesDeletePathResult delete_temp_path_with_system_error(
-    const QString& absolute_path,
-    bool is_dir);
+    TempFilesDeletePathResult delete_temp_path_with_system_error(QString const& absolute_path, bool is_dir);
 
-TempFilesDirectoryStats collect_temp_directory_stats(const QString& root_path);
+    TempFilesDirectoryStats collect_temp_directory_stats(QString const& root_path);
 
-QString format_grouped_uint64(quint64 value);
-QString format_datetime(const QDateTime& value);
+    QString format_grouped_uint64(quint64 value);
+    QString format_datetime(QDateTime const& value);
 
-QString build_temp_entry_properties_text(const TempFilesListEntry& entry);
+    QString build_temp_entry_properties_text(TempFilesListEntry const& entry);
 
-bool launch_path_in_new_7zfm(const QString& path,
-                             const QString& fallback_working_dir);
+    bool launch_path_in_new_7zfm(QString const& path, QString const& fallback_working_dir);
 
-}  // namespace z7::ui::filemanager
+} // namespace z7::ui::filemanager

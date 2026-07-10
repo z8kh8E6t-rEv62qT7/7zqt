@@ -3,21 +3,17 @@
 
 #include "core/internal.h"
 
-namespace z7::app
-{
-    namespace
-    {
+namespace z7::app {
+    namespace {
 
         inline constexpr size_t kHashDigestStringSize = k_HashCalc_DigestSize_Max * 2 + k_HashCalc_ExtraSize * 2 + 16;
 
-        bool safe_is_directory(fs::path const& path)
-        {
+        bool safe_is_directory(fs::path const& path) {
             std::error_code ec;
             return fs::is_directory(path, ec);
         }
 
-        uint64_t safe_file_size(fs::path const& path)
-        {
+        uint64_t safe_file_size(fs::path const& path) {
             std::error_code ec;
             uint64_t const size = fs::file_size(path, ec);
             return ec ? 0 : size;
@@ -25,11 +21,9 @@ namespace z7::app
 
     } // namespace
 
-    std::string path_leaf_name(fs::path const& path)
-    {
+    std::string path_leaf_name(fs::path const& path) {
         std::string name = path.filename().generic_string();
-        if (!name.empty())
-        {
+        if (!name.empty()) {
             return name;
         }
         return path.generic_string();
@@ -40,14 +34,11 @@ namespace z7::app
                                        bool recursive_dirs,
                                        std::vector<HashInputEntry>& entries,
                                        uint64_t& total_files,
-                                       uint64_t& total_bytes)
-    {
+                                       uint64_t& total_bytes) {
         bool const selected_is_dir = safe_is_directory(selected_path);
-        if (selected_is_dir)
-        {
+        if (selected_is_dir) {
             entries.push_back({selected_path, display_name, true, 0});
-            if (!recursive_dirs)
-            {
+            if (!recursive_dirs) {
                 return;
             }
 
@@ -55,20 +46,16 @@ namespace z7::app
             fs::recursive_directory_iterator it(selected_path, fs::directory_options::skip_permission_denied, it_ec);
             fs::recursive_directory_iterator end;
 
-            while (!it_ec && it != end)
-            {
+            while (!it_ec && it != end) {
                 fs::path const child = it->path();
                 std::error_code rel_ec;
                 fs::path const rel = fs::relative(child, selected_path, rel_ec);
                 std::string const rel_text = rel_ec ? child.filename().generic_string() : rel.generic_string();
                 std::string const item_name = display_name + "/" + rel_text;
 
-                if (it->is_directory(it_ec))
-                {
+                if (it->is_directory(it_ec)) {
                     entries.push_back({child, item_name, true, 0});
-                }
-                else if (it->is_regular_file(it_ec))
-                {
+                } else if (it->is_regular_file(it_ec)) {
                     uint64_t const size = safe_file_size(child);
                     entries.push_back({child, item_name, false, size});
                     ++total_files;
@@ -88,8 +75,7 @@ namespace z7::app
         total_bytes += size;
     }
 
-    HashSummary make_hash_summary(CHashBundle const& bundle)
-    {
+    HashSummary make_hash_summary(CHashBundle const& bundle) {
         HashSummary summary;
         summary.num_dirs = bundle.NumDirs;
         summary.num_files = bundle.NumFiles;
@@ -101,8 +87,7 @@ namespace z7::app
         summary.first_file_name = ustring_to_utf8(bundle.FirstFileName);
 
         char digest[kHashDigestStringSize];
-        for (unsigned i = 0; i < bundle.Hashers.Size(); ++i)
-        {
+        for (unsigned i = 0; i < bundle.Hashers.Size(); ++i) {
             CHasherState const& hasher = bundle.Hashers[i];
             HashMethodDigest method;
             method.method_name = astring_to_std(hasher.Name);

@@ -10,17 +10,16 @@
 
 namespace z7::app::archive_session_helpers {
 
-using Clock = std::chrono::steady_clock;
+    using Clock = std::chrono::steady_clock;
 
-inline constexpr std::chrono::milliseconds kDefaultProgressInterval(100);
-inline constexpr std::chrono::milliseconds kBenchmarkProgressInterval(250);
+    inline constexpr std::chrono::milliseconds kDefaultProgressInterval(100);
+    inline constexpr std::chrono::milliseconds kBenchmarkProgressInterval(250);
 
-bool is_benchmark_request(const ArchiveRequest& request);
-bool is_wrong_password_prompt(const PasswordPrompt& prompt);
-OperationOutcome make_outcome(const OperationResult& base, OperationPayload payload);
+    bool is_benchmark_request(ArchiveRequest const& request);
+    bool is_wrong_password_prompt(PasswordPrompt const& prompt);
+    OperationOutcome make_outcome(OperationResult const& base, OperationPayload payload);
 
-std::optional<OperationResult> maybe_block_benchmark_for_memory_limit(
-    const ArchiveRequest& request,
-    IArchiveDelegate* delegate);
+    std::optional<OperationResult> maybe_block_benchmark_for_memory_limit(ArchiveRequest const& request,
+                                                                          IArchiveDelegate* delegate);
 
-}  // namespace z7::app::archive_session_helpers
+} // namespace z7::app::archive_session_helpers

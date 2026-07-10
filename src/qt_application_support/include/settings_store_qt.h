@@ -8,17 +8,17 @@
 
 namespace z7::platform::qt {
 
-class SettingsStoreQt final {
- public:
-  explicit SettingsStoreQt(QString organization = QStringLiteral("7z2600"),
-                           QString application = QStringLiteral("7zFM"));
+    class SettingsStoreQt final {
+    public:
+        explicit SettingsStoreQt(QString organization = QStringLiteral("7z2600"),
+                                 QString application = QStringLiteral("7zFM"));
 
-  std::optional<std::string> load(std::string_view key) const;
-  void save(std::string_view key, std::string_view value);
+        std::optional<std::string> load(std::string_view key) const;
+        void save(std::string_view key, std::string_view value);
 
- private:
-  QString organization_;
-  QString application_;
-};
+    private:
+        QString organization_;
+        QString application_;
+    };
 
-}  // namespace z7::platform::qt
+} // namespace z7::platform::qt

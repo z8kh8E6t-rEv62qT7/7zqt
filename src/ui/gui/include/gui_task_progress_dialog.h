@@ -4,9 +4,9 @@
 
 namespace z7::ui::gui {
 
-class TaskProgressDialog final : public z7::ui::runtime_support::TaskProgressDialogBase {
- public:
-  explicit TaskProgressDialog(QWidget* parent = nullptr);
-};
+    class TaskProgressDialog final : public z7::ui::runtime_support::TaskProgressDialogBase {
+    public:
+        explicit TaskProgressDialog(QWidget* parent = nullptr);
+    };
 
-}  // namespace z7::ui::gui
+} // namespace z7::ui::gui

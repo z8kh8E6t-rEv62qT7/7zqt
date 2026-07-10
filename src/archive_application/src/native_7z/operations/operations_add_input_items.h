@@ -7,8 +7,7 @@
 
 namespace z7::app {
 
-std::optional<OperationResult> prepare_add_request_for_execution(
-    const AddRequest& request,
-    AddRequest* out_request);
+    std::optional<OperationResult> prepare_add_request_for_execution(AddRequest const& request,
+                                                                     AddRequest* out_request);
 
-}  // namespace z7::app
+} // namespace z7::app

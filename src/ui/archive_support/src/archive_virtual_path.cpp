@@ -4,49 +4,48 @@
 
 namespace z7::ui::archive_support {
 
-QString normalize_virtual_dir(const QString& value) {
-  QString out = QDir::fromNativeSeparators(value.trimmed());
-  while (out.startsWith(QLatin1Char('/'))) {
-    out.remove(0, 1);
-  }
-  while (out.endsWith(QLatin1Char('/'))) {
-    out.chop(1);
-  }
-  while (out.contains(QStringLiteral("//"))) {
-    out.replace(QStringLiteral("//"), QStringLiteral("/"));
-  }
-  return out;
-}
+    QString normalize_virtual_dir(QString const& value) {
+        QString out = QDir::fromNativeSeparators(value.trimmed());
+        while (out.startsWith(QLatin1Char('/'))) {
+            out.remove(0, 1);
+        }
+        while (out.endsWith(QLatin1Char('/'))) {
+            out.chop(1);
+        }
+        while (out.contains(QStringLiteral("//"))) {
+            out.replace(QStringLiteral("//"), QStringLiteral("/"));
+        }
+        return out;
+    }
 
-QString join_virtual_path(const QString& base, const QString& child) {
-  const QString left = normalize_virtual_dir(base);
-  const QString right = normalize_virtual_dir(child);
-  if (left.isEmpty()) {
-    return right;
-  }
-  if (right.isEmpty()) {
-    return left;
-  }
-  return left + QLatin1Char('/') + right;
-}
+    QString join_virtual_path(QString const& base, QString const& child) {
+        QString const left = normalize_virtual_dir(base);
+        QString const right = normalize_virtual_dir(child);
+        if (left.isEmpty()) {
+            return right;
+        }
+        if (right.isEmpty()) {
+            return left;
+        }
+        return left + QLatin1Char('/') + right;
+    }
 
-QString virtual_display_path(const QString& display_source,
-                             const QString& virtual_dir) {
-  QString source = QDir::toNativeSeparators(display_source.trimmed());
-  if (source.isEmpty()) {
-    return source;
-  }
+    QString virtual_display_path(QString const& display_source, QString const& virtual_dir) {
+        QString source = QDir::toNativeSeparators(display_source.trimmed());
+        if (source.isEmpty()) {
+            return source;
+        }
 
-  const QChar sep = QDir::separator();
-  if (!source.endsWith(sep)) {
-    source += sep;
-  }
+        QChar const sep = QDir::separator();
+        if (!source.endsWith(sep)) {
+            source += sep;
+        }
 
-  const QString rel = normalize_virtual_dir(virtual_dir);
-  if (rel.isEmpty()) {
-    return source;
-  }
-  return source + QDir::toNativeSeparators(rel);
-}
+        QString const rel = normalize_virtual_dir(virtual_dir);
+        if (rel.isEmpty()) {
+            return source;
+        }
+        return source + QDir::toNativeSeparators(rel);
+    }
 
-}  // namespace z7::ui::archive_support
+} // namespace z7::ui::archive_support

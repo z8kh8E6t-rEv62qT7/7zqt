@@ -16,8 +16,7 @@
 namespace z7::ui::filemanager::archive_open_tracking {
 
 #ifdef Q_OS_WIN
-bool open_path_externally_with_process_handle(const QString& path,
-                                              HANDLE* out_process);
+    bool open_path_externally_with_process_handle(QString const& path, HANDLE* out_process);
 #endif
 
-}  // namespace z7::ui::filemanager::archive_open_tracking
+} // namespace z7::ui::filemanager::archive_open_tracking

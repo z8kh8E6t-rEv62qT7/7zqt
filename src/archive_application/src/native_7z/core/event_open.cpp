@@ -4,18 +4,14 @@
 #include "core/internal.h"
 #include "third_party_adapter/callbacks_update_operation.h"
 
-namespace z7::app
-{
-    namespace
-    {
+namespace z7::app {
+    namespace {
 
-        bool cancel_requested_now(std::atomic<bool> const* cancel_requested)
-        {
+        bool cancel_requested_now(std::atomic<bool> const* cancel_requested) {
             return cancel_requested != nullptr && cancel_requested->load(std::memory_order_relaxed);
         }
 
-        HRESULT abort_if_canceled(std::atomic<bool> const* cancel_requested)
-        {
+        HRESULT abort_if_canceled(std::atomic<bool> const* cancel_requested) {
             return cancel_requested_now(cancel_requested) ? E_ABORT : S_OK;
         }
 
@@ -29,11 +25,9 @@ namespace z7::app
                                      CObjectVector<COpenType>& types,
                                      CIntVector& excluded_formats,
                                      IInStream* in_stream,
-                                     COpenOptions& open_options)
-        {
+                                     COpenOptions& open_options) {
             const HRESULT type_res = prepare_open_types_for_archive(archive_type_hint, codecs, types);
-            if (type_res != S_OK)
-            {
+            if (type_res != S_OK) {
                 return type_res;
             }
 
@@ -65,31 +59,24 @@ namespace z7::app
                             CArc const*& arc,
                             bool* out_password_requested,
                             bool* out_wrong_password,
-                            std::string* out_password)
-    {
+                            std::string* out_password) {
         arc = nullptr;
-        if (out_password_requested != nullptr)
-        {
+        if (out_password_requested != nullptr) {
             *out_password_requested = false;
         }
-        if (out_wrong_password != nullptr)
-        {
+        if (out_wrong_password != nullptr) {
             *out_wrong_password = false;
         }
-        if (out_password != nullptr)
-        {
+        if (out_password != nullptr) {
             out_password->clear();
         }
-        if (const HRESULT canceled = abort_if_canceled(cancel_requested); canceled != S_OK)
-        {
+        if (const HRESULT canceled = abort_if_canceled(cancel_requested); canceled != S_OK) {
             return canceled;
         }
 
-        if (!codecs_already_loaded)
-        {
+        if (!codecs_already_loaded) {
             const HRESULT load_res = load_codecs_shared(codecs);
-            if (load_res != S_OK)
-            {
+            if (load_res != S_OK) {
                 return load_res;
             }
         }
@@ -97,19 +84,16 @@ namespace z7::app
         COpenOptions open_options;
         const HRESULT prep_res = prepare_open_options(
             archive_path, archive_type_hint, codecs, types, excluded_formats, nullptr, open_options);
-        if (prep_res != S_OK)
-        {
+        if (prep_res != S_OK) {
             return prep_res;
         }
 
-        const bool capture_password_state =
+        bool const capture_password_state =
             out_password_requested != nullptr || out_wrong_password != nullptr || out_password != nullptr;
         std::unique_ptr<NativeUpdateOperationCallback> open_callback;
-        if (enable_open_callback || capture_password_state)
-        {
+        if (enable_open_callback || capture_password_state) {
             ArchiveBackendHooks callback_hooks = hooks;
-            if (!enable_open_callback)
-            {
+            if (!enable_open_callback) {
                 callback_hooks.on_event = {};
                 callback_hooks.ask_password = {};
             }
@@ -122,33 +106,26 @@ namespace z7::app
 
         IOpenCallbackUI* callback_ui = open_callback ? open_callback.get() : nullptr;
         const HRESULT open_res = archive_link.Open2(open_options, callback_ui);
-        if (open_callback)
-        {
-            if (out_password_requested != nullptr)
-            {
+        if (open_callback) {
+            if (out_password_requested != nullptr) {
                 *out_password_requested = open_callback->password_requested();
             }
-            if (out_wrong_password != nullptr)
-            {
+            if (out_wrong_password != nullptr) {
                 *out_wrong_password = open_callback->wrong_password();
             }
-            if (out_password != nullptr)
-            {
+            if (out_password != nullptr) {
                 *out_password = open_callback->password();
             }
         }
-        if (open_res != S_OK)
-        {
+        if (open_res != S_OK) {
             return open_res;
         }
-        if (const HRESULT canceled = abort_if_canceled(cancel_requested); canceled != S_OK)
-        {
+        if (const HRESULT canceled = abort_if_canceled(cancel_requested); canceled != S_OK) {
             return canceled;
         }
 
         arc = archive_link.GetArc();
-        if (arc == nullptr || arc->Archive == nullptr)
-        {
+        if (arc == nullptr || arc->Archive == nullptr) {
             return E_FAIL;
         }
         return S_OK;
@@ -169,35 +146,27 @@ namespace z7::app
                                         CArc const*& arc,
                                         bool* out_password_requested,
                                         bool* out_wrong_password,
-                                        std::string* out_password)
-    {
+                                        std::string* out_password) {
         arc = nullptr;
-        if (out_password_requested != nullptr)
-        {
+        if (out_password_requested != nullptr) {
             *out_password_requested = false;
         }
-        if (out_wrong_password != nullptr)
-        {
+        if (out_wrong_password != nullptr) {
             *out_wrong_password = false;
         }
-        if (out_password != nullptr)
-        {
+        if (out_password != nullptr) {
             out_password->clear();
         }
-        if (in_stream == nullptr)
-        {
+        if (in_stream == nullptr) {
             return E_INVALIDARG;
         }
-        if (const HRESULT canceled = abort_if_canceled(cancel_requested); canceled != S_OK)
-        {
+        if (const HRESULT canceled = abort_if_canceled(cancel_requested); canceled != S_OK) {
             return canceled;
         }
 
-        if (!codecs_already_loaded)
-        {
+        if (!codecs_already_loaded) {
             const HRESULT load_res = load_codecs_shared(codecs);
-            if (load_res != S_OK)
-            {
+            if (load_res != S_OK) {
                 return load_res;
             }
         }
@@ -205,19 +174,16 @@ namespace z7::app
         COpenOptions open_options;
         const HRESULT prep_res = prepare_open_options(
             display_path, archive_type_hint, codecs, types, excluded_formats, in_stream, open_options);
-        if (prep_res != S_OK)
-        {
+        if (prep_res != S_OK) {
             return prep_res;
         }
 
-        const bool capture_password_state =
+        bool const capture_password_state =
             out_password_requested != nullptr || out_wrong_password != nullptr || out_password != nullptr;
         std::unique_ptr<NativeUpdateOperationCallback> open_callback;
-        if (enable_open_callback || capture_password_state)
-        {
+        if (enable_open_callback || capture_password_state) {
             ArchiveBackendHooks callback_hooks = hooks;
-            if (!enable_open_callback)
-            {
+            if (!enable_open_callback) {
                 callback_hooks.on_event = {};
                 callback_hooks.ask_password = {};
             }
@@ -230,33 +196,26 @@ namespace z7::app
 
         IOpenCallbackUI* callback_ui = open_callback ? open_callback.get() : nullptr;
         const HRESULT open_res = archive_link.Open2(open_options, callback_ui);
-        if (open_callback)
-        {
-            if (out_password_requested != nullptr)
-            {
+        if (open_callback) {
+            if (out_password_requested != nullptr) {
                 *out_password_requested = open_callback->password_requested();
             }
-            if (out_wrong_password != nullptr)
-            {
+            if (out_wrong_password != nullptr) {
                 *out_wrong_password = open_callback->wrong_password();
             }
-            if (out_password != nullptr)
-            {
+            if (out_password != nullptr) {
                 *out_password = open_callback->password();
             }
         }
-        if (open_res != S_OK)
-        {
+        if (open_res != S_OK) {
             return open_res;
         }
-        if (const HRESULT canceled = abort_if_canceled(cancel_requested); canceled != S_OK)
-        {
+        if (const HRESULT canceled = abort_if_canceled(cancel_requested); canceled != S_OK) {
             return canceled;
         }
 
         arc = archive_link.GetArc();
-        if (arc == nullptr || arc->Archive == nullptr)
-        {
+        if (arc == nullptr || arc->Archive == nullptr) {
             return E_FAIL;
         }
         return S_OK;

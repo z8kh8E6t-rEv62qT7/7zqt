@@ -6,18 +6,16 @@
 
 namespace z7::app {
 
-ScopedAtomicBoolReset::ScopedAtomicBoolReset(std::atomic<bool>& value)
-    : value_(value) {}
+    ScopedAtomicBoolReset::ScopedAtomicBoolReset(std::atomic<bool>& value) : value_(value) {}
 
-ScopedAtomicBoolReset::~ScopedAtomicBoolReset() {
-  value_.store(false);
-}
+    ScopedAtomicBoolReset::~ScopedAtomicBoolReset() {
+        value_.store(false);
+    }
 
-ScopedConditionNotify::ScopedConditionNotify(std::condition_variable& cv)
-    : cv_(cv) {}
+    ScopedConditionNotify::ScopedConditionNotify(std::condition_variable& cv) : cv_(cv) {}
 
-ScopedConditionNotify::~ScopedConditionNotify() {
-  cv_.notify_all();
-}
+    ScopedConditionNotify::~ScopedConditionNotify() {
+        cv_.notify_all();
+    }
 
-}  // namespace z7::app
+} // namespace z7::app

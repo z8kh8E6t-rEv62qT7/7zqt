@@ -4,24 +4,18 @@
 #include "main_window/deps.h"
 #include "main_window/internal.h"
 
-namespace z7::ui::filemanager
-{
+namespace z7::ui::filemanager {
 
-    namespace
-    {
+    namespace {
 
-        int bounded_scroll_value(QScrollBar const* scroll_bar, int value)
-        {
-            if (scroll_bar == nullptr)
-            {
+        int bounded_scroll_value(QScrollBar const* scroll_bar, int value) {
+            if (scroll_bar == nullptr) {
                 return value;
             }
-            if (value < scroll_bar->minimum())
-            {
+            if (value < scroll_bar->minimum()) {
                 return scroll_bar->minimum();
             }
-            if (value > scroll_bar->maximum())
-            {
+            if (value > scroll_bar->maximum()) {
                 return scroll_bar->maximum();
             }
             return value;
@@ -29,17 +23,14 @@ namespace z7::ui::filemanager
 
     } // namespace
 
-    void MainWindow::PanelController::set_view_mode(ViewMode mode)
-    {
+    void MainWindow::PanelController::set_view_mode(ViewMode mode) {
         int normalized_mode = static_cast<int>(mode);
-        if (normalized_mode < kViewModeLargeIcons || normalized_mode > kViewModeDetails)
-        {
+        if (normalized_mode < kViewModeLargeIcons || normalized_mode > kViewModeDetails) {
             normalized_mode = kViewModeDetails;
         }
         view_mode = static_cast<ViewMode>(normalized_mode);
 
-        if (ui.view_stack == nullptr || ui.details_view == nullptr || ui.icon_list_view == nullptr)
-        {
+        if (ui.view_stack == nullptr || ui.details_view == nullptr || ui.icon_list_view == nullptr) {
             return;
         }
 
@@ -61,8 +52,7 @@ namespace z7::ui::filemanager
         icon_view->setGridSize(QSize());
         icon_view->setSpacing(0);
 
-        switch (view_mode)
-        {
+        switch (view_mode) {
             case kViewModeLargeIcons:
                 icon_view->setViewMode(QListView::IconMode);
                 icon_view->setIconSize(QSize(large_list_icon_extent, large_list_icon_extent));
@@ -92,32 +82,24 @@ namespace z7::ui::filemanager
         }
     }
 
-    QAbstractItemView* MainWindow::PanelController::current_item_view() const
-    {
-        if (view_mode == kViewModeDetails || ui.icon_list_view == nullptr)
-        {
+    QAbstractItemView* MainWindow::PanelController::current_item_view() const {
+        if (view_mode == kViewModeDetails || ui.icon_list_view == nullptr) {
             return ui.details_view;
         }
         return ui.icon_list_view;
     }
 
-    MainWindow::PanelController::ScrollPositionSnapshot
-    MainWindow::PanelController::capture_scroll_position() const
-    {
-        auto capture_view_scroll_position = [](QAbstractItemView const* view)
-        {
+    MainWindow::PanelController::ScrollPositionSnapshot MainWindow::PanelController::capture_scroll_position() const {
+        auto capture_view_scroll_position = [](QAbstractItemView const* view) {
             ViewScrollPosition position;
-            if (view == nullptr)
-            {
+            if (view == nullptr) {
                 return position;
             }
 
-            if (QScrollBar const* horizontal = view->horizontalScrollBar())
-            {
+            if (QScrollBar const* horizontal = view->horizontalScrollBar()) {
                 position.horizontal_value = horizontal->value();
             }
-            if (QScrollBar const* vertical = view->verticalScrollBar())
-            {
+            if (QScrollBar const* vertical = view->verticalScrollBar()) {
                 position.vertical_value = vertical->value();
             }
             position.valid = true;
@@ -130,26 +112,17 @@ namespace z7::ui::filemanager
         return snapshot;
     }
 
-    void MainWindow::PanelController::restore_scroll_position(
-        ScrollPositionSnapshot const& snapshot) const
-    {
-        auto restore_view_scroll_position =
-            [](QAbstractItemView* view, ViewScrollPosition const& position)
-        {
-            if (!position.valid || view == nullptr)
-            {
+    void MainWindow::PanelController::restore_scroll_position(ScrollPositionSnapshot const& snapshot) const {
+        auto restore_view_scroll_position = [](QAbstractItemView* view, ViewScrollPosition const& position) {
+            if (!position.valid || view == nullptr) {
                 return;
             }
 
-            if (QScrollBar* horizontal = view->horizontalScrollBar())
-            {
-                horizontal->setValue(
-                    bounded_scroll_value(horizontal, position.horizontal_value));
+            if (QScrollBar* horizontal = view->horizontalScrollBar()) {
+                horizontal->setValue(bounded_scroll_value(horizontal, position.horizontal_value));
             }
-            if (QScrollBar* vertical = view->verticalScrollBar())
-            {
-                vertical->setValue(
-                    bounded_scroll_value(vertical, position.vertical_value));
+            if (QScrollBar* vertical = view->verticalScrollBar()) {
+                vertical->setValue(bounded_scroll_value(vertical, position.vertical_value));
             }
         };
 

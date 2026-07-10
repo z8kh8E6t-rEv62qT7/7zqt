@@ -2,49 +2,44 @@
 
 #include <QObject>
 #include <QSharedPointer>
-
 #include <atomic>
 
 namespace z7::ui::gui {
 
-class TaskCancellation final : public QObject {
-  Q_OBJECT
+    class TaskCancellation final : public QObject {
+        Q_OBJECT
 
- public:
-  using Ptr = QSharedPointer<TaskCancellation>;
+    public:
+        using Ptr = QSharedPointer<TaskCancellation>;
 
-  static Ptr create() {
-    return Ptr(new TaskCancellation(), &TaskCancellation::dispose);
-  }
+        static Ptr create() { return Ptr(new TaskCancellation(), &TaskCancellation::dispose); }
 
-  bool is_canceled() const {
-    return canceled_.load(std::memory_order_acquire);
-  }
+        bool is_canceled() const { return canceled_.load(std::memory_order_acquire); }
 
-  void request_cancel() {
-    bool expected = false;
-    if (!canceled_.compare_exchange_strong(expected, true,
-                                           std::memory_order_acq_rel,
-                                           std::memory_order_acquire)) {
-      return;
-    }
-    emit cancel_requested();
-  }
+        void request_cancel() {
+            bool expected = false;
+            if (!canceled_.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                return;
+            }
+            emit cancel_requested();
+        }
 
- signals:
-  void cancel_requested();
+    signals:
+        void cancel_requested();
 
- private:
-  TaskCancellation() = default;
-  static void dispose(TaskCancellation* cancellation) {
-    if (cancellation != nullptr) {
-      cancellation->deleteLater();
-    }
-  }
+    private:
+        TaskCancellation() = default;
 
-  std::atomic_bool canceled_{false};
-};
+        static void dispose(TaskCancellation* cancellation) {
+            if (cancellation != nullptr) {
+                cancellation->deleteLater();
+            }
+        }
 
-using SharedTaskCancellation = TaskCancellation::Ptr;
+        std::atomic_bool canceled_{false};
+    };
 
-}  // namespace z7::ui::gui
+    using SharedTaskCancellation = TaskCancellation::Ptr;
+
+} // namespace z7::ui::gui

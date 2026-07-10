@@ -6,10 +6,10 @@
 
 namespace z7::i18n {
 
-QString text(QStringView key);
-QString text(QStringView key, QStringView language_hint);
-QString format(QStringView key, const QStringList& args);
-QString format(QStringView key, const QStringList& args, QStringView language_hint);
-QString locale_key_from_hint(QString hint = {});
+    QString text(QStringView key);
+    QString text(QStringView key, QStringView language_hint);
+    QString format(QStringView key, QStringList const& args);
+    QString format(QStringView key, QStringList const& args, QStringView language_hint);
+    QString locale_key_from_hint(QString hint = {});
 
-}  // namespace z7::i18n
+} // namespace z7::i18n

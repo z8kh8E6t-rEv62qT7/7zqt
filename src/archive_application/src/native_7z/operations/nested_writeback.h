@@ -7,14 +7,14 @@
 
 namespace z7::app {
 
-class NativeArchiveBackend;
+    class NativeArchiveBackend;
 
-AddResult run_add_with_nested_writeback(NativeArchiveBackend& backend,
-                                        const AddRequest& request,
-                                        const ArchiveBackendHooks& hooks);
+    AddResult run_add_with_nested_writeback(NativeArchiveBackend& backend,
+                                            AddRequest const& request,
+                                            ArchiveBackendHooks const& hooks);
 
-DeleteResult run_delete_with_nested_writeback(NativeArchiveBackend& backend,
-                                              const DeleteRequest& request,
-                                              const ArchiveBackendHooks& hooks);
+    DeleteResult run_delete_with_nested_writeback(NativeArchiveBackend& backend,
+                                                  DeleteRequest const& request,
+                                                  ArchiveBackendHooks const& hooks);
 
-}  // namespace z7::app
+} // namespace z7::app

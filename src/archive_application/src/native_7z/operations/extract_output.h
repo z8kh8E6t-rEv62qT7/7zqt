@@ -7,8 +7,7 @@
 
 namespace z7::app {
 
-std::string resolve_multi_archive_output_dir(const std::string& output_template,
-                                             const std::string& archive_path);
-std::string output_tail_name(std::string output_dir);
+    std::string resolve_multi_archive_output_dir(std::string const& output_template, std::string const& archive_path);
+    std::string output_tail_name(std::string output_dir);
 
-}  // namespace z7::app
+} // namespace z7::app

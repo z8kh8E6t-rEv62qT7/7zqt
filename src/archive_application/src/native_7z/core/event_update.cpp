@@ -4,8 +4,7 @@
 #include "core/internal.h"
 #include "third_party_adapter/callbacks_update_operation.h"
 
-namespace z7::app
-{
+namespace z7::app {
 
     UpdateOperationStatus run_update_archive_shared(CCodecs* codecs,
                                                     CObjectVector<COpenType>& types,
@@ -13,8 +12,7 @@ namespace z7::app
                                                     NWildcard::CCensor& censor,
                                                     CUpdateOptions& options,
                                                     CUpdateErrorInfo& error_info,
-                                                    NativeUpdateOperationCallback& callback)
-    {
+                                                    NativeUpdateOperationCallback& callback) {
         UpdateOperationStatus status;
         status.hresult = UpdateArchive(
             codecs, types, utf8_to_ustring(archive_path), censor, options, error_info, &callback, &callback, true);

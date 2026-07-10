@@ -6,14 +6,13 @@
 
 namespace z7::ui::filemanager {
 
-PathComboBox::PathComboBox(QWidget* parent)
-    : QComboBox(parent) {}
+    PathComboBox::PathComboBox(QWidget* parent) : QComboBox(parent) {}
 
-void PathComboBox::showPopup() {
-  if (before_show_popup) {
-    before_show_popup();
-  }
-  QComboBox::showPopup();
-}
+    void PathComboBox::showPopup() {
+        if (before_show_popup) {
+            before_show_popup();
+        }
+        QComboBox::showPopup();
+    }
 
-}  // namespace z7::ui::filemanager
+} // namespace z7::ui::filemanager

@@ -14,28 +14,24 @@
 
 namespace z7::ui::widgets {
 
-struct StructuredListConfig;
-class StructuredListView;
+    struct StructuredListConfig;
+    class StructuredListView;
 
-class StructuredListDelegate : public QStyledItemDelegate {
-  Q_OBJECT
- public:
-  explicit StructuredListDelegate(StructuredListView* owner_view);
-  ~StructuredListDelegate() override;
+    class StructuredListDelegate : public QStyledItemDelegate {
+        Q_OBJECT
+    public:
+        explicit StructuredListDelegate(StructuredListView* owner_view);
+        ~StructuredListDelegate() override;
 
-  void paint(QPainter* painter,
-             const QStyleOptionViewItem& option,
-             const QModelIndex& index) const override;
-  QSize sizeHint(const QStyleOptionViewItem& option,
-                 const QModelIndex& index) const override;
+        void paint(QPainter* painter, QStyleOptionViewItem const& option, QModelIndex const& index) const override;
+        QSize sizeHint(QStyleOptionViewItem const& option, QModelIndex const& index) const override;
 
-  // Exposed for subclasses / tests.
-  QRect primary_text_rect(const QStyleOptionViewItem& option,
-                          const QModelIndex& index) const;
+        // Exposed for subclasses / tests.
+        QRect primary_text_rect(QStyleOptionViewItem const& option, QModelIndex const& index) const;
 
- private:
-  const StructuredListConfig& config() const;
-  StructuredListView* owner_view_;
-};
+    private:
+        StructuredListConfig const& config() const;
+        StructuredListView* owner_view_;
+    };
 
-}  // namespace z7::ui::widgets
+} // namespace z7::ui::widgets

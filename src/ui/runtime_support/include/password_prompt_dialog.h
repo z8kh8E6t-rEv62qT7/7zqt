@@ -3,9 +3,8 @@
 
 #pragma once
 
-#include <optional>
-
 #include <QString>
+#include <optional>
 
 #include "archive_session.h"
 
@@ -13,8 +12,6 @@ class QWidget;
 
 namespace z7::ui::runtime_support {
 
-std::optional<QString> show_password_prompt_dialog(
-    QWidget* parent,
-    const z7::app::PasswordPrompt& prompt);
+    std::optional<QString> show_password_prompt_dialog(QWidget* parent, z7::app::PasswordPrompt const& prompt);
 
-}  // namespace z7::ui::runtime_support
+} // namespace z7::ui::runtime_support

@@ -24,5 +24,7 @@ struct CProxyDir2;
 class CArc;
 
 namespace NWindows::NCOM {
-class CPropVariant;
-}  // namespace NWindows::NCOM
+
+    class CPropVariant;
+
+} // namespace NWindows::NCOM

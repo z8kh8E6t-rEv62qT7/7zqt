@@ -12,36 +12,36 @@
 
 namespace z7::ui::widgets {
 
-class StructuredListSortFilterProxy : public QSortFilterProxyModel {
-  Q_OBJECT
- public:
-  // Per-index typed value used for column comparison. Source models should
-  // return a QVariant of an appropriate numeric/string/date type for the given
-  // column so ordering is correct independent of display formatting.
-  static constexpr int kSortKeyRole = Qt::UserRole + 1000;
+    class StructuredListSortFilterProxy : public QSortFilterProxyModel {
+        Q_OBJECT
+    public:
+        // Per-index typed value used for column comparison. Source models should
+        // return a QVariant of an appropriate numeric/string/date type for the given
+        // column so ordering is correct independent of display formatting.
+        static constexpr int kSortKeyRole = Qt::UserRole + 1000;
 
-  // Optional small integer role. Rows with a lower group value sort before
-  // rows with a higher group value, regardless of `sortOrder()`. Used to pin
-  // header-like items (e.g. the parent directory link) above everything else.
-  static constexpr int kSortGroupRole = Qt::UserRole + 1001;
+        // Optional small integer role. Rows with a lower group value sort before
+        // rows with a higher group value, regardless of `sortOrder()`. Used to pin
+        // header-like items (e.g. the parent directory link) above everything else.
+        static constexpr int kSortGroupRole = Qt::UserRole + 1001;
 
-  // Optional typed secondary key consulted only when the primary sort key is
-  // equal. The proxy keeps this tie-break direction-independent so stable
-  // source ordering survives both ascending and descending sorts.
-  static constexpr int kSortTieBreakRole = Qt::UserRole + 1002;
+        // Optional typed secondary key consulted only when the primary sort key is
+        // equal. The proxy keeps this tie-break direction-independent so stable
+        // source ordering survives both ascending and descending sorts.
+        static constexpr int kSortTieBreakRole = Qt::UserRole + 1002;
 
-  explicit StructuredListSortFilterProxy(QObject* parent = nullptr);
-  ~StructuredListSortFilterProxy() override;
+        explicit StructuredListSortFilterProxy(QObject* parent = nullptr);
+        ~StructuredListSortFilterProxy() override;
 
-  void set_natural_compare(bool enabled);
-  bool natural_compare() const { return natural_compare_; }
+        void set_natural_compare(bool enabled);
 
- protected:
-  bool lessThan(const QModelIndex& left,
-                const QModelIndex& right) const override;
+        bool natural_compare() const { return natural_compare_; }
 
- private:
-  bool natural_compare_ = true;
-};
+    protected:
+        bool lessThan(QModelIndex const& left, QModelIndex const& right) const override;
 
-}  // namespace z7::ui::widgets
+    private:
+        bool natural_compare_ = true;
+    };
+
+} // namespace z7::ui::widgets

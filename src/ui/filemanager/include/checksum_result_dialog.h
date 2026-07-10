@@ -9,23 +9,23 @@ class QTableWidget;
 
 namespace z7::ui::filemanager {
 
-class ChecksumResultDialog : public QDialog {
-  Q_OBJECT
+    class ChecksumResultDialog : public QDialog {
+        Q_OBJECT
 
- public:
-  explicit ChecksumResultDialog(QWidget* parent = nullptr);
-  void set_rows(const QVector<QPair<QString, QString>>& rows);
+    public:
+        explicit ChecksumResultDialog(QWidget* parent = nullptr);
+        void set_rows(QVector<QPair<QString, QString>> const& rows);
 
- protected:
-  void closeEvent(QCloseEvent* event) override;
+    protected:
+        void closeEvent(QCloseEvent* event) override;
 
- private:
-  void load_table_column_widths();
-  void save_table_column_widths() const;
+    private:
+        void load_table_column_widths();
+        void save_table_column_widths() const;
 
-  QTableWidget* table_ = nullptr;
-  bool has_persisted_column_widths_ = false;
-  bool auto_sized_once_ = false;
-};
+        QTableWidget* table_ = nullptr;
+        bool has_persisted_column_widths_ = false;
+        bool auto_sized_once_ = false;
+    };
 
-}  // namespace z7::ui::filemanager
+} // namespace z7::ui::filemanager

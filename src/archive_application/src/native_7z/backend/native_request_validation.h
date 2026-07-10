@@ -9,38 +9,32 @@
 
 namespace z7::app {
 
-template <typename TRequest>
-std::optional<OperationResult> validate_request(const TRequest&) {
-  return std::nullopt;
-}
+    template <typename TRequest>
+    std::optional<OperationResult> validate_request(TRequest const&) {
+        return std::nullopt;
+    }
 
-std::optional<OperationResult> validate_request(const AddRequest& request);
-std::optional<OperationResult> validate_request(const ExtractRequest& request);
-std::optional<OperationResult> validate_request(const TestRequest& request);
-std::optional<OperationResult> validate_request(const BenchmarkRequest& request);
-std::optional<OperationResult> validate_request(const SplitRequest& request);
-std::optional<OperationResult> validate_request(const CombineRequest& request);
-std::optional<OperationResult> validate_request(const HashRequest& request);
-std::optional<OperationResult> validate_request(const DeleteRequest& request);
-std::optional<OperationResult> validate_request(const OpenArchiveRequest& request);
-std::optional<OperationResult> validate_request(
-    const OpenArchiveFromPathRequest& request);
-std::optional<OperationResult> validate_request(
-    const OpenArchiveFromParentRequest& request);
-std::optional<OperationResult> validate_request(
-    const CloseArchiveSessionRequest& request);
-std::optional<OperationResult> validate_request(const ListRequest& request);
-std::optional<OperationResult> validate_request(
-    const ArchivePropertiesRequest& request);
-std::optional<OperationResult> validate_request(const GetEntryInfoRequest& request);
-std::optional<OperationResult> validate_request(const NavigateRequest& request);
-std::optional<OperationResult> validate_request(const CopyRequest& request);
-std::optional<OperationResult> validate_request(const MoveRequest& request);
-std::optional<OperationResult> validate_request(const RenameRequest& request);
-std::optional<OperationResult> validate_request(const CreateRequest& request);
-std::optional<OperationResult> validate_request(
-    const ArchiveCommentRequest& request);
-std::optional<OperationResult> validate_request(
-    const FilesystemCommentRequest& request);
+    std::optional<OperationResult> validate_request(AddRequest const& request);
+    std::optional<OperationResult> validate_request(ExtractRequest const& request);
+    std::optional<OperationResult> validate_request(TestRequest const& request);
+    std::optional<OperationResult> validate_request(BenchmarkRequest const& request);
+    std::optional<OperationResult> validate_request(SplitRequest const& request);
+    std::optional<OperationResult> validate_request(CombineRequest const& request);
+    std::optional<OperationResult> validate_request(HashRequest const& request);
+    std::optional<OperationResult> validate_request(DeleteRequest const& request);
+    std::optional<OperationResult> validate_request(OpenArchiveRequest const& request);
+    std::optional<OperationResult> validate_request(OpenArchiveFromPathRequest const& request);
+    std::optional<OperationResult> validate_request(OpenArchiveFromParentRequest const& request);
+    std::optional<OperationResult> validate_request(CloseArchiveSessionRequest const& request);
+    std::optional<OperationResult> validate_request(ListRequest const& request);
+    std::optional<OperationResult> validate_request(ArchivePropertiesRequest const& request);
+    std::optional<OperationResult> validate_request(GetEntryInfoRequest const& request);
+    std::optional<OperationResult> validate_request(NavigateRequest const& request);
+    std::optional<OperationResult> validate_request(CopyRequest const& request);
+    std::optional<OperationResult> validate_request(MoveRequest const& request);
+    std::optional<OperationResult> validate_request(RenameRequest const& request);
+    std::optional<OperationResult> validate_request(CreateRequest const& request);
+    std::optional<OperationResult> validate_request(ArchiveCommentRequest const& request);
+    std::optional<OperationResult> validate_request(FilesystemCommentRequest const& request);
 
-}  // namespace z7::app
+} // namespace z7::app

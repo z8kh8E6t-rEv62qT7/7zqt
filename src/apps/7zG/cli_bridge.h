@@ -7,24 +7,23 @@
 
 namespace z7::apps::gui {
 
-struct CliValidationResult {
-  bool ok = false;
-  bool no_command = false;
-  bool suppress_gui_error = false;
-  QString error_message;
-};
+    struct CliValidationResult {
+        bool ok = false;
+        bool no_command = false;
+        bool suppress_gui_error = false;
+        QString error_message;
+    };
 
-struct CliWorkerResult {
-  int exit_code = 2;
-  QString summary;
-  bool error_dialog_shown = false;
-};
+    struct CliWorkerResult {
+        int exit_code = 2;
+        QString summary;
+        bool error_dialog_shown = false;
+    };
 
-CliValidationResult validate_cli_arguments(const QStringList& argv);
+    CliValidationResult validate_cli_arguments(QStringList const& argv);
 
-int run_cli_launcher(const QStringList& argv);
+    int run_cli_launcher(QStringList const& argv);
 
-CliWorkerResult run_cli_worker_payload(
-    const z7::task_ipc_runtime::TaskIpcCliPayload& payload);
+    CliWorkerResult run_cli_worker_payload(z7::task_ipc_runtime::TaskIpcCliPayload const& payload);
 
-}  // namespace z7::apps::gui
+} // namespace z7::apps::gui

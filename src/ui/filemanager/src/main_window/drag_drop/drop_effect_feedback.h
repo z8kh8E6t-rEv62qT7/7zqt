@@ -10,10 +10,10 @@ class QDropEvent;
 
 namespace z7::ui::filemanager {
 
-QByteArray encode_windows_drop_effect_dword(quint32 value);
-void apply_windows_drop_effect_feedback(const QDropEvent* event,
-                                        bool operation_succeeded,
-                                        Qt::DropAction reported_action,
-                                        bool trusted_internal_source);
+    QByteArray encode_windows_drop_effect_dword(quint32 value);
+    void apply_windows_drop_effect_feedback(QDropEvent const* event,
+                                            bool operation_succeeded,
+                                            Qt::DropAction reported_action,
+                                            bool trusted_internal_source);
 
-}  // namespace z7::ui::filemanager
+} // namespace z7::ui::filemanager

@@ -5,19 +5,18 @@
 
 namespace z7::macos_integration::launch_services {
 
-struct FileManagerInstanceLaunchRequest {
-  QString program_path;
-  QStringList arguments;
-};
+    struct FileManagerInstanceLaunchRequest {
+        QString program_path;
+        QStringList arguments;
+    };
 
-enum class FileManagerInstanceLaunchResult {
-  kLaunched,
-  kFallbackToDetached,
-  kFailed,
-};
+    enum class FileManagerInstanceLaunchResult {
+        kLaunched,
+        kFallbackToDetached,
+        kFailed,
+    };
 
-FileManagerInstanceLaunchResult launch_new_filemanager_instance(
-    const FileManagerInstanceLaunchRequest& request,
-    QString* error_message = nullptr);
+    FileManagerInstanceLaunchResult launch_new_filemanager_instance(FileManagerInstanceLaunchRequest const& request,
+                                                                    QString* error_message = nullptr);
 
-}  // namespace z7::macos_integration::launch_services
+} // namespace z7::macos_integration::launch_services

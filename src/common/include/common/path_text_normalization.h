@@ -4,13 +4,13 @@
 
 namespace z7::common {
 
-inline std::string normalize_native_separators_copy(std::string value) {
-  for (char& ch : value) {
-    if (ch == '\\') {
-      ch = '/';
+    inline std::string normalize_native_separators_copy(std::string value) {
+        for (char& ch : value) {
+            if (ch == '\\') {
+                ch = '/';
+            }
+        }
+        return value;
     }
-  }
-  return value;
-}
 
-}  // namespace z7::common
+} // namespace z7::common

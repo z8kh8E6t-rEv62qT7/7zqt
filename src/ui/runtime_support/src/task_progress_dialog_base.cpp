@@ -1,39 +1,33 @@
 #include "task_progress_dialog_base.h"
 
+#include <QAbstractItemView>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
-#include <QAbstractItemView>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QHeaderView>
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include "official_lang_catalog.h"
 
-namespace z7::ui::runtime_support
-{
+namespace z7::ui::runtime_support {
 
-    namespace
-    {
+    namespace {
 
-        void set_value_alignment(QLabel* label)
-        {
-            if (label == nullptr)
-            {
+        void set_value_alignment(QLabel* label) {
+            if (label == nullptr) {
                 return;
             }
             label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         }
 
-        void set_widget_object_name(QWidget* widget, char const* object_name)
-        {
+        void set_widget_object_name(QWidget* widget, char const* object_name) {
 #ifdef Z7_TESTING
-            if (widget == nullptr || object_name == nullptr)
-            {
+            if (widget == nullptr || object_name == nullptr) {
                 return;
             }
             widget->setObjectName(QString::fromLatin1(object_name));
@@ -46,14 +40,12 @@ namespace z7::ui::runtime_support
     } // namespace
 
     TaskProgressDialogBase::TaskProgressDialogBase(TaskProgressDialogBehavior const& behavior, QWidget* parent) :
-        QDialog(parent), behavior_(behavior)
-    {
+        QDialog(parent), behavior_(behavior) {
         set_widget_object_name(this, behavior_.dialog_object_name);
         setWindowTitle(strip_mnemonic(L(3304)));
         resize(behavior_.initial_width, behavior_.initial_height);
         setModal(behavior_.modal);
-        if (behavior_.delete_on_close)
-        {
+        if (behavior_.delete_on_close) {
             setAttribute(Qt::WA_DeleteOnClose, true);
         }
 
@@ -184,33 +176,21 @@ namespace z7::ui::runtime_support
         close_button_->setEnabled(false);
         buttons_layout->addWidget(close_button_);
 
-        connect(background_button_,
-                &QPushButton::clicked,
-                this,
-                [this]()
-                {
-                    set_backgrounded(!backgrounded_);
-                    emit background_requested(backgrounded_);
-                });
-        connect(pause_button_,
-                &QPushButton::clicked,
-                this,
-                [this]()
-                {
-                    if (!pause_available_)
-                    {
-                        return;
-                    }
-                    set_paused(!paused_);
-                    if (paused_)
-                    {
-                        emit pause_requested();
-                    }
-                    else
-                    {
-                        emit resume_requested();
-                    }
-                });
+        connect(background_button_, &QPushButton::clicked, this, [this]() {
+            set_backgrounded(!backgrounded_);
+            emit background_requested(backgrounded_);
+        });
+        connect(pause_button_, &QPushButton::clicked, this, [this]() {
+            if (!pause_available_) {
+                return;
+            }
+            set_paused(!paused_);
+            if (paused_) {
+                emit pause_requested();
+            } else {
+                emit resume_requested();
+            }
+        });
         connect(cancel_button_, &QPushButton::clicked, this, &TaskProgressDialogBase::on_cancel_clicked);
         connect(close_button_, &QPushButton::clicked, this, &TaskProgressDialogBase::accept);
 
@@ -221,11 +201,9 @@ namespace z7::ui::runtime_support
         connect(refresh_timer_, &QTimer::timeout, this, &TaskProgressDialogBase::refresh_metrics);
     }
 
-    QString TaskProgressDialogBase::label_text_with_optional_colon(QString const& text) const
-    {
+    QString TaskProgressDialogBase::label_text_with_optional_colon(QString const& text) const {
         QString const stripped = strip_mnemonic(text);
-        if (!behavior_.normalize_metric_label_colons)
-        {
+        if (!behavior_.normalize_metric_label_colons) {
             return stripped + QLatin1Char(':');
         }
         return stripped.endsWith(QLatin1Char(':')) ? stripped : stripped + QLatin1Char(':');

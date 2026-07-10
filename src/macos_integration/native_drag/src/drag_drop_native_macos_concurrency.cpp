@@ -7,8 +7,8 @@
 
 namespace z7::macos_integration::native_drag::detail {
 
-PromiseWriteConcurrencyPolicy PromiseWriteConcurrencyPolicy::from_defaults() {
-  return PromiseWriteConcurrencyPolicy{};
-}
+    PromiseWriteConcurrencyPolicy PromiseWriteConcurrencyPolicy::from_defaults() {
+        return PromiseWriteConcurrencyPolicy{};
+    }
 
-}  // namespace z7::macos_integration::native_drag::detail
+} // namespace z7::macos_integration::native_drag::detail
