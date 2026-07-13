@@ -108,9 +108,14 @@ namespace z7::app {
                                              std::atomic<bool> const& cancel_requested,
                                              UpdateOperationStatus const& status,
                                              std::string success_summary = "Everything is Ok") {
+        bool const successful_completion = !cancel_requested.load()
+                                        && status.hresult == S_OK
+                                        && status.error_count == 0
+                                        && !status.password_requested
+                                        && !status.wrong_password;
         emit_progress_event(callbacks,
                             OperationStage::kRunning,
-                            100,
+                            successful_completion ? 100 : -1,
                             status.totals_known,
                             status.total_bytes,
                             status.completed_bytes,
@@ -175,9 +180,17 @@ namespace z7::app {
         fs::path output_path;
         fs::path destination_path;
         fs::path backup_path;
+        std::shared_ptr<FilesystemTransaction> transaction;
         bool had_original = false;
         bool preserve_backup_on_commit = false;
         bool is_directory = false;
+        bool remove_only_if_empty = false;
+        FilesystemObjectIdentity output_identity;
+        FilesystemObjectIdentity backup_identity;
+        bool restore_directory_metadata = false;
+        fs::perms original_permissions = fs::perms::unknown;
+        fs::file_time_type original_mtime{};
+        bool original_mtime_defined = false;
     };
 
     struct ExtractInvocationStatus {
@@ -247,6 +260,14 @@ namespace z7::app {
     struct HasFinishDeferredLinks<CallbackT, std::void_t<decltype(std::declval<CallbackT*>()->finish_deferred_links())>>
         : std::true_type {};
 
+    template <typename CallbackT, typename = void>
+    struct HasDiscardPendingOutputs : std::false_type {};
+
+    template <typename CallbackT>
+    struct HasDiscardPendingOutputs<CallbackT,
+                                    std::void_t<decltype(std::declval<CallbackT*>()->discard_pending_outputs())>>
+        : std::true_type {};
+
     template <typename CallbackT>
     ExtractInvocationStatus invoke_archive_extract_with_callback(
         IInArchive* archive, UInt32 const* indices, UInt32 num_indices, bool test_mode, CallbackT* callback) {
@@ -255,6 +276,10 @@ namespace z7::app {
         if (status.hresult == S_OK) {
             if constexpr (HasFinishDeferredLinks<CallbackT>::value) {
                 callback->finish_deferred_links();
+            }
+        } else {
+            if constexpr (HasDiscardPendingOutputs<CallbackT>::value) {
+                callback->discard_pending_outputs();
             }
         }
         status.totals_known = callback->totals_known();
@@ -298,9 +323,15 @@ namespace z7::app {
                                               OnPartial&& on_partial,
                                               OnSuccess&& on_success,
                                               std::string password_error_summary = "Password required or incorrect") {
+        bool const successful_completion = !cancel_requested.load()
+                                        && status.hresult == S_OK
+                                        && status.error_count == 0
+                                        && !status.budget_triggered
+                                        && !status.password_requested
+                                        && !status.wrong_password;
         emit_progress_event(hooks,
                             OperationStage::kRunning,
-                            100,
+                            successful_completion ? 100 : -1,
                             status.totals_known,
                             status.total_bytes,
                             status.completed_bytes,

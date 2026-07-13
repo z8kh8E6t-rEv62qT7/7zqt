@@ -143,6 +143,65 @@ namespace z7::app {
             return z7::common::canonical_archive_type_token_copy(format) == "7z";
         }
 
+        bool method_uses_ppmd_properties(std::string const& method) {
+            std::string const normalized =
+                z7::common::to_lower_ascii_copy(z7::common::trim_ascii_space_copy(method));
+            return normalized == "ppmd" || normalized == "ppmdzip";
+        }
+
+        std::string canonical_encryption_method(std::string const& raw) {
+            std::string out;
+            for (char const c : z7::common::to_lower_ascii_copy(z7::common::trim_ascii_space_copy(raw))) {
+                if (c != '-' && c != '_' && c != ' ') {
+                    out.push_back(c);
+                }
+            }
+            return out;
+        }
+
+        bool append_encryption_method(AddRequest const& request,
+                                      bool is_7z,
+                                      CObjectVector<CProperty>& properties,
+                                      std::string* error_summary) {
+            if (request.encryption_method.empty()) {
+                return true;
+            }
+            std::string const method = canonical_encryption_method(request.encryption_method);
+            if (is_7z) {
+                if (method == "aes256" || method == "7zaes") {
+                    return true;
+                }
+                if (error_summary != nullptr) {
+                    *error_summary = "Unsupported 7z encryption method: " + request.encryption_method;
+                }
+                return false;
+            }
+            if (z7::common::canonical_archive_type_token_copy(request.format) == "zip") {
+                if (method != "zipcrypto" && method != "aes128" && method != "aes192" && method != "aes256") {
+                    if (error_summary != nullptr) {
+                        *error_summary = "Unsupported ZIP encryption method: " + request.encryption_method;
+                    }
+                    return false;
+                }
+            }
+            add_method_property(properties, "em", z7::common::trim_ascii_space_copy(request.encryption_method));
+            return true;
+        }
+
+        void set_bool_pair(CBoolPair* pair, bool defined, bool value) {
+            pair->Def = defined;
+            pair->Val = value;
+        }
+
+        void append_handler_bool(CObjectVector<CProperty>& properties,
+                                 std::string const& name,
+                                 bool defined,
+                                 bool value) {
+            if (defined) {
+                add_method_property(properties, name + (value ? "+" : "-"));
+            }
+        }
+
     } // namespace
 
     bool apply_add_runtime_options(AddRequest const& request, CUpdateOptions& options, std::string* error_summary) {
@@ -154,6 +213,12 @@ namespace z7::app {
         }
         options.OpenShareForWrite = request.share_for_write;
         options.DeleteAfterCompressing = request.delete_after_compressing;
+        options.PreserveATime = request.preserve_access_time;
+        options.SetArcMTime = request.set_archive_mtime;
+        set_bool_pair(&options.SymLinks, request.symbolic_links_defined, request.symbolic_links);
+        set_bool_pair(&options.HardLinks, request.hard_links_defined, request.hard_links);
+        set_bool_pair(&options.AltStreams, request.alternate_streams_defined, request.alternate_streams);
+        set_bool_pair(&options.NtSecurity, request.file_security_defined, request.file_security);
         options.SfxMode = request.create_sfx;
         if (options.SfxMode) {
             std::string const format = z7::common::canonical_archive_type_token_copy(request.format);
@@ -200,6 +265,7 @@ namespace z7::app {
         }
 
         bool const is_7z = add_format_supports_encrypted_headers(request.format);
+        bool const is_ppmd = method_uses_ppmd_properties(request.method_value);
         CObjectVector<CProperty>& properties = options.MethodMode.Properties;
 
         if (!request.compression_level.empty()) {
@@ -225,7 +291,9 @@ namespace z7::app {
             return false;
         }
         if (!dictionary_size.empty()) {
-            add_method_property(properties, is_7z ? "0d" : "d", dictionary_size);
+            add_method_property(properties,
+                                is_ppmd ? (is_7z ? "0mem" : "mem") : (is_7z ? "0d" : "d"),
+                                dictionary_size);
         }
 
         std::string word_size;
@@ -236,7 +304,9 @@ namespace z7::app {
             return false;
         }
         if (!word_size.empty()) {
-            add_method_property(properties, is_7z ? "0fb" : "fb", word_size);
+            add_method_property(properties,
+                                is_ppmd ? (is_7z ? "0o" : "o") : (is_7z ? "0fb" : "fb"),
+                                word_size);
         }
 
         std::string solid_block_size;
@@ -261,9 +331,13 @@ namespace z7::app {
             add_method_property(properties, "mt", thread_count);
         }
 
+        append_handler_bool(properties, "tm", request.write_mtime_defined, request.write_mtime);
+        append_handler_bool(properties, "tc", request.write_ctime_defined, request.write_ctime);
+        append_handler_bool(properties, "ta", request.write_atime_defined, request.write_atime);
+
         if (!request.password.empty()) {
-            if (!request.encryption_method.empty()) {
-                add_method_property(properties, "em", request.encryption_method);
+            if (!append_encryption_method(request, is_7z, properties, error_summary)) {
+                return false;
             }
             if (request.encrypt_headers_defined) {
                 if (is_7z) {

@@ -5,7 +5,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
     quint32 const kTaskIpcMagic = 0x5A374252U; // "Z7BR"
     quint16 const kTaskIpcVersion = 5;
     quint32 const kTaskIpcPayloadMagic = 0x5A374250U; // "Z7BP"
-    quint16 const kTaskIpcPayloadVersion = 8;
+    quint16 const kTaskIpcPayloadVersion = 9;
     quint32 const kTaskIpcRequestPoolMagic = 0x5A375250U; // "Z7RP"
     quint16 const kTaskIpcRequestPoolVersion = 1;
     int const kTaskIpcSlotCount = 16;

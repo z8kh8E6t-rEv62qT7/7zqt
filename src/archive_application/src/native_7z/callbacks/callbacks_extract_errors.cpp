@@ -3,6 +3,7 @@
 
 #include "core/internal.h"
 #include "third_party_adapter/callbacks_extract_run.h"
+#include "third_party_adapter/callbacks_extract_stream.h"
 #include "third_party_adapter/third_party_adapter.h"
 
 namespace z7::app {
@@ -23,7 +24,7 @@ namespace z7::app {
     }
 
     HRESULT NativeExtractCallback::check_canceled() const {
-        if (budget_triggered_.load(std::memory_order_acquire)) {
+        if (budget_tracker_ != nullptr && budget_tracker_->triggered()) {
             return E_ABORT;
         }
         return should_abort() ? E_ABORT : S_OK;

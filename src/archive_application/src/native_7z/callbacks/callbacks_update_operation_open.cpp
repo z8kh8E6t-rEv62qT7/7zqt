@@ -110,7 +110,7 @@ namespace z7::app {
     }
 
 #ifndef Z7_NO_CRYPTO
-    HRESULT NativeUpdateOperationCallback::provide_password(BSTR* password, bool force_prompt) {
+    HRESULT NativeUpdateOperationCallback::provide_password(BSTR* password, bool password_required) {
         if (password == nullptr) {
             return E_INVALIDARG;
         }
@@ -118,20 +118,22 @@ namespace z7::app {
 
         std::string password_value;
         std::string archive_path;
+        bool password_defined = false;
         bool wrong_password = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             password_value = password_;
             archive_path = archive_path_;
+            password_defined = password_defined_;
             wrong_password = wrong_password_;
         }
 
-        if (wrong_password || force_prompt) {
+        if (wrong_password || (password_required && !password_defined)) {
             if (!hooks_.ask_password) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 password_requested_ = true;
                 wrong_password_ = wrong_password;
-                return S_OK;
+                return E_ABORT;
             }
 
             PasswordPrompt prompt;
@@ -139,12 +141,17 @@ namespace z7::app {
             prompt.reason_kind =
                 wrong_password ? PasswordPromptReason::kWrongPassword : PasswordPromptReason::kPasswordRequired;
             prompt.reason = wrong_password ? "wrong_password" : "password_required";
-            PasswordReply const reply = hooks_.ask_password(prompt);
+            PasswordReply reply;
+            try {
+                reply = hooks_.ask_password(prompt);
+            } catch (...) {
+                return E_FAIL;
+            }
             if (reply.kind != PasswordReplyKind::kProvide) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 password_requested_ = true;
                 wrong_password_ = wrong_password;
-                return S_OK;
+                return E_ABORT;
             }
 
             password_value = reply.password;
@@ -152,16 +159,13 @@ namespace z7::app {
                 std::lock_guard<std::mutex> lock(mutex_);
                 password_ = password_value;
                 password_defined_ = true;
+                password_requested_ = false;
                 wrong_password_ = false;
             }
         }
 
         UString const pass = utf8_to_ustring(password_value);
         const HRESULT pass_res = StringToBstr(pass, password);
-        if (pass_res != S_OK) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            password_requested_ = true;
-        }
         return pass_res;
     }
 

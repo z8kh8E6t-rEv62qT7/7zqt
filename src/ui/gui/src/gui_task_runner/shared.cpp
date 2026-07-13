@@ -462,7 +462,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         }
 
         ArchiveExportTaskOptions options;
-        QString const archive_path = z7::ui::archive_support::from_native_string(spec.root_archive_path).trimmed();
+        QString const archive_path = z7::ui::archive_support::from_native_string(spec.root_archive_path);
         if (archive_path.isEmpty()) {
             if (error_message != nullptr) {
                 *error_message = QStringLiteral("Archive export task root archive path is empty.");
@@ -480,7 +480,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         options.archive_type_hint =
             QString::fromStdString(z7::common::normalize_archive_type_token_copy(spec.root_archive_type));
 
-        QString output_dir = z7::ui::archive_support::from_native_string(spec.output_dir).trimmed();
+        QString output_dir = z7::ui::archive_support::from_native_string(spec.output_dir);
         if (output_dir.isEmpty()) {
             if (error_message != nullptr) {
                 *error_message = QStringLiteral("Archive export task output directory is empty.");
@@ -495,7 +495,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
 
         QStringList entry_paths;
         for (std::string const& value : spec.archive_entry_paths) {
-            entry_paths << z7::ui::archive_support::from_native_string(value).trimmed();
+            entry_paths << z7::ui::archive_support::from_utf8_string(value);
         }
         for (QString const& raw_entry : entry_paths) {
             QString const normalized = normalize_virtual_entry_path(raw_entry);
@@ -516,7 +516,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         }
 
         for (std::string const& value : spec.nested_archive_entries) {
-            QString const raw_nested_entry = z7::ui::archive_support::from_native_string(value).trimmed();
+            QString const raw_nested_entry = z7::ui::archive_support::from_utf8_string(value);
             QString const normalized = normalize_virtual_entry_path(raw_nested_entry);
             if (normalized.isEmpty() || QDir::isAbsolutePath(QDir::fromNativeSeparators(raw_nested_entry))) {
                 if (error_message != nullptr) {
@@ -536,15 +536,15 @@ namespace z7::ui::gui::gui_task_runner_shared {
             && z7::ui::runtime_support::is_platform_supported(z7::ui::runtime_support::PlatformSupport::kWindowsOnly);
         options.zone_id_mode =
             parse_extract_zone_id_mode(z7::ui::archive_support::from_native_string(spec.zone_id_mode));
-        options.password = z7::ui::archive_support::from_native_string(spec.password).trimmed();
+        options.password = z7::ui::archive_support::from_utf8_string(spec.password);
 
         options.path_remaps.reserve(spec.path_remaps.size());
         for (z7::ui::gui::ExtractPathRemap const& remap : spec.path_remaps) {
             z7::app::ExtractPathRemap out_remap;
             out_remap.match_kind = to_archive_extract_remap_match_kind(remap.match_kind);
-            QString const source_path = z7::ui::archive_support::from_native_string(remap.source_path).trimmed();
+            QString const source_path = z7::ui::archive_support::from_utf8_string(remap.source_path);
             QString const destination_path =
-                z7::ui::archive_support::from_native_string(remap.destination_path).trimmed();
+                z7::ui::archive_support::from_native_string(remap.destination_path);
             if (destination_path.isEmpty()) {
                 if (error_message != nullptr) {
                     *error_message = QStringLiteral("Archive export task path remap destination is empty.");
@@ -579,7 +579,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         }
 
         ArchiveHashTaskOptions options;
-        QString const archive_path = z7::ui::archive_support::from_native_string(spec.archive_path).trimmed();
+        QString const archive_path = z7::ui::archive_support::from_native_string(spec.archive_path);
         if (archive_path.isEmpty()) {
             if (error_message != nullptr) {
                 *error_message = QStringLiteral("Archive hash task archive path is empty.");
@@ -605,7 +605,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
 
         QStringList entry_paths;
         for (std::string const& value : spec.archive_entry_paths) {
-            entry_paths << z7::ui::archive_support::from_native_string(value).trimmed();
+            entry_paths << z7::ui::archive_support::from_utf8_string(value);
         }
         for (QString const& raw_entry : entry_paths) {
             QString const normalized = normalize_virtual_entry_path(raw_entry);
@@ -626,7 +626,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         }
 
         for (std::string const& value : spec.nested_archive_entries) {
-            QString const raw_nested_entry = z7::ui::archive_support::from_native_string(value).trimmed();
+            QString const raw_nested_entry = z7::ui::archive_support::from_utf8_string(value);
             QString const normalized = normalize_virtual_entry_path(raw_nested_entry);
             if (normalized.isEmpty() || QDir::isAbsolutePath(QDir::fromNativeSeparators(raw_nested_entry))) {
                 if (error_message != nullptr) {
@@ -655,7 +655,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         }
 
         ArchiveTestTaskOptions options;
-        QString const archive_path = z7::ui::archive_support::from_native_string(spec.archive_path).trimmed();
+        QString const archive_path = z7::ui::archive_support::from_native_string(spec.archive_path);
         if (archive_path.isEmpty()) {
             if (error_message != nullptr) {
                 *error_message = QStringLiteral("Archive test task archive path is empty.");
@@ -675,7 +675,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
             QString::fromStdString(z7::common::normalize_archive_type_token_copy(spec.archive_type));
         QStringList entry_paths;
         for (std::string const& value : spec.archive_entry_paths) {
-            entry_paths << z7::ui::archive_support::from_native_string(value).trimmed();
+            entry_paths << z7::ui::archive_support::from_utf8_string(value);
         }
         for (QString const& raw_entry : entry_paths) {
             QString const normalized = normalize_virtual_entry_path(raw_entry);
@@ -690,7 +690,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         options.entry_paths.removeDuplicates();
 
         for (std::string const& value : spec.nested_archive_entries) {
-            QString const raw_nested_entry = z7::ui::archive_support::from_native_string(value).trimmed();
+            QString const raw_nested_entry = z7::ui::archive_support::from_utf8_string(value);
             QString const normalized = normalize_virtual_entry_path(raw_nested_entry);
             if (normalized.isEmpty() || QDir::isAbsolutePath(QDir::fromNativeSeparators(raw_nested_entry))) {
                 if (error_message != nullptr) {

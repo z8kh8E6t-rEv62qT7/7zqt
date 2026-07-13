@@ -372,7 +372,7 @@ namespace z7::ui::gui {
             eliminate_dup_checkbox_->setChecked(true);
         }
         if (!initial.password.empty()) {
-            password_edit_->setText(z7::ui::archive_support::from_native_string(initial.password));
+            password_edit_->setText(z7::ui::archive_support::from_utf8_string(initial.password));
         }
         if (initial.show_password) {
             show_password_checkbox_->setChecked(true);
@@ -395,7 +395,7 @@ namespace z7::ui::gui {
         out.overwrite_switch = z7::ui::archive_support::to_native_string(overwrite_combo_->currentData().toString());
         out.path_mode = z7::ui::archive_support::to_native_string(path_mode_combo_->currentData().toString());
         out.eliminate_root_duplication = eliminate_dup_checkbox_->isChecked();
-        out.password = z7::ui::archive_support::to_native_string(password_edit_->text());
+        out.password = z7::ui::archive_support::to_utf8_string(password_edit_->text());
         out.show_password = show_password_checkbox_->isChecked();
         out.restore_file_security = restore_security_supported() && restore_security_checkbox_->isChecked();
         out.split_dest_enabled = split_dest_checkbox_->isChecked();

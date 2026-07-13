@@ -20,11 +20,10 @@ namespace z7::ui::filemanager {
             QStringList out;
             QSet<QString> seen;
             for (QString const& path : paths) {
-                QString const trimmed = path.trimmed();
-                if (trimmed.isEmpty()) {
+                if (path.isEmpty()) {
                     continue;
                 }
-                QString const normalized = QDir::cleanPath(QDir::fromNativeSeparators(trimmed));
+                QString const normalized = QDir::cleanPath(QDir::fromNativeSeparators(path));
                 if (normalized.isEmpty()) {
                     continue;
                 }
@@ -194,7 +193,7 @@ namespace z7::ui::filemanager {
 
     bool
     MainWindow::payload_represents_archive_scoped_refresh(z7::task_ipc_runtime::TaskIpcPayload const& payload) const {
-        QString const archive_path = payload.open.has_value() ? payload.open->archive_path.trimmed() : QString();
+        QString const archive_path = payload.open.has_value() ? payload.open->archive_path : QString();
         return !archive_path.isEmpty() && command_supports_archive_scoped_refresh(payload.command);
     }
 
@@ -252,7 +251,7 @@ namespace z7::ui::filemanager {
             payload.hash->input_paths = unique_non_empty_paths(payload.hash->input_paths);
         }
         if (payload.archive_export.has_value()) {
-            QString const root_archive_path = payload.archive_export->root_archive_path.trimmed();
+            QString const root_archive_path = payload.archive_export->root_archive_path;
             payload.archive_export->root_archive_path =
                 root_archive_path.isEmpty() ? QString() : QFileInfo(root_archive_path).absoluteFilePath();
             payload.archive_export->nested_archive_entries =
@@ -265,7 +264,7 @@ namespace z7::ui::filemanager {
              || payload.command == z7::task_ipc_runtime::TaskIpcCommandKind::kTest
              || payload.command == z7::task_ipc_runtime::TaskIpcCommandKind::kExtract)
             && payload.open.has_value()
-            && !payload.open->archive_path.trimmed().isEmpty();
+            && !payload.open->archive_path.isEmpty();
 
         QString const worker_program = locate_7zg_program();
         if (worker_program.isEmpty()) {
@@ -278,7 +277,7 @@ namespace z7::ui::filemanager {
 
         if (payload.command == z7::task_ipc_runtime::TaskIpcCommandKind::kAdd
             && (!payload.add.has_value()
-                || payload.add->archive_path.trimmed().isEmpty()
+                || payload.add->archive_path.isEmpty()
                 || payload.add->input_paths.isEmpty())) {
             QMessageBox::warning(
                 this, caption, z7::ui::runtime_support::J(QStringLiteral("ui.navigation.task_ipc.no_input_paths")));
@@ -316,7 +315,7 @@ namespace z7::ui::filemanager {
         }
         if (payload.command == z7::task_ipc_runtime::TaskIpcCommandKind::kArchiveExport
             && (!payload.archive_export.has_value()
-                || payload.archive_export->root_archive_path.trimmed().isEmpty()
+                || payload.archive_export->root_archive_path.isEmpty()
                 || payload.archive_export->output_dir.trimmed().isEmpty()
                 || payload.archive_export->archive_entry_paths.isEmpty())) {
             QMessageBox::warning(
@@ -331,7 +330,7 @@ namespace z7::ui::filemanager {
 
         QString working_dir = current_directory();
         if (archive_aware_hash_test_or_extract) {
-            QString const archive_path = payload.open->archive_path.trimmed();
+            QString const archive_path = payload.open->archive_path;
             QString const archive_parent = QFileInfo(archive_path).absolutePath();
             if (!archive_parent.trimmed().isEmpty()) {
                 working_dir = archive_parent;
@@ -339,7 +338,7 @@ namespace z7::ui::filemanager {
         } else if (payload.command == z7::task_ipc_runtime::TaskIpcCommandKind::kArchiveExport
                    && payload.archive_export.has_value()) {
             QString const archive_parent =
-                QFileInfo(payload.archive_export->root_archive_path.trimmed()).absolutePath();
+                QFileInfo(payload.archive_export->root_archive_path).absolutePath();
             if (!archive_parent.trimmed().isEmpty()) {
                 working_dir = archive_parent;
             }

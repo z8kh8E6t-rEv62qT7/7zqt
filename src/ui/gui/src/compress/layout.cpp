@@ -75,7 +75,7 @@ namespace z7::ui::gui {
             if (combo == nullptr) {
                 return QString();
             }
-            return combo->currentText().trimmed();
+            return combo->currentText();
         }
 
         QString archive_path_with_file_name(QString const& dir_prefix, QString const& file_name) {
@@ -157,7 +157,7 @@ namespace z7::ui::gui {
             return;
         }
 
-        QString const normalized_path = QDir::fromNativeSeparators(compose_archive_path().trimmed());
+        QString const normalized_path = QDir::fromNativeSeparators(compose_archive_path());
         QString const suffix = current_output_suffix();
         if (normalized_path.isEmpty() || suffix.isEmpty()) {
             return;
@@ -207,7 +207,7 @@ namespace z7::ui::gui {
             return QString();
         }
 
-        QString const archive_name = QDir::fromNativeSeparators(archive_name_combo_->currentText().trimmed());
+        QString const archive_name = QDir::fromNativeSeparators(archive_name_combo_->currentText());
         if (archive_name.isEmpty()) {
             return QString();
         }

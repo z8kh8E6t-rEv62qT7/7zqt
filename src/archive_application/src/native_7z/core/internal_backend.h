@@ -162,7 +162,6 @@ namespace z7::app {
 
         template <typename Handler>
         auto run_with_pauseable_operation(std::atomic<bool>& active_flag, Handler&& handler) -> decltype(handler()) {
-            cancel_requested_.store(false);
             pause_requested_.store(false);
             active_flag.store(true);
             ScopedAtomicBoolReset reset_cancel(cancel_requested_);
@@ -174,7 +173,6 @@ namespace z7::app {
 
         template <typename Handler>
         auto run_with_cancelable_operation(Handler&& handler) -> decltype(handler()) {
-            cancel_requested_.store(false);
             ScopedAtomicBoolReset reset_cancel(cancel_requested_);
             return handler();
         }

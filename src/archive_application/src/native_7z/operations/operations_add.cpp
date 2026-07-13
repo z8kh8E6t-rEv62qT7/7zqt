@@ -213,6 +213,12 @@ namespace z7::app {
                 return make_operation_failure<AddResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
             }
+            std::unique_lock<std::recursive_mutex> session_lock(
+                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+                return make_operation_failure<AddResult>(
+                    ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+            }
             if (!request.password.empty()) {
                 session->set_password(request.password);
             }
@@ -228,6 +234,13 @@ namespace z7::app {
                     ArchiveErrorDomain::kIo, "Writable archive session does not have a backing file", 2);
             }
 
+            SessionMutationBackup mutation_backup;
+            if (std::optional<OperationResult> backup_error =
+                    create_archive_session_mutation_backup(*session, &mutation_backup);
+                backup_error.has_value()) {
+                return from_base_result<AddResult>(std::move(*backup_error));
+            }
+
             AddRequest writable_request = request;
             writable_request.session_token.reset();
             writable_request.archive_path = state.temp_file->string();
@@ -240,13 +253,28 @@ namespace z7::app {
 
             AddResult add_result = add(writable_request, hooks);
             if (!add_result.ok) {
+                if (std::optional<OperationResult> restore_error = restore_archive_session_mutation_backup(
+                        *session, mutation_backup, hooks, nullptr, []() { return true; });
+                    restore_error.has_value()) {
+                    return from_base_result<AddResult>(std::move(*restore_error));
+                }
                 return add_result;
             }
-            ArchiveOpenSessionNativeAccess::set_dirty(*session, true);
             if (std::optional<OperationResult> refresh_error = refresh_archive_session_from_backing_file(
                     *session, hooks, &cancel_requested_, [this]() { return this->wait_while_paused(); });
                 refresh_error.has_value()) {
+                if (std::optional<OperationResult> restore_error = restore_archive_session_mutation_backup(
+                        *session, mutation_backup, hooks, nullptr, []() { return true; });
+                    restore_error.has_value()) {
+                    return from_base_result<AddResult>(std::move(*restore_error));
+                }
                 return from_base_result<AddResult>(std::move(*refresh_error));
+            }
+            ArchiveOpenSessionNativeAccess::set_dirty(*session, true);
+            ArchiveOpenSessionNativeAccess::increment_generation(*session);
+            if (std::optional<OperationResult> cleanup_error = discard_archive_session_mutation_backup(mutation_backup);
+                cleanup_error.has_value()) {
+                emit_log_event(hooks, OperationStage::kRunning, OutputChannel::kStdErr, cleanup_error->error.message);
             }
             return add_result;
         }

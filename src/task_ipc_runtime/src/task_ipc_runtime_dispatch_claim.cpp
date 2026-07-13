@@ -148,10 +148,6 @@ namespace z7::task_ipc_runtime {
             if (mapping == nullptr || mapping->raw() == nullptr) {
                 return false;
             }
-            if (!ensure_task_ipc_semaphore_exists(task_ipc_cancel_semaphore_key_for_shm(mapping->shm_name()),
-                                                  error_message)) {
-                return false;
-            }
             if (!mapping->start_owner_waiter(error_message)) {
                 return false;
             }

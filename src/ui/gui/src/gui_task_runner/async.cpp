@@ -770,7 +770,7 @@ namespace z7::ui::gui {
                     request.restore_file_security = options.restore_file_security;
                     request.zone_id_mode = options.zone_id_mode;
                     request.archive_path = z7::ui::archive_support::to_native_string(options.archive_path);
-                    request.password = z7::ui::archive_support::to_native_string(options.password);
+                    request.password = z7::ui::archive_support::to_utf8_string(options.password);
                     request.entries = z7::ui::archive_support::to_utf8_string_list(options.entry_paths);
                     request.path_remaps = options.path_remaps;
                     apply_configured_extract_memory_limit(&request);

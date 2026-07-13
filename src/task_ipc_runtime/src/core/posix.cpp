@@ -333,8 +333,30 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             write_fixed_utf8(owner_instance_id, raw->slot.owner_instance_id, kTaskIpcOwnerInstanceIdCapacity);
             std::memcpy(raw->payload, payload.constData(), static_cast<size_t>(payload.size()));
 
-            return std::shared_ptr<PosixTaskIpcMapping>(
+            std::unique_ptr<QSystemSemaphore> cancel_semaphore_owner = std::make_unique<QSystemSemaphore>(
+                QNativeIpcKey());
+            cancel_semaphore_owner->setNativeKey(
+                QSystemSemaphore::platformSafeKey(task_ipc_cancel_semaphore_key_for_shm(shm_name)),
+                0,
+                QSystemSemaphore::Create);
+            if (cancel_semaphore_owner->error() != QSystemSemaphore::NoError) {
+                if (error_message != nullptr) {
+                    QString const detail = cancel_semaphore_owner->errorString().trimmed();
+                    *error_message = detail.isEmpty()
+                                       ? QStringLiteral("Failed to initialize task IPC cancel semaphore.")
+                                       : detail;
+                }
+                cleanup_posix_sem_close(semaphore, sem_name);
+                cleanup_posix_unlink(QStringLiteral("sem_unlink"), sem_name_bytes, sem_name, ::sem_unlink);
+                cleanup_posix_munmap(mapping, shm_name);
+                cleanup_shm();
+                return nullptr;
+            }
+
+            std::shared_ptr<PosixTaskIpcMapping> owner(
                 new PosixTaskIpcMapping(shm_name, sem_name, fd, mapping, semaphore, owner_instance_id, true));
+            owner->cancel_semaphore_owner_ = std::move(cancel_semaphore_owner);
+            return owner;
         }
 
         if (error_message != nullptr) {

@@ -105,6 +105,22 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             stream << payload->encrypt_headers_defined;
             stream << payload->encrypt_headers;
             stream << payload->encryption_method;
+            stream << payload->symbolic_links_defined;
+            stream << payload->symbolic_links;
+            stream << payload->hard_links_defined;
+            stream << payload->hard_links;
+            stream << payload->alternate_streams_defined;
+            stream << payload->alternate_streams;
+            stream << payload->file_security_defined;
+            stream << payload->file_security;
+            stream << payload->preserve_access_time;
+            stream << payload->write_mtime_defined;
+            stream << payload->write_mtime;
+            stream << payload->write_ctime_defined;
+            stream << payload->write_ctime;
+            stream << payload->write_atime_defined;
+            stream << payload->write_atime;
+            stream << payload->set_archive_mtime;
             stream << payload->extra_parameters;
             stream << payload->input_paths;
         }
@@ -145,6 +161,22 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             stream >> payload.encrypt_headers_defined;
             stream >> payload.encrypt_headers;
             stream >> payload.encryption_method;
+            stream >> payload.symbolic_links_defined;
+            stream >> payload.symbolic_links;
+            stream >> payload.hard_links_defined;
+            stream >> payload.hard_links;
+            stream >> payload.alternate_streams_defined;
+            stream >> payload.alternate_streams;
+            stream >> payload.file_security_defined;
+            stream >> payload.file_security;
+            stream >> payload.preserve_access_time;
+            stream >> payload.write_mtime_defined;
+            stream >> payload.write_mtime;
+            stream >> payload.write_ctime_defined;
+            stream >> payload.write_ctime;
+            stream >> payload.write_atime_defined;
+            stream >> payload.write_atime;
+            stream >> payload.set_archive_mtime;
             stream >> payload.extra_parameters;
             stream >> payload.input_paths;
             if (stream.status() != QDataStream::Ok) {

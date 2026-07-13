@@ -69,6 +69,24 @@ namespace z7::app {
 
     } // namespace
 
+    std::string NativeExtractCallback::report_path_without_following_leaf(fs::path const& path) {
+        std::error_code absolute_ec;
+        fs::path const absolute_path = fs::absolute(path, absolute_ec);
+        if (absolute_ec) {
+            return path.lexically_normal().generic_string();
+        }
+
+        fs::path const leaf = absolute_path.filename();
+        fs::path const parent = leaf.empty() ? absolute_path : absolute_path.parent_path();
+        std::error_code canonical_ec;
+        fs::path const canonical_parent = fs::weakly_canonical(parent, canonical_ec);
+        fs::path reported = canonical_ec ? parent.lexically_normal() : canonical_parent;
+        if (!leaf.empty()) {
+            reported /= leaf;
+        }
+        return reported.lexically_normal().generic_string();
+    }
+
     bool NativeExtractCallback::path_is_within_authorized_root(fs::path const& candidate,
                                                                fs::path const& authorized_root,
                                                                std::error_code& ec) const {
@@ -124,7 +142,12 @@ namespace z7::app {
                 prompt.incoming_mtime_msecs_utc = incoming_mtime;
             }
 
-            return hooks_.ask_overwrite(prompt);
+            try {
+                return hooks_.ask_overwrite(prompt);
+            } catch (...) {
+                record_io_error("Overwrite callback failed for: " + destination_path.generic_string());
+                return OverwriteDecision::kCancel;
+            }
         }
 
         if (!ask_mode_notice_emitted_) {
@@ -139,6 +162,9 @@ namespace z7::app {
 
     NativeExtractCallback::ResolvedPath NativeExtractCallback::resolve_destination_path(std::string const& item_path,
                                                                                         bool is_directory) const {
+        bool const original_is_absolute = is_absolute_item_path(item_path);
+        std::string original_item_path = item_path;
+        std::replace(original_item_path.begin(), original_item_path.end(), '\\', fs::path::preferred_separator);
         std::string const normalized_archive_item = normalize_archive_item_path(item_path);
         std::string normalized_item = normalized_archive_item;
         if (!eliminate_prefix_.empty()) {
@@ -151,6 +177,40 @@ namespace z7::app {
             }
         }
         ResolvedPath out;
+        auto finalize_path = [this](ResolvedPath value) {
+            std::pair<fs::path, fs::path> const* best = nullptr;
+            size_t best_depth = 0;
+            for (auto const& remap : directory_destination_remaps_) {
+                fs::path const relative = value.destination_path.lexically_relative(remap.first);
+                if (relative.empty() && value.destination_path != remap.first) {
+                    continue;
+                }
+                auto const first = relative.begin();
+                if (first != relative.end() && *first == "..") {
+                    continue;
+                }
+                size_t const depth = static_cast<size_t>(std::distance(remap.first.begin(), remap.first.end()));
+                if (best == nullptr || depth > best_depth) {
+                    best = &remap;
+                    best_depth = depth;
+                }
+            }
+            if (best != nullptr) {
+                fs::path const relative = value.destination_path.lexically_relative(best->first);
+                value.destination_path = best->second / relative;
+                fs::path const authorized_relative = value.authorized_root.lexically_relative(best->first);
+                auto const authorized_first = authorized_relative.begin();
+                bool const authorized_root_is_remapped =
+                    value.authorized_root == best->first
+                    || (!authorized_relative.empty()
+                        && !(authorized_first != authorized_relative.end() && *authorized_first == ".."));
+                if (authorized_root_is_remapped) {
+                    value.authorized_root = best->second / authorized_relative;
+                }
+            }
+            value.absolute_output_path = report_path_without_following_leaf(value.destination_path);
+            return value;
+        };
 
         ExtractPathRemap const* best_remap = nullptr;
         int best_specificity = -1;
@@ -209,24 +269,24 @@ namespace z7::app {
             }
             out.destination_path = destination;
             out.absolute_output_path = fs::absolute(destination).generic_string();
-            return out;
+            return finalize_path(std::move(out));
         }
 
         if (normalized_item.empty()) {
             out.destination_path = output_dir_;
             out.authorized_root = output_dir_;
             out.absolute_output_path = fs::absolute(output_dir_).generic_string();
-            return out;
+            return finalize_path(std::move(out));
         }
 
         if (path_mode_ == ExtractPathMode::kNoPaths) {
             normalized_item = base_name_for_no_paths(normalized_item);
         }
 
-        if (path_mode_ == ExtractPathMode::kAbsolutePaths && is_absolute_item_path(normalized_item)) {
-            out.destination_path = fs::path(normalized_item);
+        if (path_mode_ == ExtractPathMode::kAbsolutePaths && original_is_absolute) {
+            out.destination_path = fs::path(original_item_path).lexically_normal();
             out.absolute_output_path = fs::absolute(out.destination_path).generic_string();
-            return out;
+            return finalize_path(std::move(out));
         }
 
         fs::path destination = output_dir_;
@@ -234,7 +294,7 @@ namespace z7::app {
         out.destination_path = destination;
         out.authorized_root = output_dir_;
         out.absolute_output_path = fs::absolute(destination).generic_string();
-        return out;
+        return finalize_path(std::move(out));
     }
 
     std::string NativeExtractCallback::normalize_path_for_output(std::string item_path) const {
@@ -255,13 +315,97 @@ namespace z7::app {
         if (path.empty()) {
             return false;
         }
-        if (path[0] == '/' || path[0] == '\\') {
-            return true;
+        fs::path native_path(path);
+#ifdef _WIN32
+        return native_path.has_root_name() && native_path.has_root_directory();
+#else
+        return native_path.is_absolute();
+#endif
+    }
+
+    bool NativeExtractCallback::validate_output_item_path(std::string const& path, std::string& reason) {
+        reason.clear();
+#ifdef _WIN32
+        std::string normalized = path;
+        std::replace(normalized.begin(), normalized.end(), '\\', '/');
+        size_t start = 0;
+        if (normalized.size() >= 3 && normalized[1] == ':' && normalized[2] == '/') {
+            start = 3;
+        } else {
+            while (start < normalized.size() && normalized[start] == '/') {
+                ++start;
+            }
         }
-        if (path.size() > 1 && path[1] == ':') {
-            return true;
+
+        auto is_reserved = [](std::string component) {
+            size_t const dot = component.find('.');
+            if (dot != std::string::npos) {
+                component.resize(dot);
+            }
+            std::transform(component.begin(), component.end(), component.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::toupper(ch));
+            });
+            static std::unordered_set<std::string> const reserved{"CON",
+                                                                  "PRN",
+                                                                  "AUX",
+                                                                  "NUL",
+                                                                  "CLOCK$",
+                                                                  "CONIN$",
+                                                                  "CONOUT$",
+                                                                  "COM1",
+                                                                  "COM2",
+                                                                  "COM3",
+                                                                  "COM4",
+                                                                  "COM5",
+                                                                  "COM6",
+                                                                  "COM7",
+                                                                  "COM8",
+                                                                  "COM9",
+                                                                  "LPT1",
+                                                                  "LPT2",
+                                                                  "LPT3",
+                                                                  "LPT4",
+                                                                  "LPT5",
+                                                                  "LPT6",
+                                                                  "LPT7",
+                                                                  "LPT8",
+                                                                  "LPT9",
+                                                                  "COM\xC2\xB9",
+                                                                  "COM\xC2\xB2",
+                                                                  "COM\xC2\xB3",
+                                                                  "LPT\xC2\xB9",
+                                                                  "LPT\xC2\xB2",
+                                                                  "LPT\xC2\xB3"};
+            return reserved.find(component) != reserved.end();
+        };
+
+        while (start <= normalized.size()) {
+            size_t const end = normalized.find('/', start);
+            std::string const component =
+                normalized.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (!component.empty()) {
+                if (component.find(':') != std::string::npos) {
+                    reason = "Windows alternate data stream syntax is not allowed";
+                    return false;
+                }
+                if (component.back() == '.' || component.back() == ' ') {
+                    reason = "Windows path components cannot end in a dot or space";
+                    return false;
+                }
+                if (is_reserved(component)) {
+                    reason = "Windows reserved device name is not allowed";
+                    return false;
+                }
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1;
         }
-        return false;
+#else
+        (void)path;
+#endif
+        return true;
     }
 
     std::string NativeExtractCallback::base_name_for_no_paths(std::string const& path) {

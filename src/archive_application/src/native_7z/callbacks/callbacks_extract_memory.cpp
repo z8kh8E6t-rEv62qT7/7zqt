@@ -49,7 +49,12 @@ namespace z7::app {
             prompt.skip_archive_supported = (flags & NRequestMemoryUseFlags::k_SkipArc_IsExpected) != 0;
             prompt.report_only = (flags & NRequestMemoryUseFlags::k_IsReport) != 0;
 
-            MemoryLimitReply const reply = hooks_.ask_memory_limit(prompt);
+            MemoryLimitReply reply;
+            try {
+                reply = hooks_.ask_memory_limit(prompt);
+            } catch (...) {
+                return E_FAIL;
+            }
             switch (reply.action) {
                 case MemoryLimitAction::kAllowOnce:
                     *answer_flags = NRequestMemoryAnswerFlags::k_Allow;

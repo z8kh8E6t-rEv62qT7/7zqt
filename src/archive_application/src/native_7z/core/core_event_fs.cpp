@@ -7,8 +7,13 @@
 #include "core/internal.h"
 #include "third_party_adapter/third_party_adapter.h"
 
+#if defined(__APPLE__)
+#include <copyfile.h>
+#endif
+
 #if !defined(_WIN32)
 #include <pwd.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -304,7 +309,11 @@ namespace z7::app {
         event.message = message;
         event.benchmark_snapshot = benchmark_snapshot;
         event.benchmark_summary = benchmark_summary;
-        hooks.on_event(event);
+        try {
+            hooks.on_event(event);
+        } catch (...) {
+            // Delegate exceptions must never cross a COM callback boundary.
+        }
     }
 
     void emit_progress_event(ArchiveBackendHooks const& hooks,
@@ -340,7 +349,11 @@ namespace z7::app {
         event.ratio_info = ratio_info;
         event.benchmark_snapshot = benchmark_snapshot;
         event.benchmark_summary = benchmark_summary;
-        hooks.on_event(event);
+        try {
+            hooks.on_event(event);
+        } catch (...) {
+            // Delegate exceptions must never cross a COM callback boundary.
+        }
     }
 
     bool ensure_parent_dir(fs::path const& path, std::error_code& ec) {
@@ -359,15 +372,93 @@ namespace z7::app {
         return !ec;
     }
 
+    bool create_private_directory(fs::path const& path, std::error_code& ec) {
+        ec.clear();
+#if defined(_WIN32)
+        if (!fs::create_directory(path, ec)) {
+            return false;
+        }
+        fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace, ec);
+        if (!ec) {
+            return true;
+        }
+        std::error_code cleanup_ec;
+        fs::remove(path, cleanup_ec);
+        return false;
+#else
+        if (::mkdir(path.c_str(), S_IRWXU) == 0) {
+            return true;
+        }
+        ec = std::error_code(errno, std::generic_category());
+        return false;
+#endif
+    }
+
     bool remove_path_any(fs::path const& path, std::error_code& ec) {
         ec.clear();
-        if (!fs::exists(path, ec)) {
+        fs::file_status const status = fs::symlink_status(path, ec);
+        if (ec == std::errc::no_such_file_or_directory) {
             ec.clear();
+            return true;
+        }
+        if (ec) {
+            return false;
+        }
+        if (!fs::status_known(status) || status.type() == fs::file_type::not_found) {
             return true;
         }
 
         fs::remove_all(path, ec);
         return !ec;
+    }
+
+    FilesystemObjectIdentity capture_filesystem_object_identity_no_follow(fs::path const& path, std::error_code& ec) {
+        ec.clear();
+        FilesystemObjectIdentity identity;
+#if defined(_WIN32)
+        HANDLE const handle = ::CreateFileW(path.c_str(),
+                                            0,
+                                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                            nullptr,
+                                            OPEN_EXISTING,
+                                            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+                                            nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+            return identity;
+        }
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!::GetFileInformationByHandle(handle, &info)) {
+            ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+            ::CloseHandle(handle);
+            return identity;
+        }
+        ::CloseHandle(handle);
+        identity.volume = info.dwVolumeSerialNumber;
+        identity.object = (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+#else
+        struct stat info{};
+        if (::lstat(path.c_str(), &info) != 0) {
+            ec = std::error_code(errno, std::generic_category());
+            return identity;
+        }
+        identity.volume = static_cast<uint64_t>(info.st_dev);
+        identity.object = static_cast<uint64_t>(info.st_ino);
+#endif
+        identity.defined = true;
+        return identity;
+    }
+
+    bool filesystem_object_matches_identity_no_follow(fs::path const& path,
+                                                      FilesystemObjectIdentity const& identity,
+                                                      std::error_code& ec) {
+        ec.clear();
+        if (!identity.defined) {
+            ec = std::make_error_code(std::errc::invalid_argument);
+            return false;
+        }
+        FilesystemObjectIdentity const current = capture_filesystem_object_identity_no_follow(path, ec);
+        return !ec && current.defined && current.volume == identity.volume && current.object == identity.object;
     }
 
     bool copy_path_any(fs::path const& src, fs::path const& dst, bool overwrite, std::error_code& ec) {
@@ -398,6 +489,73 @@ namespace z7::app {
 
         fs::copy(src, dst, options, ec);
         return !ec;
+    }
+
+    bool copy_regular_file_with_metadata(fs::path const& src, fs::path const& dst, std::error_code& ec) {
+        ec.clear();
+#if defined(__APPLE__)
+        if (::copyfile(src.c_str(), dst.c_str(), nullptr, COPYFILE_ALL | COPYFILE_EXCL) == 0) {
+            return true;
+        }
+        ec = std::error_code(errno, std::generic_category());
+        return false;
+#elif defined(_WIN32)
+        if (::CopyFileW(src.c_str(), dst.c_str(), TRUE)) {
+            return true;
+        }
+        ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+        return false;
+#else
+        if (!fs::copy_file(src, dst, fs::copy_options::none, ec)) {
+            return false;
+        }
+        fs::file_status const source_status = fs::status(src, ec);
+        if (ec) {
+            return false;
+        }
+        fs::permissions(dst, source_status.permissions(), fs::perm_options::replace, ec);
+        if (ec) {
+            return false;
+        }
+        fs::file_time_type const source_mtime = fs::last_write_time(src, ec);
+        if (ec) {
+            return false;
+        }
+        fs::last_write_time(dst, source_mtime, ec);
+        if (ec) {
+            return false;
+        }
+        return true;
+#endif
+    }
+
+    bool copy_file_metadata(fs::path const& src, fs::path const& dst, std::error_code& ec) {
+        ec.clear();
+#if defined(__APPLE__)
+        if (::copyfile(src.c_str(), dst.c_str(), nullptr, COPYFILE_METADATA) == 0) {
+            return true;
+        }
+        ec = std::error_code(errno, std::generic_category());
+        return false;
+#else
+        fs::file_status const source_status = fs::status(src, ec);
+        if (ec) {
+            return false;
+        }
+        fs::permissions(dst, source_status.permissions(), fs::perm_options::replace, ec);
+        if (ec) {
+            return false;
+        }
+        fs::file_time_type const source_mtime = fs::last_write_time(src, ec);
+        if (ec) {
+            return false;
+        }
+        fs::last_write_time(dst, source_mtime, ec);
+        if (ec) {
+            return false;
+        }
+        return true;
+#endif
     }
 
     fs::path
@@ -486,7 +644,10 @@ namespace z7::app {
     }
 
     bool is_hresult_io(HRESULT hr) {
-        return hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || hr == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
+        return hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+            || hr == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)
+            || hr == HRESULT_FROM_WIN32(ERROR_FILE_EXISTS)
+            || hr == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
     }
 
     ArchiveError map_hresult_to_archive_error(int hr) {

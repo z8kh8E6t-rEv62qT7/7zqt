@@ -20,6 +20,8 @@ namespace z7::ui::gui {
     };
 
     struct AddTaskSpec {
+        // Filesystem paths and passwords retain their exact bytes/code points
+        // across task IPC. Do not trim them at UI/backend boundaries.
         bool show_dialog = false;
         std::string archive_path;
         std::string archive_type;
@@ -41,6 +43,24 @@ namespace z7::ui::gui {
         bool encrypt_headers_defined = false;
         bool encrypt_headers = false;
         std::string encryption_method;
+        bool symbolic_links_defined = false;
+        bool symbolic_links = false;
+        bool hard_links_defined = false;
+        bool hard_links = false;
+        bool alternate_streams_defined = false;
+        bool alternate_streams = false;
+        bool file_security_defined = false;
+        bool file_security = false;
+        bool preserve_access_time = false;
+        bool write_mtime_defined = false;
+        bool write_mtime = false;
+        bool write_ctime_defined = false;
+        bool write_ctime = false;
+        bool write_atime_defined = false;
+        bool write_atime = false;
+        bool set_archive_mtime = false;
+        // Handler method properties only. Command-level creation switches are
+        // represented by the typed fields above.
         std::vector<std::string> extra_parameters;
         std::vector<std::string> input_paths;
     };

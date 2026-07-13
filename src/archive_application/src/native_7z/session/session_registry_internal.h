@@ -13,11 +13,20 @@
 #include <vector>
 
 #include "native_archive_session_registry.h"
+#include "core/filesystem_replace.h"
 #include "third_party_adapter/third_party_adapter.h"
 
 namespace z7::app {
 
     struct ArchiveBackendHooks;
+
+    struct FilesystemObjectVersion {
+        FilesystemObjectIdentity identity;
+        uint64_t size = 0;
+        int64_t mtime_ticks = 0;
+        int64_t change_ticks = 0;
+        bool defined = false;
+    };
 
     struct ArchiveOpenSessionState {
         // Bytes backing the child archive. Exactly one of these is populated,
@@ -28,6 +37,7 @@ namespace z7::app {
         // For kStream, the underlying stream is rooted in the parent archive, so no
         // extra storage is required; the IUnknown ref is held below.
         std::shared_ptr<void> stream_ref_holder; // keeps COM refs alive
+        std::optional<FilesystemObjectVersion> source_version;
 
         // Heavy 7-Zip state.
         std::unique_ptr<CCodecs> codecs;
@@ -82,6 +92,30 @@ namespace z7::app {
         static void set_dirty(ArchiveOpenSession& session, bool dirty) { session.dirty_ = dirty; }
 
         static bool dirty(ArchiveOpenSession const& session) { return session.dirty_; }
+
+        static uint64_t generation(ArchiveOpenSession const& session) { return session.generation_; }
+
+        static void increment_generation(ArchiveOpenSession& session) { ++session.generation_; }
+
+        static void set_generation(ArchiveOpenSession& session, uint64_t generation) {
+            session.generation_ = generation;
+        }
+
+        static void set_parent_generation_at_open(ArchiveOpenSession& session, uint64_t generation) {
+            session.parent_generation_at_open_ = generation;
+        }
+
+        static uint64_t parent_generation_at_open(ArchiveOpenSession const& session) {
+            return session.parent_generation_at_open_;
+        }
+
+        static std::recursive_mutex& operation_mutex(ArchiveOpenSession& session) {
+            return session.operation_mutex_;
+        }
+
+        static bool closed(ArchiveOpenSession const& session) { return session.closed_; }
+
+        static void set_closed(ArchiveOpenSession& session, bool closed) { session.closed_ = closed; }
     };
 
     struct ArchiveSessionRegistryNativeAccess {
@@ -110,6 +144,11 @@ namespace z7::app {
     inline CCodecs& archive_session_codecs(ArchiveOpenSession& session) {
         return *archive_session_state(session).codecs;
     }
+
+    FilesystemObjectVersion capture_filesystem_object_version(std::filesystem::path const& path,
+                                                               std::error_code& ec);
+    bool filesystem_object_version_matches(FilesystemObjectVersion const& lhs,
+                                           FilesystemObjectVersion const& rhs);
 
     inline void reset_archive_session_open_state(ArchiveOpenSession& session) {
         ArchiveOpenSessionState& state = archive_session_state(session);
@@ -145,6 +184,23 @@ namespace z7::app {
                                                                              ArchiveBackendHooks const& hooks,
                                                                              std::atomic<bool>* cancel_requested,
                                                                              std::function<bool()> wait_while_paused);
+
+    struct SessionMutationBackup {
+        std::filesystem::path path;
+        FilesystemObjectIdentity identity;
+        std::shared_ptr<FilesystemTransaction> transaction;
+
+        bool empty() const { return path.empty(); }
+    };
+
+    std::optional<OperationResult> create_archive_session_mutation_backup(ArchiveOpenSession const& session,
+                                                                          SessionMutationBackup* backup);
+    std::optional<OperationResult> restore_archive_session_mutation_backup(ArchiveOpenSession& session,
+                                                                           SessionMutationBackup const& backup,
+                                                                           ArchiveBackendHooks const& hooks,
+                                                                           std::atomic<bool>* cancel_requested,
+                                                                           std::function<bool()> wait_while_paused);
+    std::optional<OperationResult> discard_archive_session_mutation_backup(SessionMutationBackup const& backup);
 
     OperationResult close_native_archive_session(ArchiveSessionRegistry& registry,
                                                  ArchiveSessionToken token,

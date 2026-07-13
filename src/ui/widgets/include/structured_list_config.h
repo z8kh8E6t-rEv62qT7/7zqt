@@ -2,9 +2,10 @@
 // Role: Declarative configuration for StructuredListView / Delegate.
 //
 // StructuredListView is a reusable QTableView-based list widget where one column
-// (`primary_interactive_column`) owns all interactive semantics (hover, selection,
-// double-click, drag). Non-primary columns are display-only metadata. Nothing in
-// this file is file-manager specific.
+// (`primary_interactive_column`) owns item semantics (hover, selection,
+// double-click, item drag). Non-primary columns are display-only metadata and
+// may serve as background for rubber-band selection. Nothing in this file is
+// file-manager specific.
 
 #pragma once
 

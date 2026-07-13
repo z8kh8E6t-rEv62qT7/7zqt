@@ -35,6 +35,7 @@ namespace z7::app {
         std::string current_path() const;
         std::optional<ProgressRatioInfo> ratio_info() const;
         std::string password() const;
+        bool password_defined() const;
         bool password_requested() const;
         bool wrong_password() const;
 
@@ -97,7 +98,7 @@ namespace z7::app {
         void emit_progress_snapshot() const;
         void note_error(std::string const& message);
         HRESULT check_break() const;
-        HRESULT provide_password(BSTR* password, bool force_prompt);
+        HRESULT provide_password(BSTR* password, bool password_required);
 
         ArchiveBackendHooks hooks_;
         std::string archive_path_;

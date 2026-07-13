@@ -212,7 +212,7 @@ namespace z7::ui::gui {
             return reply;
         }
         reply.kind = z7::app::PasswordReplyKind::kProvide;
-        reply.password = value->toStdString();
+        reply.password = z7::ui::archive_support::to_utf8_string(*value);
         return reply;
     }
 

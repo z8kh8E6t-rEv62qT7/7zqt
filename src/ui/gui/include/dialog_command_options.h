@@ -33,6 +33,22 @@ namespace z7::ui::gui {
         std::string password;
         std::string encryption_method = "AES-256";
         bool encrypt_headers = false;
+        bool symbolic_links_defined = false;
+        bool symbolic_links = false;
+        bool hard_links_defined = false;
+        bool hard_links = false;
+        bool alternate_streams_defined = false;
+        bool alternate_streams = false;
+        bool file_security_defined = false;
+        bool file_security = false;
+        bool preserve_access_time = false;
+        bool write_mtime_defined = false;
+        bool write_mtime = false;
+        bool write_ctime_defined = false;
+        bool write_ctime = false;
+        bool write_atime_defined = false;
+        bool write_atime = false;
+        bool set_archive_mtime = false;
         AddTaskOpaqueState opaque_add_task;
     };
 

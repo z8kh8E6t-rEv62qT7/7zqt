@@ -1,14 +1,16 @@
 // src/ui/widgets/include/structured_list_view.h
 // Role: Reusable QTableView with "primary column owns interaction" semantics.
 //
-// One column (`primary_interactive_column`) owns all interaction: selection,
-// hover highlight, double-click activation, drag initiation. Non-primary
-// columns are display-only metadata. Arrow keys keep the current index pinned
-// to the primary column. Right-click raises a context menu signal without
-// mutating selection. Nothing in this file is application specific.
+// One column (`primary_interactive_column`) owns item interaction: selection,
+// hover highlight, double-click activation, and item drag initiation.
+// Non-primary columns are display-only metadata, but act like background for
+// rubber-band selection. Arrow keys keep the current index pinned to the
+// primary column. Right-click raises a context menu signal without mutating
+// selection. Nothing in this file is application specific.
 
 #pragma once
 
+#include <QItemSelection>
 #include <QPersistentModelIndex>
 #include <QPoint>
 #include <QTableView>
@@ -16,8 +18,11 @@
 #include "structured_list_config.h"
 
 class QContextMenuEvent;
+class QHideEvent;
 class QKeyEvent;
 class QMouseEvent;
+class QRubberBand;
+class QTimer;
 
 namespace z7::ui::widgets {
 
@@ -28,6 +33,9 @@ namespace z7::ui::widgets {
     public:
         explicit StructuredListView(QWidget* parent = nullptr);
         ~StructuredListView() override;
+
+        void setModel(QAbstractItemModel* model) override;
+        void reset() override;
 
         // Apply configuration. Safe to call after setModel(); columns and header
         // visuals are re-applied each time.
@@ -75,6 +83,7 @@ namespace z7::ui::widgets {
         void mouseMoveEvent(QMouseEvent* event) override;
         void mouseDoubleClickEvent(QMouseEvent* event) override;
         void leaveEvent(QEvent* event) override;
+        void hideEvent(QHideEvent* event) override;
         void keyPressEvent(QKeyEvent* event) override;
         void closeEditor(QWidget* editor, QAbstractItemDelegate::EndEditHint hint) override;
         void contextMenuEvent(QContextMenuEvent* event) override;
@@ -97,6 +106,14 @@ namespace z7::ui::widgets {
         void select_toggle(QModelIndex const& primary);
         void select_range_to(QModelIndex const& primary);
         void blank_selection();
+        bool can_rubber_band_select() const;
+        void begin_rubber_band_selection(QMouseEvent const* event);
+        void update_rubber_band_selection(QPoint const& viewport_pos);
+        void finish_rubber_band_selection(QPoint const& viewport_pos);
+        void cancel_rubber_band_selection();
+        void update_rubber_band_geometry_and_selection();
+        void auto_scroll_rubber_band();
+        QPoint viewport_to_content(QPoint const& viewport_pos) const;
         QModelIndex primary_index_at(QPoint const& viewport_pos) const;
         bool point_is_on_primary(QPoint const& viewport_pos) const;
 
@@ -106,8 +123,17 @@ namespace z7::ui::widgets {
         QPersistentModelIndex selection_anchor_;
         QPoint press_viewport_pos_;
         QPersistentModelIndex press_primary_index_;
+        QRubberBand* rubber_band_ = nullptr;
+        QTimer* rubber_band_auto_scroll_timer_ = nullptr;
+        QPoint rubber_band_origin_content_;
+        QPoint rubber_band_current_viewport_pos_;
+        QItemSelection rubber_band_base_selection_;
         bool left_pressed_ = false;
         bool drag_in_progress_ = false;
+        bool rubber_band_candidate_ = false;
+        bool rubber_band_allowed_ = false;
+        bool rubber_band_active_ = false;
+        bool rubber_band_additive_ = false;
         bool suppress_next_enter_activation_ = false;
         // Deferred click handling: when a press lands on an already-selected primary
         // item, we do not collapse selection on press (to preserve drag). We collapse

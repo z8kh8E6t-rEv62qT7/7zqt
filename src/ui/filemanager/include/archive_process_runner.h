@@ -54,6 +54,22 @@ namespace z7::ui::filemanager {
         bool encrypt_headers_defined = false;
         bool encrypt_headers = false;
         QString encryption_method;
+        bool symbolic_links_defined = false;
+        bool symbolic_links = false;
+        bool hard_links_defined = false;
+        bool hard_links = false;
+        bool alternate_streams_defined = false;
+        bool alternate_streams = false;
+        bool file_security_defined = false;
+        bool file_security = false;
+        bool preserve_access_time = false;
+        bool write_mtime_defined = false;
+        bool write_mtime = false;
+        bool write_ctime_defined = false;
+        bool write_ctime = false;
+        bool write_atime_defined = false;
+        bool write_atime = false;
+        bool set_archive_mtime = false;
         QStringList extra_parameters;
     };
 

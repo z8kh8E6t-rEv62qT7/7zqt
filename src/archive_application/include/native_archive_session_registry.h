@@ -77,11 +77,15 @@ namespace z7::app {
         std::string source_archive_path_;
         std::string entry_path_from_parent_;
         bool dirty_ = false;
+        uint64_t generation_ = 0;
+        uint64_t parent_generation_at_open_ = 0;
         OpenArchiveSessionResult::Strategy strategy_ = OpenArchiveSessionResult::Strategy::kTempFile;
 
         // Parent session is pinned so the parent's archive outlives this session.
         std::shared_ptr<ArchiveOpenSession> parent_;
         std::unique_ptr<ArchiveOpenSessionState> state_;
+        mutable std::recursive_mutex operation_mutex_;
+        bool closed_ = false;
     };
 
     class ArchiveSessionRegistry {

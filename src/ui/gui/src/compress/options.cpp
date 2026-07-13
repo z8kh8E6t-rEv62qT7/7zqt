@@ -131,6 +131,29 @@ namespace z7::ui::gui {
             return joined;
         }
 
+        bool has_explicit_advanced_options(CompressCommandOptions const& options) {
+            return !options.extra_parameters.empty()
+                || options.symbolic_links_defined
+                || options.hard_links_defined
+                || options.alternate_streams_defined
+                || options.file_security_defined
+                || options.preserve_access_time
+                || options.write_mtime_defined
+                || options.write_ctime_defined
+                || options.write_atime_defined
+                || options.set_archive_mtime;
+        }
+
+        void append_bool_pair(QStringList* tokens,
+                              QString const& short_name,
+                              bool defined,
+                              bool value) {
+            if (!defined) {
+                return;
+            }
+            tokens->append(QStringLiteral("-%1%2").arg(short_name, value ? QString() : QStringLiteral("-")));
+        }
+
         QString current_combo_data(QComboBox const* combo) {
             if (combo == nullptr) {
                 return QString();
@@ -607,6 +630,66 @@ namespace z7::ui::gui {
 
     } // namespace
 
+    void compress_internal::parse_advanced_options(QString const& text, CompressCommandOptions* out) {
+        if (out == nullptr) {
+            return;
+        }
+
+        QStringList tokens = normalized_advanced_tokens(text);
+        auto read_pair = [&tokens](QString const& name, bool* defined, bool* value) {
+            SwitchState const state = switch_state_from_tokens(tokens, name);
+            *defined = state != SwitchState::kAuto;
+            *value = state == SwitchState::kEnabled;
+            remove_switch_tokens(&tokens, name);
+        };
+        read_pair(QStringLiteral("snl"), &out->symbolic_links_defined, &out->symbolic_links);
+        read_pair(QStringLiteral("snh"), &out->hard_links_defined, &out->hard_links);
+        read_pair(QStringLiteral("sns"), &out->alternate_streams_defined, &out->alternate_streams);
+        read_pair(QStringLiteral("sni"), &out->file_security_defined, &out->file_security);
+        read_pair(QStringLiteral("mtm"), &out->write_mtime_defined, &out->write_mtime);
+        read_pair(QStringLiteral("mtc"), &out->write_ctime_defined, &out->write_ctime);
+        read_pair(QStringLiteral("mta"), &out->write_atime_defined, &out->write_atime);
+
+        out->preserve_access_time = has_presence_switch(tokens, QStringLiteral("ssp"));
+        remove_presence_switch_tokens(&tokens, QStringLiteral("ssp"));
+        out->set_archive_mtime = switch_state_from_tokens(tokens, QStringLiteral("stl")) == SwitchState::kEnabled;
+        remove_switch_tokens(&tokens, QStringLiteral("stl"));
+
+        out->extra_parameters.clear();
+        out->extra_parameters.reserve(static_cast<size_t>(tokens.size()));
+        for (QString const& token : tokens) {
+            out->extra_parameters.push_back(z7::ui::archive_support::to_native_string(token));
+        }
+    }
+
+    QString compress_internal::advanced_options_text(CompressCommandOptions const& options) {
+        QStringList tokens;
+        append_bool_pair(&tokens,
+                         QStringLiteral("snl"),
+                         options.symbolic_links_defined,
+                         options.symbolic_links);
+        append_bool_pair(&tokens, QStringLiteral("snh"), options.hard_links_defined, options.hard_links);
+        append_bool_pair(&tokens,
+                         QStringLiteral("sns"),
+                         options.alternate_streams_defined,
+                         options.alternate_streams);
+        append_bool_pair(&tokens, QStringLiteral("sni"), options.file_security_defined, options.file_security);
+        if (options.preserve_access_time) {
+            tokens.push_back(QStringLiteral("-ssp"));
+        }
+        append_bool_pair(&tokens, QStringLiteral("mtm"), options.write_mtime_defined, options.write_mtime);
+        append_bool_pair(&tokens, QStringLiteral("mtc"), options.write_ctime_defined, options.write_ctime);
+        append_bool_pair(&tokens, QStringLiteral("mta"), options.write_atime_defined, options.write_atime);
+        if (options.set_archive_mtime) {
+            tokens.push_back(QStringLiteral("-stl"));
+        }
+        QString const extras = joined_extra_parameters(options.extra_parameters);
+        if (!extras.isEmpty()) {
+            tokens.append(normalized_advanced_tokens(extras));
+        }
+        return join_tokens(tokens);
+    }
+
     QString CompressDialog::default_encryption_method_for_current_format() const {
         return default_encryption_method_for_format(current_format_id());
     }
@@ -718,8 +801,8 @@ namespace z7::ui::gui {
         set_combo_data_or_text(solid_combo_, solid);
         set_combo_data_or_text(threads_combo_, threads);
 
-        if (explicit_options != nullptr && !explicit_options->extra_parameters.empty()) {
-            parameters_edit_->setText(joined_extra_parameters(explicit_options->extra_parameters));
+        if (explicit_options != nullptr && has_explicit_advanced_options(*explicit_options)) {
+            parameters_edit_->setText(advanced_options_text(*explicit_options));
         } else {
             parameters_edit_->setText(advanced_options_text_from_original_keys(settings, normalized_format));
         }

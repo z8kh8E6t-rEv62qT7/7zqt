@@ -124,6 +124,12 @@ namespace z7::app {
                 return make_operation_failure<GetEntryInfoResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
             }
+            std::unique_lock<std::recursive_mutex> session_lock(
+                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+                return make_operation_failure<GetEntryInfoResult>(
+                    ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+            }
             CArc const* arc = archive_session_link(*session).GetArc();
             if (arc == nullptr || arc->Archive == nullptr) {
                 return make_operation_failure<GetEntryInfoResult>(

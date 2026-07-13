@@ -14,7 +14,11 @@ namespace z7::app {
             cancel_requested_(cancel_requested), wait_while_paused_(std::move(wait_while_paused)) {}
 
         bool should_abort() const {
-            if (wait_while_paused_ && !wait_while_paused_()) {
+            try {
+                if (wait_while_paused_ && !wait_while_paused_()) {
+                    return true;
+                }
+            } catch (...) {
                 return true;
             }
             return cancel_requested_ != nullptr && cancel_requested_->load();

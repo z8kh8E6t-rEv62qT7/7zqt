@@ -59,13 +59,31 @@ namespace z7::app {
         }
 
         std::string const subdir = suggested_extract_subfolder_name(name);
+        std::string safe_subdir = subdir;
+        if (safe_subdir.empty()
+            || safe_subdir == "."
+            || safe_subdir == ".."
+            || safe_subdir.find('/') != std::string::npos
+            || safe_subdir.find('\\') != std::string::npos) {
+            safe_subdir = "Archive";
+        }
         std::string resolved = output_template;
         size_t pos = 0;
         while ((pos = resolved.find('*', pos)) != std::string::npos) {
-            resolved.replace(pos, 1, subdir);
-            pos += subdir.size();
+            resolved.replace(pos, 1, safe_subdir);
+            pos += safe_subdir.size();
         }
         return resolved;
+    }
+
+    std::string default_extracted_stream_name(std::string const& archive_path) {
+        std::filesystem::path const archive_name = std::filesystem::path(archive_path).filename();
+        std::string const output_name =
+            archive_name.has_extension() ? archive_name.stem().string() : archive_name.string();
+        if (output_name.empty() || output_name == "." || output_name == "..") {
+            return "unnamed-stream";
+        }
+        return output_name;
     }
 
     std::string output_tail_name(std::string output_dir) {

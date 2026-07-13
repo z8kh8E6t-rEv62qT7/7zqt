@@ -195,7 +195,7 @@ namespace z7::ui::gui {
 
     CompressCommandOptions CompressDialog::options() const {
         CompressCommandOptions out;
-        out.archive_path = z7::ui::archive_support::to_native_string(compose_archive_path().trimmed());
+        out.archive_path = z7::ui::archive_support::to_native_string(compose_archive_path());
         out.archive_type = z7::ui::archive_support::to_native_string(current_format_id());
         out.keep_archive_name_extension = keep_archive_name_extension_;
         out.single_file_input = single_file_input_;
@@ -226,14 +226,10 @@ namespace z7::ui::gui {
         out.volume_size = z7::ui::archive_support::to_native_string(volume_combo_->currentText().trimmed());
 
         FormatRule const rule = rule_for_format_id(current_format_id());
-        QStringList const params = QProcess::splitCommand(parameters_edit_->text().trimmed());
-        out.extra_parameters.reserve(static_cast<size_t>(params.size()));
-        for (QString const& token : params) {
-            out.extra_parameters.push_back(z7::ui::archive_support::to_native_string(token));
-        }
+        parse_advanced_options(parameters_edit_->text(), &out);
 
         if (rule.encrypt) {
-            out.password = z7::ui::archive_support::to_native_string(password_edit_->text());
+            out.password = z7::ui::archive_support::to_utf8_string(password_edit_->text());
             if (!out.password.empty() && encryption_method_combo_->count() > 0) {
                 out.encryption_method = z7::ui::archive_support::to_native_string(selected_encryption_method_spec());
             }

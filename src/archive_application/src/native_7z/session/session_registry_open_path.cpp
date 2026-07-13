@@ -22,11 +22,26 @@ namespace z7::app {
 
         auto session = std::make_shared<ArchiveOpenSession>();
         ArchiveOpenSessionNativeAccess::set_display_path(*session, request.archive_path);
-        ArchiveOpenSessionNativeAccess::set_source_archive_path(*session, request.archive_path);
+        std::error_code canonical_ec;
+        std::filesystem::path const canonical_source =
+            std::filesystem::canonical(std::filesystem::path(request.archive_path), canonical_ec);
+        ArchiveOpenSessionNativeAccess::set_source_archive_path(
+            *session, canonical_ec ? request.archive_path : canonical_source.string());
         ArchiveOpenSessionNativeAccess::set_strategy(*session,
                                                      OpenArchiveSessionResult::Strategy::kTempFile); // placeholder
         reset_archive_session_open_state(*session);
         ArchiveOpenSessionState& session_state = archive_session_state(*session);
+        std::error_code version_ec;
+        FilesystemObjectVersion const source_version = capture_filesystem_object_version(
+            std::filesystem::path(ArchiveOpenSessionNativeAccess::source_archive_path(*session)), version_ec);
+        if (version_ec || !source_version.defined) {
+            static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo,
+                "Cannot record archive source version: " + version_ec.message(),
+                2);
+            return result;
+        }
+        session_state.source_version = source_version;
 
         CArc const* arc = nullptr;
         bool password_requested = false;
@@ -48,7 +63,7 @@ namespace z7::app {
                                                &wrong_password,
                                                &password);
         if (hr != S_OK) {
-            if (password_requested || wrong_password || !password.empty()) {
+            if (password_requested || wrong_password) {
                 static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
                     ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
             } else {
@@ -56,7 +71,9 @@ namespace z7::app {
             }
             return result;
         }
-        session->set_password(std::move(password));
+        if (!password.empty()) {
+            session->set_password(std::move(password));
+        }
 
         ArchiveOpenSessionNativeAccess::set_token(*session,
                                                   ArchiveSessionRegistryNativeAccess::allocate_token(registry));

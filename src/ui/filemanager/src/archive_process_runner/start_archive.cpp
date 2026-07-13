@@ -90,10 +90,26 @@ namespace z7::ui::filemanager {
         request.solid_block_size = to_native_string(options.solid_block_size.trimmed());
         request.thread_count = to_native_string(options.thread_count.trimmed());
         request.volume_size = to_native_string(options.volume_size.trimmed());
-        request.password = to_native_string(options.password);
+        request.password = to_utf8_string(options.password);
         request.encrypt_headers_defined = options.encrypt_headers_defined;
         request.encrypt_headers = options.encrypt_headers;
         request.encryption_method = to_native_string(options.encryption_method.trimmed());
+        request.symbolic_links_defined = options.symbolic_links_defined;
+        request.symbolic_links = options.symbolic_links;
+        request.hard_links_defined = options.hard_links_defined;
+        request.hard_links = options.hard_links;
+        request.alternate_streams_defined = options.alternate_streams_defined;
+        request.alternate_streams = options.alternate_streams;
+        request.file_security_defined = options.file_security_defined;
+        request.file_security = options.file_security;
+        request.preserve_access_time = options.preserve_access_time;
+        request.write_mtime_defined = options.write_mtime_defined;
+        request.write_mtime = options.write_mtime;
+        request.write_ctime_defined = options.write_ctime_defined;
+        request.write_ctime = options.write_ctime;
+        request.write_atime_defined = options.write_atime_defined;
+        request.write_atime = options.write_atime;
+        request.set_archive_mtime = options.set_archive_mtime;
         request.extra_parameters = to_native_string_list(options.extra_parameters);
         request.input_paths = to_native_string_list(options.input_paths);
         request.input_items.reserve(options.input_items.size());
@@ -123,7 +139,7 @@ namespace z7::ui::filemanager {
         request.overwrite_mode = to_backend_overwrite_mode(overwrite_mode);
         request.path_mode = path_mode;
         request.eliminate_root_duplication = eliminate_root_duplication;
-        request.password = to_native_string(password);
+        request.password = to_utf8_string(password);
         request.restore_file_security = restore_file_security;
         apply_configured_extract_memory_limit(&request);
 
@@ -152,7 +168,7 @@ namespace z7::ui::filemanager {
         request.overwrite_mode = to_backend_overwrite_mode(overwrite_mode);
         request.path_mode = path_mode;
         request.eliminate_root_duplication = eliminate_root_duplication;
-        request.password = to_native_string(password);
+        request.password = to_utf8_string(password);
         request.restore_file_security = restore_file_security;
         apply_configured_extract_memory_limit(&request);
 
@@ -182,7 +198,7 @@ namespace z7::ui::filemanager {
         request.overwrite_mode = to_backend_overwrite_mode(overwrite_mode);
         request.path_mode = path_mode;
         request.eliminate_root_duplication = eliminate_root_duplication;
-        request.password = to_native_string(password);
+        request.password = to_utf8_string(password);
         request.restore_file_security = restore_file_security;
         request.entries = to_utf8_string_list(archive_entries);
         apply_configured_extract_memory_limit(&request);
@@ -440,7 +456,7 @@ namespace z7::ui::filemanager {
         request.overwrite_mode = to_backend_overwrite_mode(overwrite_mode);
         request.path_mode = path_mode;
         request.eliminate_root_duplication = eliminate_root_duplication;
-        request.password = to_native_string(password);
+        request.password = to_utf8_string(password);
         request.restore_file_security = restore_file_security;
         if (!archive_entries.isEmpty()) {
             request.entries = to_utf8_string_list(archive_entries);

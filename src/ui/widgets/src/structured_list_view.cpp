@@ -12,6 +12,7 @@
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QRubberBand>
 #include <QScrollBar>
 #include <QStyleOptionViewItem>
 #include <QTimer>
@@ -50,9 +51,31 @@ namespace z7::ui::widgets {
 
         delegate_ = new StructuredListDelegate(this);
         setItemDelegate(delegate_);
+
+        rubber_band_ = new QRubberBand(QRubberBand::Rectangle, viewport());
+        rubber_band_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        rubber_band_->hide();
+
+        rubber_band_auto_scroll_timer_ = new QTimer(this);
+        rubber_band_auto_scroll_timer_->setInterval(30);
+        connect(rubber_band_auto_scroll_timer_, &QTimer::timeout, this, [this]() { auto_scroll_rubber_band(); });
     }
 
     StructuredListView::~StructuredListView() = default;
+
+    void StructuredListView::setModel(QAbstractItemModel* model) {
+        cancel_rubber_band_selection();
+        QTableView::setModel(model);
+    }
+
+    void StructuredListView::reset() {
+        cancel_rubber_band_selection();
+        left_pressed_ = false;
+        drag_in_progress_ = false;
+        defer_single_collapse_ = false;
+        press_primary_index_ = QPersistentModelIndex();
+        QTableView::reset();
+    }
 
     void StructuredListView::set_config(StructuredListConfig config) {
         config_ = std::move(config);
@@ -163,6 +186,178 @@ namespace z7::ui::widgets {
         selection_anchor_ = QPersistentModelIndex();
     }
 
+    bool StructuredListView::can_rubber_band_select() const {
+        return model() != nullptr
+            && selectionModel() != nullptr
+            && selectionMode() != QAbstractItemView::SingleSelection
+            && selectionMode() != QAbstractItemView::NoSelection;
+    }
+
+    QPoint StructuredListView::viewport_to_content(QPoint const& viewport_pos) const {
+        return viewport_pos + QPoint(horizontalHeader()->offset(), verticalHeader()->offset());
+    }
+
+    void StructuredListView::begin_rubber_band_selection(QMouseEvent const* event) {
+        if (event == nullptr)
+            return;
+
+        rubber_band_candidate_ = true;
+        rubber_band_allowed_ = can_rubber_band_select();
+        rubber_band_active_ = false;
+        rubber_band_additive_ =
+            rubber_band_allowed_
+            && (event->modifiers().testFlag(Qt::ControlModifier) || event->modifiers().testFlag(Qt::MetaModifier));
+        rubber_band_origin_content_ = viewport_to_content(event->pos());
+        rubber_band_current_viewport_pos_ = event->pos();
+        rubber_band_base_selection_ = selectionModel() != nullptr ? selectionModel()->selection() : QItemSelection();
+        selection_anchor_ = QPersistentModelIndex();
+
+        if (!rubber_band_additive_) {
+            blank_selection();
+        }
+    }
+
+    void StructuredListView::update_rubber_band_selection(QPoint const& viewport_pos) {
+        if (!rubber_band_candidate_ || !rubber_band_allowed_)
+            return;
+
+        rubber_band_current_viewport_pos_ = viewport_pos;
+        if (!rubber_band_active_) {
+            int const distance = (viewport_pos - press_viewport_pos_).manhattanLength();
+            if (distance < QApplication::startDragDistance())
+                return;
+            rubber_band_active_ = true;
+            rubber_band_->show();
+            if (hasAutoScroll()) {
+                rubber_band_auto_scroll_timer_->start();
+            }
+        }
+        update_rubber_band_geometry_and_selection();
+    }
+
+    void StructuredListView::finish_rubber_band_selection(QPoint const& viewport_pos) {
+        if (!rubber_band_candidate_)
+            return;
+        rubber_band_current_viewport_pos_ = viewport_pos;
+        if (rubber_band_active_) {
+            update_rubber_band_geometry_and_selection();
+        }
+        cancel_rubber_band_selection();
+    }
+
+    void StructuredListView::cancel_rubber_band_selection() {
+        if (rubber_band_auto_scroll_timer_ != nullptr) {
+            rubber_band_auto_scroll_timer_->stop();
+        }
+        if (rubber_band_ != nullptr) {
+            rubber_band_->hide();
+        }
+        rubber_band_candidate_ = false;
+        rubber_band_allowed_ = false;
+        rubber_band_active_ = false;
+        rubber_band_additive_ = false;
+        rubber_band_base_selection_.clear();
+    }
+
+    void StructuredListView::update_rubber_band_geometry_and_selection() {
+        if (!rubber_band_active_ || rubber_band_ == nullptr || model() == nullptr || selectionModel() == nullptr)
+            return;
+
+        QPoint const scroll_offset(horizontalHeader()->offset(), verticalHeader()->offset());
+        QPoint const current_content = viewport_to_content(rubber_band_current_viewport_pos_);
+        QRect const content_rect = QRect(rubber_band_origin_content_, current_content).normalized();
+        QRect const viewport_rect = content_rect.translated(-scroll_offset).intersected(viewport()->rect());
+        rubber_band_->setGeometry(viewport_rect);
+
+        QItemSelection band_selection;
+        int const primary = primary_column();
+        int const row_count = model()->rowCount(rootIndex());
+        if (primary >= 0
+            && primary < model()->columnCount(rootIndex())
+            && row_count > 0
+            && !horizontalHeader()->isSectionHidden(primary)) {
+            int const primary_x = horizontalHeader()->sectionPosition(primary);
+            int const primary_width = horizontalHeader()->sectionSize(primary);
+            QRect const primary_column_rect(primary_x, content_rect.top(), primary_width, content_rect.height());
+
+            if (primary_x >= 0 && content_rect.intersects(primary_column_rect)) {
+                auto first_intersecting_row = [this, row_count, &content_rect]() {
+                    int low = 0;
+                    int high = row_count;
+                    while (low < high) {
+                        int const middle = low + (high - low) / 2;
+                        int const top = verticalHeader()->sectionPosition(middle);
+                        int const bottom = top + verticalHeader()->sectionSize(middle) - 1;
+                        if (top < 0 || bottom < content_rect.top()) {
+                            low = middle + 1;
+                        } else {
+                            high = middle;
+                        }
+                    }
+                    return low;
+                };
+                auto row_after_selection = [this, row_count, &content_rect]() {
+                    int low = 0;
+                    int high = row_count;
+                    while (low < high) {
+                        int const middle = low + (high - low) / 2;
+                        int const top = verticalHeader()->sectionPosition(middle);
+                        if (top >= 0 && top <= content_rect.bottom()) {
+                            low = middle + 1;
+                        } else {
+                            high = middle;
+                        }
+                    }
+                    return low;
+                };
+
+                int const first_row = first_intersecting_row();
+                int const row_after = row_after_selection();
+                if (first_row >= 0 && first_row < row_after && row_after <= row_count) {
+                    QModelIndex const first = model()->index(first_row, primary, rootIndex());
+                    QModelIndex const last = model()->index(row_after - 1, primary, rootIndex());
+                    if (first.isValid() && last.isValid()) {
+                        band_selection.select(first, last);
+                    }
+                }
+            }
+        }
+
+        QItemSelection target_selection = rubber_band_additive_ ? rubber_band_base_selection_ : QItemSelection();
+        target_selection.merge(band_selection, QItemSelectionModel::Select);
+        selectionModel()->select(target_selection, QItemSelectionModel::ClearAndSelect);
+    }
+
+    void StructuredListView::auto_scroll_rubber_band() {
+        if (!rubber_band_active_ || !hasAutoScroll())
+            return;
+
+        int const margin = std::max(1, autoScrollMargin());
+        auto scroll_for_position = [margin](QScrollBar* bar, int position, int extent) {
+            if (bar == nullptr || bar->minimum() == bar->maximum())
+                return false;
+            int delta = 0;
+            if (position < margin) {
+                delta = -std::max(1, bar->singleStep());
+            } else if (position >= extent - margin) {
+                delta = std::max(1, bar->singleStep());
+            }
+            if (delta == 0)
+                return false;
+            int const old_value = bar->value();
+            bar->setValue(old_value + delta);
+            return bar->value() != old_value;
+        };
+
+        bool const horizontal_changed =
+            scroll_for_position(horizontalScrollBar(), rubber_band_current_viewport_pos_.x(), viewport()->width());
+        bool const vertical_changed =
+            scroll_for_position(verticalScrollBar(), rubber_band_current_viewport_pos_.y(), viewport()->height());
+        if (horizontal_changed || vertical_changed) {
+            update_rubber_band_geometry_and_selection();
+        }
+    }
+
     void StructuredListView::select_single(QModelIndex const& primary) {
         auto* sel = selectionModel();
         if (sel == nullptr || !primary.isValid())
@@ -217,8 +412,8 @@ namespace z7::ui::widgets {
         defer_single_collapse_ = false;
 
         if (!point_is_on_primary(pos)) {
-            blank_selection();
             press_primary_index_ = QPersistentModelIndex();
+            begin_rubber_band_selection(event);
             event->accept();
             return;
         }
@@ -247,6 +442,15 @@ namespace z7::ui::widgets {
 
     void StructuredListView::mouseReleaseEvent(QMouseEvent* event) {
         if (event->button() == Qt::LeftButton) {
+            if (rubber_band_candidate_) {
+                finish_rubber_band_selection(event->pos());
+                left_pressed_ = false;
+                drag_in_progress_ = false;
+                defer_single_collapse_ = false;
+                press_primary_index_ = QPersistentModelIndex();
+                event->accept();
+                return;
+            }
             bool const was_pressed = left_pressed_;
             QPersistentModelIndex const primary = press_primary_index_;
             bool const drag_happened = drag_in_progress_;
@@ -270,6 +474,15 @@ namespace z7::ui::widgets {
     }
 
     void StructuredListView::mouseMoveEvent(QMouseEvent* event) {
+        if (rubber_band_candidate_) {
+            if (event->buttons().testFlag(Qt::LeftButton)) {
+                update_rubber_band_selection(event->pos());
+            } else {
+                cancel_rubber_band_selection();
+            }
+            event->accept();
+            return;
+        }
         if (left_pressed_ && !drag_in_progress_ && press_primary_index_.isValid()) {
             int const dist = (event->pos() - press_viewport_pos_).manhattanLength();
             if (dist >= QApplication::startDragDistance()) {
@@ -309,7 +522,22 @@ namespace z7::ui::widgets {
         QTableView::leaveEvent(event);
     }
 
+    void StructuredListView::hideEvent(QHideEvent* event) {
+        cancel_rubber_band_selection();
+        left_pressed_ = false;
+        drag_in_progress_ = false;
+        defer_single_collapse_ = false;
+        press_primary_index_ = QPersistentModelIndex();
+        QTableView::hideEvent(event);
+    }
+
     void StructuredListView::keyPressEvent(QKeyEvent* event) {
+        if (event->key() == Qt::Key_Escape && rubber_band_candidate_) {
+            cancel_rubber_band_selection();
+            left_pressed_ = false;
+            event->accept();
+            return;
+        }
         if (state() == QAbstractItemView::EditingState) {
             QTableView::keyPressEvent(event);
             return;

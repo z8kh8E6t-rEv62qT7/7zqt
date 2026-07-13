@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "extract_memory_settings.h"
+#include "archive_string_codec_qt.h"
 #include "helpers.h"
 #include "official_lang_catalog.h"
 #include "password_prompt_dialog.h"
@@ -230,7 +231,7 @@ namespace z7::ui::filemanager {
             return reply;
         }
         reply.kind = z7::app::PasswordReplyKind::kProvide;
-        reply.password = value->toStdString();
+        reply.password = z7::ui::archive_support::to_utf8_string(*value);
         return reply;
     }
 

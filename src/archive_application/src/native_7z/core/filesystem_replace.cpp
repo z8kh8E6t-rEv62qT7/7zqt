@@ -1,186 +1,478 @@
 #include "core/filesystem_replace.h"
 
+#include <atomic>
+#include <cerrno>
+#include <cstddef>
+#include <cstring>
+#include <limits>
+#include <vector>
+
 #include "core/internal_results.h"
+
+#if defined(_WIN32)
+#include <Windows.h>
+#elif defined(__APPLE__)
+#include <fcntl.h>
+#include <sys/stdio.h>
+#include <unistd.h>
+#else
+#include <fcntl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 namespace z7::app {
     namespace {
 
-        AtomicReplaceFileOps const& default_atomic_replace_file_ops() {
-            static AtomicReplaceFileOps const kOps = {
-                .exists = [](fs::path const& path, std::error_code& ec) { return fs::exists(path, ec); },
-                .rename =
-                    [](fs::path const& from, fs::path const& to, std::error_code& ec) { fs::rename(from, to, ec); },
-                .remove = [](fs::path const& path, std::error_code& ec) { fs::remove(path, ec); },
-                .make_unique_sibling_path = nullptr,
-            };
-            return kOps;
-        }
+        std::atomic<uint64_t> g_transaction_sequence{1};
 
-        AtomicReplaceFileOps const& resolve_atomic_replace_file_ops(AtomicReplaceFileOps const* ops) {
-            return ops != nullptr ? *ops : default_atomic_replace_file_ops();
-        }
-
-        AtomicReplaceOptions resolve_atomic_replace_options(AtomicReplaceOptions const* options) {
-            return options != nullptr ? *options : AtomicReplaceOptions{};
-        }
-
-        bool file_exists_with_ops(fs::path const& path, std::error_code& ec, AtomicReplaceFileOps const& ops) {
-            if (ops.exists) {
-                return ops.exists(path, ec);
-            }
-            return fs::exists(path, ec);
-        }
-
-        void rename_with_ops(fs::path const& from,
-                             fs::path const& to,
-                             std::error_code& ec,
-                             AtomicReplaceFileOps const& ops) {
-            if (ops.rename) {
-                ops.rename(from, to, ec);
-                return;
-            }
-            fs::rename(from, to, ec);
-        }
-
-        void remove_with_ops(fs::path const& path, std::error_code& ec, AtomicReplaceFileOps const& ops) {
-            if (ops.remove) {
-                ops.remove(path, ec);
-                return;
-            }
-            fs::remove(path, ec);
-        }
-
-        std::optional<OperationResult> make_replace_io_failure(std::string message) {
+        std::optional<OperationResult> make_io_failure(std::string message) {
             return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo, std::move(message), 2);
         }
 
-        std::string preserved_temp_suffix(fs::path const& source_path) {
-            return " temporary file preserved at " + source_path.string();
+        bool path_exists_no_follow(fs::path const& path, std::error_code& ec) {
+            ec.clear();
+            fs::file_status const status = fs::symlink_status(path, ec);
+            if (ec == std::errc::no_such_file_or_directory) {
+                ec.clear();
+                return false;
+            }
+            return !ec && fs::status_known(status) && status.type() != fs::file_type::not_found;
+        }
+
+#if !defined(_WIN32)
+        class DirectoryFd final {
+        public:
+            explicit DirectoryFd(fs::path const& path) : fd_(::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC)) {}
+            ~DirectoryFd() {
+                if (fd_ >= 0) {
+                    ::close(fd_);
+                }
+            }
+            DirectoryFd(DirectoryFd const&) = delete;
+            DirectoryFd& operator=(DirectoryFd const&) = delete;
+            int get() const { return fd_; }
+
+        private:
+            int fd_ = -1;
+        };
+#endif
+
+        bool default_move_no_replace(fs::path const& source,
+                                     fs::path const& destination,
+                                     std::error_code& ec) {
+            ec.clear();
+            if (source.filename().empty() || destination.filename().empty()) {
+                ec = std::make_error_code(std::errc::invalid_argument);
+                return false;
+            }
+#if defined(_WIN32)
+            HANDLE const source_handle = ::CreateFileW(source.c_str(),
+                                                       DELETE | FILE_READ_ATTRIBUTES,
+                                                       FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                                       nullptr,
+                                                       OPEN_EXISTING,
+                                                       FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+                                                       nullptr);
+            if (source_handle == INVALID_HANDLE_VALUE) {
+                ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+                return false;
+            }
+            HANDLE const destination_parent = ::CreateFileW(destination.parent_path().c_str(),
+                                                            FILE_LIST_DIRECTORY | DELETE | SYNCHRONIZE,
+                                                            FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                                            nullptr,
+                                                            OPEN_EXISTING,
+                                                            FILE_FLAG_BACKUP_SEMANTICS,
+                                                            nullptr);
+            if (destination_parent == INVALID_HANDLE_VALUE) {
+                int const error = static_cast<int>(::GetLastError());
+                ::CloseHandle(source_handle);
+                ec = std::error_code(error, std::system_category());
+                return false;
+            }
+            std::wstring const destination_name = destination.filename().wstring();
+            size_t const name_bytes = destination_name.size() * sizeof(wchar_t);
+            std::vector<std::byte> storage(sizeof(FILE_RENAME_INFO) + name_bytes);
+            auto* rename_info = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
+            rename_info->ReplaceIfExists = FALSE;
+            rename_info->RootDirectory = destination_parent;
+            rename_info->FileNameLength = static_cast<DWORD>(name_bytes);
+            std::memcpy(rename_info->FileName, destination_name.data(), name_bytes);
+            bool const renamed = ::SetFileInformationByHandle(
+                source_handle, FileRenameInfo, rename_info, static_cast<DWORD>(storage.size()));
+            int const error = renamed ? ERROR_SUCCESS : static_cast<int>(::GetLastError());
+            ::CloseHandle(destination_parent);
+            ::CloseHandle(source_handle);
+            if (renamed) {
+                return true;
+            }
+            ec = std::error_code(error, std::system_category());
+            return false;
+#else
+            DirectoryFd source_parent(source.parent_path());
+            DirectoryFd destination_parent(destination.parent_path());
+            if (source_parent.get() < 0 || destination_parent.get() < 0) {
+                ec = std::error_code(errno, std::generic_category());
+                return false;
+            }
+#if defined(__APPLE__)
+            unsigned int const flags = RENAME_EXCL | RENAME_NOFOLLOW_ANY | RENAME_RESOLVE_BENEATH;
+            if (::renameatx_np(source_parent.get(),
+                               source.filename().c_str(),
+                               destination_parent.get(),
+                               destination.filename().c_str(),
+                               flags)
+                == 0) {
+                return true;
+            }
+            ec = std::error_code(errno, std::generic_category());
+            return false;
+#elif defined(SYS_renameat2)
+            constexpr unsigned int kRenameNoReplace = 1;
+            if (::syscall(SYS_renameat2,
+                          source_parent.get(),
+                          source.filename().c_str(),
+                          destination_parent.get(),
+                          destination.filename().c_str(),
+                          kRenameNoReplace)
+                == 0) {
+                return true;
+            }
+            ec = std::error_code(errno, std::generic_category());
+            return false;
+#else
+            ec = std::make_error_code(std::errc::not_supported);
+            return false;
+#endif
+#endif
+        }
+
+        bool default_remove_one(fs::path const& path, std::error_code& ec) {
+            ec.clear();
+            bool const removed = fs::remove(path, ec);
+            return removed && !ec;
+        }
+
+        std::string preserved_message(fs::path const& path) {
+            return "temporary file preserved at " + path.string();
+        }
+
+        bool same_identity(FilesystemObjectIdentity const& lhs, FilesystemObjectIdentity const& rhs) {
+            return lhs.defined && rhs.defined && lhs.volume == rhs.volume && lhs.object == rhs.object;
         }
 
     } // namespace
 
-    fs::path make_unique_sibling_path(fs::path const& path,
-                                      std::string_view suffix,
-                                      std::error_code& ec,
-                                      AtomicReplaceFileOps const* ops) {
+    FilesystemTransaction::FilesystemTransaction(fs::path directory, FilesystemTransactionOps const* ops) :
+        directory_(std::move(directory)), ops_(ops) {}
+
+    std::unique_ptr<FilesystemTransaction> FilesystemTransaction::create(fs::path const& volume_anchor,
+                                                                         std::string_view purpose,
+                                                                         std::error_code& ec,
+                                                                         FilesystemTransactionOps const* ops) {
         ec.clear();
-        AtomicReplaceFileOps const& file_ops = resolve_atomic_replace_file_ops(ops);
-        if (file_ops.make_unique_sibling_path) {
-            return file_ops.make_unique_sibling_path(path, suffix);
+        fs::path parent = volume_anchor.parent_path();
+        if (parent.empty()) {
+            ec = std::make_error_code(std::errc::invalid_argument);
+            return nullptr;
         }
 
-        fs::path const base = path.has_parent_path() ? path.parent_path() : fs::current_path(ec);
-        if (ec || base.empty()) {
-            return {};
+        std::string clean_purpose;
+        clean_purpose.reserve(purpose.size());
+        for (char ch : purpose) {
+            clean_purpose.push_back((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
+                                        ? ch
+                                        : '-');
+        }
+        if (clean_purpose.empty()) {
+            clean_purpose = "operation";
         }
 
-        std::string const file_name = path.filename().string();
-        auto const ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-        for (int i = 0; i < 64; ++i) {
+        for (uint32_t attempt = 0; attempt < 128; ++attempt) {
+            uint64_t const sequence = g_transaction_sequence.fetch_add(1, std::memory_order_relaxed);
             fs::path const candidate =
-                base / fs::path(file_name + std::string(suffix) + std::to_string(static_cast<long long>(ticks + i)));
-            std::error_code exists_ec;
-            if (!file_exists_with_ops(candidate, exists_ec, file_ops)) {
-                if (exists_ec) {
-                    ec = exists_ec;
-                    return {};
-                }
-                return candidate;
+                parent / fs::path(".z7-transaction-" + clean_purpose + "-" + std::to_string(sequence));
+            std::error_code create_ec;
+            bool const created = ops != nullptr && ops->create_private_directory
+                                   ? ops->create_private_directory(candidate, create_ec)
+                                   : create_private_directory(candidate, create_ec);
+            if (created) {
+                return std::unique_ptr<FilesystemTransaction>(new FilesystemTransaction(candidate, ops));
             }
-            if (exists_ec) {
-                ec = exists_ec;
-                return {};
+            if (create_ec != std::errc::file_exists) {
+                ec = create_ec;
+                return nullptr;
             }
         }
-
         ec = std::make_error_code(std::errc::file_exists);
-        return {};
+        return nullptr;
+    }
+
+    FilesystemTransaction::~FilesystemTransaction() {
+        if (!finished_) {
+            std::string ignored;
+            (void)finish(&ignored);
+        }
+    }
+
+    fs::path FilesystemTransaction::allocate_path(std::string_view role) {
+        std::string clean_role;
+        clean_role.reserve(role.size());
+        for (char ch : role) {
+            clean_role.push_back((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
+                                     ? ch
+                                     : '-');
+        }
+        if (clean_role.empty()) {
+            clean_role = "object";
+        }
+        return directory_ / fs::path(clean_role + "-" + std::to_string(++next_name_));
+    }
+
+    bool FilesystemTransaction::move_no_replace(fs::path const& source,
+                                                fs::path const& destination,
+                                                std::error_code& ec) const {
+        if (ops_ != nullptr && ops_->move_no_replace) {
+            return ops_->move_no_replace(source, destination, ec);
+        }
+        return default_move_no_replace(source, destination, ec);
+    }
+
+    bool FilesystemTransaction::remove_one(fs::path const& path, std::error_code& ec) const {
+        if (ops_ != nullptr && ops_->remove_one) {
+            return ops_->remove_one(path, ec);
+        }
+        return default_remove_one(path, ec);
+    }
+
+    bool FilesystemTransaction::owns(fs::path const& path) const {
+        return path.parent_path().lexically_normal() == directory_.lexically_normal();
+    }
+
+    TransactionMoveResult FilesystemTransaction::quarantine(
+        fs::path const& source, FilesystemObjectIdentity const* expected_identity) {
+        TransactionMoveResult result;
+        fs::path const stored = allocate_path("backup");
+        std::error_code ec;
+        if (!move_no_replace(source, stored, ec)) {
+            result.source_preserved = path_exists_no_follow(source, ec);
+            result.diagnostic = "failed to move object into private transaction: " + ec.message();
+            return result;
+        }
+
+        result.preserved_path = stored;
+        FilesystemObjectIdentity const moved_identity = capture_filesystem_object_identity_no_follow(stored, ec);
+        if (ec || !moved_identity.defined
+            || (expected_identity != nullptr && !same_identity(moved_identity, *expected_identity))) {
+            std::error_code restore_ec;
+            if (move_no_replace(stored, source, restore_ec)) {
+                result.source_preserved = true;
+                result.preserved_path.clear();
+                result.diagnostic = expected_identity != nullptr
+                                      ? "filesystem object identity changed before transaction"
+                                      : "failed to identify quarantined filesystem object";
+            } else {
+                result.preserved_path = stored;
+                result.diagnostic = "filesystem object identity changed before transaction; "
+                                  + preserved_message(stored) + "; restore failed: " + restore_ec.message();
+            }
+            return result;
+        }
+        result.success = true;
+        result.source_preserved = true;
+        return result;
+    }
+
+    TransactionMoveResult FilesystemTransaction::restore(fs::path const& stored, fs::path const& destination) {
+        TransactionMoveResult result;
+        result.preserved_path = stored;
+        if (!owns(stored)) {
+            result.diagnostic = "transaction refused to restore an unowned path";
+            return result;
+        }
+        std::error_code ec;
+        if (!move_no_replace(stored, destination, ec)) {
+            result.source_preserved = path_exists_no_follow(stored, ec);
+            result.destination_preserved = path_exists_no_follow(destination, ec);
+            result.diagnostic = "rollback incomplete: destination was occupied or restore failed; "
+                              + preserved_message(stored) + "; " + ec.message();
+            return result;
+        }
+        result.success = true;
+        result.destination_preserved = true;
+        result.preserved_path.clear();
+        return result;
+    }
+
+    TransactionMoveResult FilesystemTransaction::promote(fs::path const& source, fs::path const& destination) {
+        TransactionMoveResult result;
+        std::error_code ec;
+        if (!move_no_replace(source, destination, ec)) {
+            result.source_preserved = path_exists_no_follow(source, ec);
+            result.destination_preserved = path_exists_no_follow(destination, ec);
+            result.preserved_path = source;
+            result.diagnostic = "failed to commit transaction: " + ec.message();
+            if (result.source_preserved) {
+                result.diagnostic += "; " + preserved_message(source);
+            }
+            return result;
+        }
+        result.success = true;
+        result.destination_preserved = true;
+        return result;
+    }
+
+    TransactionMoveResult FilesystemTransaction::discard(
+        fs::path const& stored, FilesystemObjectIdentity const* expected_identity) {
+        TransactionMoveResult result;
+        result.preserved_path = stored;
+        if (!owns(stored)) {
+            result.diagnostic = "transaction refused to delete an unowned path";
+            return result;
+        }
+        std::error_code ec;
+        FilesystemObjectIdentity const identity = capture_filesystem_object_identity_no_follow(stored, ec);
+        if (ec || !identity.defined
+            || (expected_identity != nullptr && !same_identity(identity, *expected_identity))) {
+            result.source_preserved = !ec;
+            result.diagnostic = "transaction object identity changed; " + preserved_message(stored);
+            return result;
+        }
+        if (!remove_one(stored, ec)) {
+            result.source_preserved = true;
+            result.diagnostic = "failed to remove transaction object; " + preserved_message(stored) + "; "
+                              + ec.message();
+            return result;
+        }
+        result.success = true;
+        result.preserved_path.clear();
+        return result;
+    }
+
+    bool FilesystemTransaction::finish(std::string* diagnostic) {
+        if (finished_) {
+            return true;
+        }
+        std::error_code ec;
+        bool const removed = remove_one(directory_, ec);
+        finished_ = removed;
+        if (!removed && diagnostic != nullptr) {
+            *diagnostic = "temporary file preserved in transaction directory " + directory_.string();
+            if (ec) {
+                *diagnostic += "; " + ec.message();
+            }
+        }
+        return removed;
     }
 
     AtomicReplaceResult replace_file_atomically(fs::path const& source_path,
                                                 fs::path const& destination_path,
-                                                std::string_view backup_suffix,
-                                                AtomicReplaceFileOps const* ops,
+                                                std::string_view purpose,
+                                                FilesystemTransactionOps const* ops,
                                                 AtomicReplaceOptions const* options) {
-        AtomicReplaceFileOps const& file_ops = resolve_atomic_replace_file_ops(ops);
-        AtomicReplaceOptions const replace_options = resolve_atomic_replace_options(options);
         AtomicReplaceResult result;
         result.source_path = source_path;
         result.destination_path = destination_path;
+        AtomicReplaceOptions const resolved_options = options != nullptr ? *options : AtomicReplaceOptions{};
 
         std::error_code ec;
-        result.destination_existed = file_exists_with_ops(destination_path, ec, file_ops);
+        result.destination_existed = path_exists_no_follow(destination_path, ec);
         if (ec) {
-            result.error = make_replace_io_failure(ec.message());
-            result.source_exists = file_exists_with_ops(source_path, ec, file_ops);
+            result.error = make_io_failure("Failed to inspect replacement destination: " + ec.message());
             return result;
         }
 
-        if (!result.destination_existed) {
-            rename_with_ops(source_path, destination_path, ec, file_ops);
-            result.source_exists = file_exists_with_ops(source_path, ec, file_ops);
-            if (!ec) {
-                result.success = true;
+        std::unique_ptr<FilesystemTransaction> transaction =
+            FilesystemTransaction::create(destination_path, purpose, ec, ops);
+        if (!transaction) {
+            result.source_exists = path_exists_no_follow(source_path, ec);
+            result.error = make_io_failure("Failed to create private filesystem transaction: " + ec.message()
+                                           + (result.source_exists ? "; " + preserved_message(source_path) : ""));
+            return result;
+        }
+        result.transaction_directory = transaction->directory();
+
+        if (result.destination_existed) {
+            TransactionMoveResult backup =
+                transaction->quarantine(destination_path, resolved_options.expected_destination_identity);
+            if (!backup.success) {
+                result.stale = resolved_options.expected_destination_identity != nullptr;
+                result.source_exists = path_exists_no_follow(source_path, ec);
+                result.backup_path = backup.preserved_path;
+                result.backup_retained = !backup.preserved_path.empty();
+                result.error = make_io_failure((result.stale ? "stale archive source: " : "") + backup.diagnostic);
                 return result;
             }
-
-            std::string message = "Failed to replace archive file: " + ec.message();
-            if (result.source_exists) {
-                message += preserved_temp_suffix(source_path);
+            result.backup_path = backup.preserved_path;
+            if (resolved_options.validate_quarantined_destination) {
+                std::string validation_error;
+                if (!resolved_options.validate_quarantined_destination(result.backup_path, validation_error)) {
+                    TransactionMoveResult const restored =
+                        transaction->restore(result.backup_path, destination_path);
+                    result.stale = true;
+                    result.original_restored = restored.success;
+                    result.original_restore_failed = !restored.success;
+                    result.backup_retained = !restored.success;
+                    if (restored.success) {
+                        result.backup_path.clear();
+                    }
+                    result.source_exists = path_exists_no_follow(source_path, ec);
+                    result.error = make_io_failure("stale archive source: " + validation_error
+                                                   + (restored.success ? "" : "; " + restored.diagnostic));
+                    return result;
+                }
             }
-            result.error = make_replace_io_failure(std::move(message));
+        } else if (resolved_options.expected_destination_identity != nullptr) {
+            result.stale = true;
+            result.source_exists = path_exists_no_follow(source_path, ec);
+            result.error = make_io_failure("stale archive source: source object disappeared before commit");
             return result;
         }
 
-        std::error_code backup_path_ec;
-        result.backup_path = make_unique_sibling_path(destination_path, backup_suffix, backup_path_ec, &file_ops);
-        if (result.backup_path.empty()) {
-            result.source_exists = file_exists_with_ops(source_path, ec, file_ops);
-            std::string message = "Failed to allocate backup path for archive replacement";
-            if (backup_path_ec) {
-                message += ": " + backup_path_ec.message();
+        TransactionMoveResult promoted = transaction->promote(source_path, destination_path);
+        result.source_exists = promoted.source_preserved;
+        if (!promoted.success) {
+            if (result.destination_existed) {
+                TransactionMoveResult restored = transaction->restore(result.backup_path, destination_path);
+                result.original_restored = restored.success;
+                result.original_restore_failed = !restored.success;
+                result.backup_retained = !restored.success;
+                if (restored.success) {
+                    result.backup_path.clear();
+                }
+                if (!restored.success) {
+                    promoted.diagnostic += "; " + restored.diagnostic;
+                }
             }
-            result.error = make_replace_io_failure(std::move(message));
+            result.error = make_io_failure(promoted.diagnostic);
             return result;
         }
 
-        rename_with_ops(destination_path, result.backup_path, ec, file_ops);
-        if (ec) {
-            result.source_exists = file_exists_with_ops(source_path, ec, file_ops);
-            result.error = make_replace_io_failure(ec.message());
-            return result;
-        }
-
-        std::error_code promote_ec;
-        rename_with_ops(source_path, destination_path, promote_ec, file_ops);
-        result.source_exists = file_exists_with_ops(source_path, ec, file_ops);
-        if (!promote_ec) {
-            if (replace_options.preserve_backup_on_success) {
+        result.replacement_committed = true;
+        if (result.destination_existed && !resolved_options.preserve_backup_on_success) {
+            FilesystemObjectIdentity const backup_identity =
+                capture_filesystem_object_identity_no_follow(result.backup_path, ec);
+            TransactionMoveResult discarded = transaction->discard(result.backup_path, &backup_identity);
+            if (!discarded.success) {
                 result.backup_retained = true;
-            } else {
-                std::error_code cleanup_ec;
-                remove_with_ops(result.backup_path, cleanup_ec, file_ops);
-                result.backup_path.clear();
+                result.error = make_io_failure("Archive replacement committed, but backup cleanup failed: "
+                                               + discarded.diagnostic);
+                return result;
             }
-            result.success = true;
-            result.source_exists = false;
+            result.backup_path.clear();
+        } else if (result.destination_existed) {
+            result.backup_retained = true;
+        }
+
+        std::string finish_diagnostic;
+        if (!resolved_options.preserve_backup_on_success && !transaction->finish(&finish_diagnostic)) {
+            result.error = make_io_failure("Archive replacement committed, but transaction cleanup failed: "
+                                           + finish_diagnostic);
             return result;
         }
-
-        std::error_code restore_ec;
-        rename_with_ops(result.backup_path, destination_path, restore_ec, file_ops);
-        result.original_restored = !restore_ec;
-        result.original_restore_failed = static_cast<bool>(restore_ec);
-
-        std::string message = "Failed to replace archive file: " + promote_ec.message();
-        if (result.original_restore_failed) {
-            message += "; original archive restore also failed: " + restore_ec.message();
-        }
-        if (result.source_exists) {
-            message += preserved_temp_suffix(source_path);
-        }
-        result.error = make_replace_io_failure(std::move(message));
+        result.success = true;
+        result.source_exists = false;
         return result;
     }
 

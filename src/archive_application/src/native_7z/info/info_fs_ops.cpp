@@ -412,6 +412,12 @@ namespace z7::app {
                 return make_operation_failure<ListResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
             }
+            std::unique_lock<std::recursive_mutex> session_lock(
+                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+                return make_operation_failure<ListResult>(
+                    ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+            }
             ListResult out;
             CArc const* arc = archive_session_link(*session).GetArc();
             const HRESULT hr = list_archive_entries_from_arc(arc,
@@ -456,6 +462,12 @@ namespace z7::app {
             if (!session) {
                 return make_operation_failure<ArchivePropertiesResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
+            }
+            std::unique_lock<std::recursive_mutex> session_lock(
+                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+                return make_operation_failure<ArchivePropertiesResult>(
+                    ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
             }
             ArchivePropertiesResult out;
             CArc const* arc = archive_session_link(*session).GetArc();
@@ -547,6 +559,12 @@ namespace z7::app {
                 if (!session) {
                     return make_operation_failure<RenameResult>(
                         ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
+                }
+                std::unique_lock<std::recursive_mutex> session_lock(
+                    ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+                if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+                    return make_operation_failure<RenameResult>(
+                        ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
                 }
                 if (std::optional<OperationResult> materialize_error = ensure_archive_session_writable(
                         *session, hooks, &cancel_requested_, [this]() { return this->wait_while_paused(); });

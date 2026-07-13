@@ -398,6 +398,7 @@ namespace z7::ui::filemanager {
             panel.ui.icon_list_view->setModel(panel.proxy);
             panel.ui.icon_list_view->setModelColumn(DirectoryListModel::kNameColumn);
             panel.ui.icon_list_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
+            panel.ui.icon_list_view->setSelectionRectVisible(true);
             panel.ui.icon_list_view->setDragEnabled(true);
             panel.ui.icon_list_view->setAcceptDrops(true);
             panel.ui.icon_list_view->viewport()->setAcceptDrops(true);

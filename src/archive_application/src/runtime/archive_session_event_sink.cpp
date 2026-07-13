@@ -100,12 +100,14 @@ namespace z7::app {
         bool should_emit = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            bool const corrects_terminal_percent = snapshot_.percent >= 100 && current.percent < 100;
             snapshot_ = current;
             archive_session_helpers::Clock::time_point const now = archive_session_helpers::Clock::now();
             bool const has_terminal_percent = current.percent >= 100;
             if (last_progress_emit_ == archive_session_helpers::Clock::time_point{}
                 || now - last_progress_emit_ >= progress_interval_
-                || has_terminal_percent) {
+                || has_terminal_percent
+                || corrects_terminal_percent) {
                 last_progress_emit_ = now;
                 should_emit = true;
             }

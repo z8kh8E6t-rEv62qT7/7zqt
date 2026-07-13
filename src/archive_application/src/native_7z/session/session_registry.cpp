@@ -12,11 +12,82 @@
 #include "session/session_registry_internal.h"
 #include "third_party_adapter/callbacks_extract_run.h"
 
+#if defined(_WIN32)
+#include <Windows.h>
+#else
+#include <sys/stat.h>
+#endif
+
 namespace z7::app {
+
+    FilesystemObjectVersion capture_filesystem_object_version(std::filesystem::path const& path,
+                                                               std::error_code& ec) {
+        FilesystemObjectVersion version;
+        ec.clear();
+        version.identity = capture_filesystem_object_identity_no_follow(path, ec);
+        if (ec || !version.identity.defined) {
+            return version;
+        }
+#if defined(_WIN32)
+        HANDLE const handle = ::CreateFileW(path.c_str(),
+                                            FILE_READ_ATTRIBUTES,
+                                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                            nullptr,
+                                            OPEN_EXISTING,
+                                            FILE_FLAG_OPEN_REPARSE_POINT,
+                                            nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+            return version;
+        }
+        FILE_STANDARD_INFO standard_info{};
+        FILE_BASIC_INFO basic_info{};
+        bool const ok = ::GetFileInformationByHandleEx(
+                            handle, FileStandardInfo, &standard_info, sizeof(standard_info))
+                     && ::GetFileInformationByHandleEx(handle, FileBasicInfo, &basic_info, sizeof(basic_info));
+        int const error = ok ? ERROR_SUCCESS : static_cast<int>(::GetLastError());
+        ::CloseHandle(handle);
+        if (!ok) {
+            ec = std::error_code(error, std::system_category());
+            return version;
+        }
+        version.size = static_cast<uint64_t>(standard_info.EndOfFile.QuadPart);
+        version.mtime_ticks = basic_info.LastWriteTime.QuadPart;
+        version.change_ticks = basic_info.ChangeTime.QuadPart;
+#else
+        struct stat info {};
+        if (::lstat(path.c_str(), &info) != 0) {
+            ec = std::error_code(errno, std::generic_category());
+            return version;
+        }
+        version.size = static_cast<uint64_t>(info.st_size);
+#if defined(__APPLE__)
+        version.mtime_ticks = static_cast<int64_t>(info.st_mtimespec.tv_sec) * 1000000000LL
+                            + info.st_mtimespec.tv_nsec;
+        version.change_ticks = static_cast<int64_t>(info.st_ctimespec.tv_sec) * 1000000000LL
+                             + info.st_ctimespec.tv_nsec;
+#else
+        version.mtime_ticks = static_cast<int64_t>(info.st_mtim.tv_sec) * 1000000000LL + info.st_mtim.tv_nsec;
+        version.change_ticks = static_cast<int64_t>(info.st_ctim.tv_sec) * 1000000000LL + info.st_ctim.tv_nsec;
+#endif
+#endif
+        version.defined = true;
+        return version;
+    }
+
+    bool filesystem_object_version_matches(FilesystemObjectVersion const& lhs,
+                                           FilesystemObjectVersion const& rhs) {
+        return lhs.defined && rhs.defined && lhs.identity.defined && rhs.identity.defined
+            && lhs.identity.volume == rhs.identity.volume && lhs.identity.object == rhs.identity.object
+            && lhs.size == rhs.size && lhs.mtime_ticks == rhs.mtime_ticks
+            && lhs.change_ticks == rhs.change_ticks;
+    }
 
     namespace {
 
         constexpr std::string_view kSessionRootBackupSuffix = ".z7-session-backup-";
+
+        std::optional<OperationResult> commit_archive_session_to_root(ArchiveOpenSession& session);
 
         void remove_path_tree(std::filesystem::path const& path) {
             if (path.empty()) {
@@ -26,10 +97,13 @@ namespace z7::app {
             std::filesystem::remove_all(path, ec);
         }
 
-        std::filesystem::path make_temp_session_dir() {
+        std::filesystem::path make_temp_session_dir(std::filesystem::path preferred_base = {}) {
             namespace fs = std::filesystem;
             std::error_code ec;
-            fs::path base = fs::temp_directory_path(ec);
+            fs::path base = std::move(preferred_base);
+            if (base.empty()) {
+                base = fs::temp_directory_path(ec);
+            }
             if (ec || base.empty()) {
                 base = fs::path(".");
             }
@@ -38,7 +112,7 @@ namespace z7::app {
                 base / (std::string("z7-session-write-") + std::to_string(static_cast<long long>(ticks)));
             for (int i = 0; i < 32; ++i) {
                 std::error_code dir_ec;
-                if (fs::create_directories(candidate, dir_ec)) {
+                if (create_private_directory(candidate, dir_ec)) {
                     return candidate;
                 }
                 candidate =
@@ -160,7 +234,9 @@ namespace z7::app {
                 return std::nullopt;
             }
 
-            fs::path dir = make_temp_session_dir();
+            std::string const& source_path = ArchiveOpenSessionNativeAccess::source_archive_path(session);
+            fs::path const preferred_base = source_path.empty() ? fs::path{} : fs::path(source_path).parent_path();
+            fs::path dir = make_temp_session_dir(preferred_base);
             if (dir.empty()) {
                 return make_operation_failure<OperationResult>(
                     ArchiveErrorDomain::kIo, "Failed to create writable session temp directory", 2);
@@ -168,11 +244,9 @@ namespace z7::app {
             fs::path const file_path = session_materialized_file_path(session, dir);
 
             if (state.memory_buffer.empty()) {
-                std::string const& source_path = ArchiveOpenSessionNativeAccess::source_archive_path(session);
                 if (!source_path.empty()) {
                     std::error_code copy_ec;
-                    fs::copy_file(fs::path(source_path), file_path, fs::copy_options::overwrite_existing, copy_ec);
-                    if (copy_ec) {
+                    if (!copy_regular_file_with_metadata(fs::path(source_path), file_path, copy_ec)) {
                         remove_path_tree(dir);
                         return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo,
                                                                        "Failed to materialize writable root archive: "
@@ -279,6 +353,7 @@ namespace z7::app {
 
             std::string const format_hint = archive_session_format_token(session);
             auto next_state = std::make_unique<ArchiveOpenSessionState>();
+            next_state->source_version = archive_session_state(session).source_version;
             next_state->temp_dir = dir_path;
             next_state->temp_file = std::make_unique<std::filesystem::path>(file_path);
             next_state->archive_link = std::make_unique<CArchiveLink>();
@@ -307,7 +382,7 @@ namespace z7::app {
                                                    &wrong_password,
                                                    &password);
             if (hr != S_OK) {
-                if (password_requested || wrong_password || !password.empty()) {
+                if (password_requested || wrong_password) {
                     return make_operation_failure<OperationResult>(
                         ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
                 }
@@ -329,11 +404,17 @@ namespace z7::app {
                                                                         ArchiveBackendHooks const& hooks,
                                                                         std::atomic<bool>* cancel_requested,
                                                                         std::function<bool()> wait_while_paused) {
-            (void)cancel_requested;
-            (void)wait_while_paused;
             auto const& parent = ArchiveOpenSessionNativeAccess::parent(session);
             if (parent == nullptr) {
                 return invalid_request("Parent session commit requires a parent session");
+            }
+
+            if (ArchiveOpenSessionNativeAccess::parent_generation_at_open(session)
+                != ArchiveOpenSessionNativeAccess::generation(*parent)) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo,
+                    "Nested archive changed after this session was opened; refusing to overwrite a newer version",
+                    2);
             }
 
             ArchiveOpenSessionState& state = archive_session_state(session);
@@ -350,8 +431,37 @@ namespace z7::app {
                     2);
             }
 
+            if (std::optional<OperationResult> writable_error =
+                    ensure_archive_session_writable(*parent, hooks, cancel_requested, wait_while_paused);
+                writable_error.has_value()) {
+                return writable_error;
+            }
+            ArchiveOpenSessionState const& parent_state = archive_session_state(*parent);
+            if (parent_state.temp_file == nullptr || parent_state.temp_file->empty()) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo, "Parent session has no writable backing file", 2);
+            }
+
+            SessionMutationBackup parent_backup;
+            if (std::optional<OperationResult> backup_error =
+                    create_archive_session_mutation_backup(*parent, &parent_backup);
+                backup_error.has_value()) {
+                return backup_error;
+            }
+            bool const parent_was_dirty = ArchiveOpenSessionNativeAccess::dirty(*parent);
+            uint64_t const parent_generation = ArchiveOpenSessionNativeAccess::generation(*parent);
+            auto restore_parent = [&]() -> std::optional<OperationResult> {
+                std::optional<OperationResult> restore_error = restore_archive_session_mutation_backup(
+                    *parent, parent_backup, hooks, nullptr, []() { return true; });
+                if (!restore_error.has_value()) {
+                    ArchiveOpenSessionNativeAccess::set_dirty(*parent, parent_was_dirty);
+                    ArchiveOpenSessionNativeAccess::set_generation(*parent, parent_generation);
+                }
+                return restore_error;
+            };
+
             AddRequest request;
-            request.session_token = parent->token();
+            request.archive_path = parent_state.temp_file->string();
             request.format = parent_format;
             request.update_mode = "update";
             if (parent->password_defined()) {
@@ -363,10 +473,46 @@ namespace z7::app {
             NativeArchiveBackend backend;
             AddResult const add_result = backend.add(request, hooks);
             if (!add_result.ok) {
+                if (std::optional<OperationResult> restore_error = restore_parent(); restore_error.has_value()) {
+                    return restore_error;
+                }
                 return static_cast<OperationResult>(add_result);
             }
 
+            if (std::optional<OperationResult> refresh_error =
+                    refresh_archive_session_from_backing_file(*parent, hooks, cancel_requested, wait_while_paused);
+                refresh_error.has_value()) {
+                if (std::optional<OperationResult> restore_error = restore_parent(); restore_error.has_value()) {
+                    return restore_error;
+                }
+                return refresh_error;
+            }
+
+            ArchiveOpenSessionNativeAccess::set_dirty(*parent, true);
+            ArchiveOpenSessionNativeAccess::increment_generation(*parent);
+
+            auto const registered_parent = ArchiveSessionRegistry::instance().find(parent->token());
+            if (registered_parent.get() != parent.get()) {
+                std::optional<OperationResult> propagation_error;
+                if (ArchiveOpenSessionNativeAccess::parent(*parent) != nullptr) {
+                    propagation_error =
+                        commit_archive_session_to_parent(*parent, hooks, cancel_requested, wait_while_paused);
+                } else {
+                    propagation_error = commit_archive_session_to_root(*parent);
+                }
+                if (propagation_error.has_value()) {
+                    if (std::optional<OperationResult> restore_error = restore_parent(); restore_error.has_value()) {
+                        return restore_error;
+                    }
+                    return propagation_error;
+                }
+            }
+
             ArchiveOpenSessionNativeAccess::set_dirty(session, false);
+            if (std::optional<OperationResult> cleanup_error = discard_archive_session_mutation_backup(parent_backup);
+                cleanup_error.has_value()) {
+                emit_log_event(hooks, OperationStage::kRunning, OutputChannel::kStdErr, cleanup_error->error.message);
+            }
             return std::nullopt;
         }
 
@@ -381,10 +527,66 @@ namespace z7::app {
                 return make_operation_failure<OperationResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Root session is missing its source archive path", 7);
             }
+            if (!state.source_version.has_value() || !state.source_version->defined) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo, "Root session is missing its source version", 2);
+            }
 
-            AtomicReplaceResult const replace_result =
-                replace_file_atomically(*state.temp_file, std::filesystem::path(source_path), kSessionRootBackupSuffix);
+            std::error_code metadata_ec;
+            if (!copy_file_metadata(std::filesystem::path(source_path), *state.temp_file, metadata_ec)) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo,
+                    "Failed to preserve root archive metadata before commit: " + metadata_ec.message(),
+                    2);
+            }
+
+            FilesystemObjectVersion const expected_version = *state.source_version;
+            std::error_code current_version_ec;
+            FilesystemObjectVersion const current_version = capture_filesystem_object_version(
+                std::filesystem::path(source_path), current_version_ec);
+            if (current_version_ec || !filesystem_object_version_matches(expected_version, current_version)) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo,
+                    "stale archive source: source version changed before commit"
+                        + (current_version_ec ? std::string(": ") + current_version_ec.message() : ""),
+                    2);
+            }
+            AtomicReplaceOptions replace_options;
+            replace_options.expected_destination_identity = &expected_version.identity;
+            replace_options.validate_quarantined_destination =
+                [expected_version](std::filesystem::path const& quarantined, std::string& diagnostic) {
+                    std::error_code version_ec;
+                    FilesystemObjectVersion const actual = capture_filesystem_object_version(quarantined, version_ec);
+                    // Moving into the transaction can update change-time on
+                    // some filesystems. Identity, size and mtime remain stable
+                    // and are checked after the atomic move; change-time was
+                    // checked immediately before it above.
+                    if (!version_ec && actual.defined && actual.identity.defined
+                        && actual.identity.volume == expected_version.identity.volume
+                        && actual.identity.object == expected_version.identity.object
+                        && actual.size == expected_version.size
+                        && actual.mtime_ticks == expected_version.mtime_ticks) {
+                        return true;
+                    }
+                    diagnostic = "source version changed before commit";
+                    if (version_ec) {
+                        diagnostic += ": " + version_ec.message();
+                    }
+                    return false;
+                };
+            AtomicReplaceResult const replace_result = replace_file_atomically(
+                *state.temp_file,
+                std::filesystem::path(source_path),
+                kSessionRootBackupSuffix,
+                nullptr,
+                &replace_options);
             if (!replace_result.success) {
+                if (replace_result.replacement_committed) {
+                    ArchiveOpenSessionNativeAccess::set_dirty(session, false);
+                    state.temp_file.reset();
+                    remove_path_tree(state.temp_dir);
+                    state.temp_dir.clear();
+                }
                 if (replace_result.error.has_value()) {
                     return replace_result.error;
                 }
@@ -393,6 +595,9 @@ namespace z7::app {
             }
 
             ArchiveOpenSessionNativeAccess::set_dirty(session, false);
+            state.temp_file.reset();
+            remove_path_tree(state.temp_dir);
+            state.temp_dir.clear();
             return std::nullopt;
         }
 
@@ -537,8 +742,12 @@ namespace z7::app {
             return materialize_error;
         }
 
-        return reopen_archive_session_from_path(
+        std::optional<OperationResult> reopen_error = reopen_archive_session_from_path(
             session, file_path, dir_path, hooks, cancel_requested, std::move(wait_while_paused));
+        if (reopen_error.has_value()) {
+            remove_path_tree(dir_path);
+        }
+        return reopen_error;
     }
 
     std::optional<OperationResult> refresh_archive_session_from_backing_file(ArchiveOpenSession& session,
@@ -551,6 +760,114 @@ namespace z7::app {
         }
         return reopen_archive_session_from_path(
             session, *state.temp_file, state.temp_dir, hooks, cancel_requested, std::move(wait_while_paused));
+    }
+
+    std::optional<OperationResult> create_archive_session_mutation_backup(ArchiveOpenSession const& session,
+                                                                          SessionMutationBackup* backup) {
+        if (backup == nullptr) {
+            return invalid_request("Session mutation backup requires an output path");
+        }
+        ArchiveOpenSessionState const& state = archive_session_state(session);
+        if (state.temp_file == nullptr || state.temp_file->empty()) {
+            return invalid_request("Session mutation backup requires a writable backing file");
+        }
+        std::error_code ec;
+        std::unique_ptr<FilesystemTransaction> transaction =
+            FilesystemTransaction::create(*state.temp_file, "session-mutation", ec);
+        if (!transaction) {
+            return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo,
+                                                           "Failed to create private session mutation transaction"
+                                                               + (ec ? std::string(": ") + ec.message() : ""),
+                                                           2);
+        }
+        backup->transaction = std::shared_ptr<FilesystemTransaction>(std::move(transaction));
+        backup->path = backup->transaction->allocate_path("backup");
+        if (!copy_regular_file_with_metadata(*state.temp_file, backup->path, ec)) {
+            std::error_code cleanup_ec;
+            std::filesystem::remove(backup->path, cleanup_ec);
+            backup->path.clear();
+            backup->transaction.reset();
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo, "Failed to create session mutation backup: " + ec.message(), 2);
+        }
+        backup->identity = capture_filesystem_object_identity_no_follow(backup->path, ec);
+        if (ec || !backup->identity.defined) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo, "Failed to identify session mutation backup: " + ec.message(), 2);
+        }
+        return std::nullopt;
+    }
+
+    std::optional<OperationResult> restore_archive_session_mutation_backup(ArchiveOpenSession& session,
+                                                                           SessionMutationBackup const& backup,
+                                                                           ArchiveBackendHooks const& hooks,
+                                                                           std::atomic<bool>* cancel_requested,
+                                                                           std::function<bool()> wait_while_paused) {
+        ArchiveOpenSessionState const& state = archive_session_state(session);
+        if (state.temp_file == nullptr || state.temp_file->empty() || backup.empty() || backup.transaction == nullptr) {
+            return invalid_request("Session mutation restore requires backing and backup files");
+        }
+        std::filesystem::path const backing_path = *state.temp_file;
+        std::error_code ec;
+        if (!filesystem_object_matches_identity_no_follow(backup.path, backup.identity, ec)) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo,
+                "Session mutation backup is missing or changed; current backing file was preserved"
+                    + (ec ? std::string(": ") + ec.message() : ""),
+                2);
+        }
+
+        FilesystemObjectIdentity const failed_identity =
+            capture_filesystem_object_identity_no_follow(backing_path, ec);
+        if (ec || !failed_identity.defined) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo, "Failed to identify current session backing file: " + ec.message(), 2);
+        }
+        TransactionMoveResult const quarantined = backup.transaction->quarantine(backing_path, &failed_identity);
+        if (!quarantined.success) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo, "Failed to preserve current session backing file: " + quarantined.diagnostic, 2);
+        }
+        TransactionMoveResult const restored = backup.transaction->restore(backup.path, backing_path);
+        if (!restored.success) {
+            TransactionMoveResult const failed_restore =
+                backup.transaction->restore(quarantined.preserved_path, backing_path);
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo,
+                "Failed to restore session mutation backup: " + restored.diagnostic
+                    + (failed_restore.success ? "; current backing file restored"
+                                              : "; " + failed_restore.diagnostic),
+                2);
+        }
+        TransactionMoveResult const discarded_failed =
+            backup.transaction->discard(quarantined.preserved_path, &failed_identity);
+        if (!discarded_failed.success) {
+            return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo, discarded_failed.diagnostic, 2);
+        }
+        return refresh_archive_session_from_backing_file(
+            session, hooks, cancel_requested, std::move(wait_while_paused));
+    }
+
+    std::optional<OperationResult> discard_archive_session_mutation_backup(SessionMutationBackup const& backup) {
+        if (backup.empty()) {
+            return std::nullopt;
+        }
+        if (backup.transaction == nullptr) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo, "Session mutation backup has no owning transaction", 2);
+        }
+        TransactionMoveResult const discarded = backup.transaction->discard(backup.path, &backup.identity);
+        if (!discarded.success) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo,
+                "Failed to remove session mutation backup: " + discarded.diagnostic,
+                2);
+        }
+        std::string cleanup_diagnostic;
+        if (!backup.transaction->finish(&cleanup_diagnostic)) {
+            return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo, cleanup_diagnostic, 2);
+        }
+        return std::nullopt;
     }
 
     OperationResult close_native_archive_session(ArchiveSessionRegistry& registry,
@@ -571,22 +888,52 @@ namespace z7::app {
                 ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
         }
 
+        std::vector<std::shared_ptr<ArchiveOpenSession>> lock_chain;
+        for (std::shared_ptr<ArchiveOpenSession> cursor = session; cursor != nullptr;
+             cursor = ArchiveOpenSessionNativeAccess::parent(*cursor)) {
+            lock_chain.push_back(cursor);
+        }
+        std::reverse(lock_chain.begin(), lock_chain.end());
+        std::vector<std::unique_lock<std::recursive_mutex>> session_locks;
+        session_locks.reserve(lock_chain.size());
+        for (std::shared_ptr<ArchiveOpenSession> const& locked_session : lock_chain) {
+            session_locks.emplace_back(ArchiveOpenSessionNativeAccess::operation_mutex(*locked_session));
+        }
+
+        std::optional<OperationResult> deferred_close_error;
         if (ArchiveOpenSessionNativeAccess::dirty(*session)) {
             if (ArchiveOpenSessionNativeAccess::parent(*session) != nullptr) {
-                if (std::optional<OperationResult> commit_error =
-                        commit_archive_session_to_parent(*session, hooks, cancel_requested, wait_while_paused);
-                    commit_error.has_value()) {
+                auto const& parent = ArchiveOpenSessionNativeAccess::parent(*session);
+                if (ArchiveOpenSessionNativeAccess::parent_generation_at_open(*session)
+                    != ArchiveOpenSessionNativeAccess::generation(*parent)) {
+                    deferred_close_error = make_operation_failure<OperationResult>(
+                        ArchiveErrorDomain::kIo,
+                        "Nested archive changed after this session was opened; stale changes were discarded",
+                        2);
+                    ArchiveOpenSessionNativeAccess::set_dirty(*session, false);
+                } else if (std::optional<OperationResult> commit_error =
+                               commit_archive_session_to_parent(*session, hooks, cancel_requested, wait_while_paused);
+                           commit_error.has_value()) {
                     return std::move(*commit_error);
                 }
             } else {
                 if (std::optional<OperationResult> commit_error = commit_archive_session_to_root(*session);
                     commit_error.has_value()) {
-                    return std::move(*commit_error);
+                    if (commit_error->summary.find("stale") == std::string::npos) {
+                        return std::move(*commit_error);
+                    }
+                    deferred_close_error = std::move(*commit_error);
+                    ArchiveOpenSessionNativeAccess::set_dirty(*session, false);
+                    ArchiveOpenSessionState& state = archive_session_state(*session);
+                    state.temp_file.reset();
+                    remove_path_tree(state.temp_dir);
+                    state.temp_dir.clear();
                 }
             }
         }
 
         std::shared_ptr<ArchiveOpenSession> dropped;
+        ArchiveOpenSessionNativeAccess::set_closed(*session, true);
         {
             std::lock_guard<std::mutex> lock(registry.mutex_);
             auto it = registry.sessions_.find(token.value);
@@ -598,6 +945,9 @@ namespace z7::app {
             registry.sessions_.erase(it);
         }
         dropped.reset();
+        if (deferred_close_error.has_value()) {
+            return std::move(*deferred_close_error);
+        }
         return make_operation_success<OperationResult>("Session closed");
     }
 

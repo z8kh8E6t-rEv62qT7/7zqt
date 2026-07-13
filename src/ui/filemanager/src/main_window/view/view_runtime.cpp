@@ -295,6 +295,8 @@ namespace z7::ui::filemanager {
                     icon_view->set_alternative_selection_mode(display_settings_.alternative_selection_mode);
                 }
                 panel.ui.icon_list_view->setSelectionMode(selection_mode);
+                panel.ui.icon_list_view->setSelectionRectVisible(selection_mode != QAbstractItemView::SingleSelection
+                                                                 && selection_mode != QAbstractItemView::NoSelection);
             }
             if (should_reload_archive_view) {
                 panels_to_reload_archive_view.push_back(i);

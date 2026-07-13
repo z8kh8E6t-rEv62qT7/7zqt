@@ -3,12 +3,17 @@
 
 #pragma once
 
+#include <unordered_map>
+#include <unordered_set>
+
 #include "callback_base.h"
+#include "core/filesystem_replace.h"
 #include "core/internal.h"
 
 namespace z7::app {
 
     class NativeFileOutStream;
+    class ExtractBudgetTracker;
 
     class NativeExtractCallback final : public IArchiveExtractCallback,
                                         public ICryptoGetTextPassword,
@@ -32,8 +37,11 @@ namespace z7::app {
                               bool restore_file_security,
                               uint64_t total_files,
                               std::optional<ExtractBudget> budget = std::nullopt,
+                              std::shared_ptr<ExtractBudgetTracker> budget_tracker = nullptr,
                               uint64_t configured_memory_limit_bytes = 0,
-                              bool configured_memory_limit_defined = false);
+                              bool configured_memory_limit_defined = false,
+                              std::string archive_metadata_source_path = {});
+        ~NativeExtractCallback();
 
         // When configured, extracted bytes are written into the caller-owned buffer
         // instead of a filesystem path. Used by the in-memory nested-archive
@@ -58,6 +66,7 @@ namespace z7::app {
         std::vector<ExtractMaterializedEntry> take_materialized_entries();
         std::vector<ExtractRollbackEntry> take_rollback_entries();
         void finish_deferred_links();
+        void discard_pending_outputs();
 
         // Budget state accessors (called after Extract() returns, before Release()).
         bool budget_triggered() const;
@@ -84,6 +93,8 @@ namespace z7::app {
                                     UInt32* answer_flags) throw() override;
 
     private:
+        static constexpr size_t kDataSymlinkLimit = 1u << 12;
+
         struct ResolvedPath {
             fs::path destination_path;
             fs::path authorized_root;
@@ -106,6 +117,21 @@ namespace z7::app {
             UInt32 attrib = 0;
         };
 
+        struct ExtractItemTimes {
+            CFiTime ctime{};
+            CFiTime atime{};
+            CFiTime mtime{};
+            bool ctime_defined = false;
+            bool atime_defined = false;
+            bool mtime_defined = false;
+        };
+
+        struct ExtractItemAlternateStreamInfo {
+            bool is_alternate_stream = false;
+            UInt32 parent_index = static_cast<UInt32>(-1);
+            std::string attribute_name;
+        };
+
         struct ExtractItemLinkInfo {
             enum class Type {
                 kNone,
@@ -119,12 +145,17 @@ namespace z7::app {
         };
 
         struct OutputTarget {
+            UInt32 archive_index = 0;
             std::string archive_entry_path;
             std::string absolute_output_path;
             fs::path output_path;
             fs::path destination_path;
             fs::path authorized_root;
+            fs::path temp_path;
             fs::path backup_path;
+            std::shared_ptr<FilesystemTransaction> transaction;
+            std::string collided_archive_entry_path;
+            FilesystemObjectIdentity original_identity;
             bool had_original = false;
             bool overwrote_existing = false;
             bool renamed_from_collision = false;
@@ -140,6 +171,75 @@ namespace z7::app {
         struct DeferredHardLink {
             OutputTarget output_target;
             fs::path target_path;
+            ExtractItemAttributes attributes;
+            ExtractItemTimes times;
+        };
+
+        struct PendingLink {
+            OutputTarget output_target;
+            ExtractItemAttributes attributes;
+            ExtractItemTimes times;
+            FilesystemObjectIdentity materialized_identity;
+            bool is_symlink = false;
+        };
+
+        struct PendingDataSymlink {
+            OutputTarget output_target;
+            ExtractItemAttributes attributes;
+            ExtractItemTimes times;
+            std::vector<uint8_t> target_data;
+            uint64_t budget_bytes_reserved = 0;
+        };
+
+        struct DeferredDirectoryMetadata {
+            UInt32 archive_index = 0;
+            fs::path output_path;
+            ExtractItemAttributes attributes;
+            ExtractItemTimes times;
+        };
+        struct DirectoryOriginalMetadata {
+            fs::perms permissions = fs::perms::unknown;
+            fs::file_time_type mtime{};
+            bool mtime_defined = false;
+        };
+
+        struct PendingDirectory {
+            OutputTarget output_target;
+            ExtractItemAttributes attributes;
+            ExtractItemTimes times;
+            bool created = false;
+            bool budget_file_reserved = false;
+            FilesystemObjectIdentity materialized_identity;
+            bool original_metadata_defined = false;
+            fs::perms original_permissions = fs::perms::unknown;
+            fs::file_time_type original_mtime{};
+            bool original_mtime_defined = false;
+        };
+
+        struct MaterializedOutputTarget {
+            fs::path output_path;
+            fs::path authorized_root;
+            FilesystemObjectIdentity identity;
+            ExtractItemTimes times;
+            bool is_directory = false;
+            bool is_symlink = false;
+        };
+
+        struct PendingAlternateStream {
+            UInt32 archive_index = 0;
+            UInt32 parent_index = static_cast<UInt32>(-1);
+            std::string archive_entry_path;
+            std::string attribute_name;
+            fs::path output_path;
+            fs::path authorized_root;
+            FilesystemObjectIdentity output_identity;
+            ExtractItemTimes parent_times;
+            bool parent_is_symlink = false;
+            fs::path temp_path;
+            FilesystemObjectIdentity temp_identity;
+            std::shared_ptr<FilesystemTransaction> transaction;
+            NativeFileOutStream* owned_stream = nullptr;
+            uint64_t bytes_written = 0;
         };
         struct PendingEntry;
 
@@ -147,40 +247,77 @@ namespace z7::app {
         void emit_progress_snapshot() const;
         void record_io_error(std::string const& message);
         void record_nonfatal_warning(std::string const& message);
+        void record_partial_warning(std::string const& message);
+        std::optional<std::string> materialized_collision_archive_entry(fs::path const& destination_path) const;
         bool close_pending_entry_stream_locked(PendingEntry& pending_entry, std::string* close_error_message);
+        bool commit_pending_entry_locked(PendingEntry& pending_entry, std::string* error_message);
+        void discard_pending_entry_locked(PendingEntry& pending_entry);
+        bool close_pending_alternate_stream(PendingAlternateStream& pending, std::string* error_message);
+        std::optional<std::string> commit_pending_alternate_stream(PendingAlternateStream const& pending) const;
+        std::optional<std::string> discard_pending_alternate_stream(PendingAlternateStream& pending,
+                                                                    bool release_budget_bytes);
+        bool cleanup_materialized_target_locked(OutputTarget const& target,
+                                                FilesystemObjectIdentity const& materialized_identity,
+                                                std::string* error_message);
+        HRESULT finalize_unreported_item_if_needed();
         HRESULT read_item_attributes(UInt32 index, ExtractItemAttributes& attributes) const;
+        HRESULT read_item_times(UInt32 index, ExtractItemTimes& times) const;
         HRESULT read_item_link_info(UInt32 index, ExtractItemLinkInfo& link_info) const;
+        HRESULT read_item_alternate_stream_info(UInt32 index, ExtractItemAlternateStreamInfo& info) const;
         std::optional<std::string> apply_item_attributes(fs::path const& output_path,
-                                                         ExtractItemAttributes const& attributes) const;
-        bool create_output_directories_with_zone_identifier(fs::path const& directory_path, std::error_code& ec) const;
+                                                         ExtractItemAttributes const& attributes,
+                                                         bool finalize_directory = false) const;
+        std::optional<std::string>
+        apply_item_times(fs::path const& output_path, ExtractItemTimes const& times, bool is_symlink = false) const;
+        std::optional<std::string> apply_item_security(UInt32 index, fs::path const& output_path) const;
+        bool create_output_directories_with_zone_identifier(fs::path const& directory_path, std::error_code& ec);
         bool path_is_within_authorized_root(fs::path const& candidate,
                                             fs::path const& authorized_root,
                                             std::error_code& ec) const;
         bool ensure_output_path_is_authorized(fs::path const& path_to_resolve,
                                               fs::path const& authorized_root,
                                               fs::path const& reported_output_path);
-        bool try_reserve_declared_budget_bytes(uint64_t declared_size);
-        void release_reserved_budget_bytes(uint64_t declared_size);
+        bool try_reserve_budget_file();
+        void release_budget_file();
         HRESULT prepare_output_target(UInt32 index,
                                       std::string const& output_item_path,
                                       ResolvedPath const& resolved_path,
+                                      bool is_directory,
                                       OutputTarget& target,
                                       bool& skipped);
         std::optional<std::string> prepare_link_creation_plan(OutputTarget const& output_target,
                                                               ExtractItemLinkInfo const& link_info,
                                                               LinkCreationPlan& plan) const;
-        std::optional<std::string>
-        materialize_link(OutputTarget const& output_target, LinkCreationPlan const& plan, bool allow_defer);
+        std::optional<std::string> materialize_link(OutputTarget const& output_target,
+                                                    LinkCreationPlan const& plan,
+                                                    bool allow_defer,
+                                                    FilesystemObjectIdentity* materialized_identity = nullptr);
+        std::optional<std::string> materialize_data_symlink(PendingDataSymlink const& pending,
+                                                            FilesystemObjectIdentity* materialized_identity);
         std::optional<std::string> create_symbolic_link(fs::path const& output_path, std::string const& target) const;
         std::optional<std::string> create_hard_link(fs::path const& output_path, fs::path const& target_path) const;
-        void record_materialized_output_locked(OutputTarget const& target, uint64_t bytes_written, bool is_directory);
+        void record_materialized_output_locked(OutputTarget const& target,
+                                               uint64_t bytes_written,
+                                               bool is_directory,
+                                               FilesystemObjectIdentity const& output_identity,
+                                               ExtractItemTimes const& times);
+        void remember_materialized_output_locked(UInt32 archive_index,
+                                                 fs::path const& output_path,
+                                                 fs::path const& authorized_root,
+                                                 FilesystemObjectIdentity const& identity,
+                                                 ExtractItemTimes const& times,
+                                                 bool is_directory,
+                                                 bool is_symlink = false);
+        void remember_skipped_archive_item(UInt32 archive_index);
         void apply_zone_identifier_to_output(fs::path const& output_path, bool is_directory) const;
         HRESULT check_canceled() const;
         OverwriteDecision
         ask_overwrite_decision(fs::path const& destination_path, UInt32 index, std::string const& item_path);
         ResolvedPath resolve_destination_path(std::string const& item_path, bool is_directory) const;
         std::string normalize_path_for_output(std::string item_path) const;
+        static std::string report_path_without_following_leaf(fs::path const& path);
         static bool is_absolute_item_path(std::string const& path);
+        static bool validate_output_item_path(std::string const& path, std::string& reason);
         static std::string base_name_for_no_paths(std::string const& path);
         bool request_selects_single_logical_root() const;
 
@@ -189,6 +326,7 @@ namespace z7::app {
         fs::path output_dir_;
         ArchiveBackendHooks const& hooks_;
         std::string archive_path_;
+        std::string archive_metadata_source_path_;
         std::vector<std::string> selected_entries_;
         OverwriteMode overwrite_mode_ = OverwriteMode::kAsk;
         ExtractPathMode path_mode_ = ExtractPathMode::kFullPaths;
@@ -226,31 +364,47 @@ namespace z7::app {
 
         struct PendingEntry {
             std::string archive_entry_path;
+            UInt32 archive_index = 0;
             std::string absolute_output_path;
             fs::path output_path;
             fs::path destination_path;
+            fs::path authorized_root;
+            fs::path temp_path;
             fs::path backup_path;
+            std::shared_ptr<FilesystemTransaction> transaction;
+            std::string collided_archive_entry_path;
+            FilesystemObjectIdentity original_identity;
+            FilesystemObjectIdentity temp_identity;
             bool had_original = false;
             bool overwrote_existing = false;
             bool renamed_from_collision = false;
             bool preserve_backup_on_commit = false;
-            uint64_t declared_size = 0; // kpidSize from archive header
-            bool budget_bytes_reserved = false;
+            bool budget_file_reserved = false;
+            uint64_t bytes_written = 0;
             ExtractItemAttributes attributes;
+            ExtractItemTimes times;
             NativeFileOutStream* owned_stream = nullptr;
         };
 
         std::vector<ExtractMaterializedEntry> materialized_entries_;
         std::vector<ExtractRollbackEntry> rollback_entries_;
         std::vector<DeferredHardLink> deferred_hard_links_;
+        std::unordered_map<std::string, UInt32> inode_hard_link_source_indices_;
+        std::unordered_map<UInt32, MaterializedOutputTarget> materialized_output_targets_;
+        std::unordered_set<UInt32> skipped_archive_indices_;
+        std::vector<std::pair<fs::path, fs::path>> directory_destination_remaps_;
+        std::vector<std::string> skipped_directory_prefixes_;
+        std::vector<DeferredDirectoryMetadata> deferred_directory_metadata_;
+        std::unordered_map<std::string, DirectoryOriginalMetadata> directory_original_metadata_;
         std::optional<PendingEntry> pending_entry_;
+        std::optional<PendingDirectory> pending_directory_;
+        std::optional<PendingLink> pending_link_;
+        std::optional<PendingDataSymlink> pending_data_symlink_;
+        std::optional<PendingAlternateStream> pending_alternate_stream_;
+        std::optional<fs::path> pending_deferred_hard_link_output_;
 
         // Budget enforcement (optional). Set by constructor when request.budget is present.
-        std::optional<ExtractBudget> budget_;
-        std::atomic<uint64_t> budget_files_seen_{0};
-        std::atomic<uint64_t> budget_bytes_seen_{0};
-        std::atomic<bool> budget_triggered_{false};
-        std::string budget_trigger_reason_; // protected by mutex_
+        std::shared_ptr<ExtractBudgetTracker> budget_tracker_;
 
         // In-memory sink (optional). When non-null, GetStream skips all filesystem
         // bookkeeping and writes into this buffer up to buffer_sink_max_size_.

@@ -41,7 +41,14 @@ namespace z7::app {
     inline constexpr uint64_t kHashProgressStepBytes = 1 << 21;
     inline constexpr uint32_t kDefaultBenchIterations = 10;
 
+    struct FilesystemObjectIdentity {
+        uint64_t volume = 0;
+        uint64_t object = 0;
+        bool defined = false;
+    };
+
     class NativeUpdateOperationCallback;
+    class FilesystemTransaction;
     template <typename TRequest, typename TResult>
     class OperationRunner;
 
@@ -98,8 +105,15 @@ namespace z7::app {
                              std::optional<BenchmarkTypedSummary> const& benchmark_summary = std::nullopt);
 
     bool ensure_parent_dir(fs::path const& path, std::error_code& ec);
+    bool create_private_directory(fs::path const& path, std::error_code& ec);
     bool remove_path_any(fs::path const& path, std::error_code& ec);
+    FilesystemObjectIdentity capture_filesystem_object_identity_no_follow(fs::path const& path, std::error_code& ec);
+    bool filesystem_object_matches_identity_no_follow(fs::path const& path,
+                                                      FilesystemObjectIdentity const& identity,
+                                                      std::error_code& ec);
     bool copy_path_any(fs::path const& src, fs::path const& dst, bool overwrite, std::error_code& ec);
+    bool copy_regular_file_with_metadata(fs::path const& src, fs::path const& dst, std::error_code& ec);
+    bool copy_file_metadata(fs::path const& src, fs::path const& dst, std::error_code& ec);
     bool move_path_to_recycle_bin(fs::path const& path, std::error_code& ec);
     ArchiveError map_hresult_to_archive_error(int hr);
     int load_codecs_shared(CCodecs& codecs);
@@ -141,6 +155,11 @@ namespace z7::app {
                                         bool* out_password_requested = nullptr,
                                         bool* out_wrong_password = nullptr,
                                         std::string* out_password = nullptr);
+
+    // Complete-data operations must not consume the partial item set that some
+    // multi-volume handlers expose while reporting an open error. Listing and
+    // property browsing intentionally do not call this validator.
+    std::optional<ArchiveError> complete_operation_open_error(CArchiveLink const& archive_link);
 
     struct OpenArchiveReadState {
         CCodecs codecs;

@@ -368,7 +368,14 @@ namespace z7::app {
                 prompt.reason_kind =
                     wrong_password ? PasswordPromptReason::kWrongPassword : PasswordPromptReason::kPasswordRequired;
                 prompt.reason = wrong_password ? "wrong_password" : "password_required";
-                PasswordReply const reply = hooks_.ask_password(prompt);
+                PasswordReply reply;
+                try {
+                    reply = hooks_.ask_password(prompt);
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    password_requested_ = true;
+                    return E_FAIL;
+                }
                 if (reply.kind == PasswordReplyKind::kProvide) {
                     password_value = reply.password;
                     password_defined = true;
@@ -445,7 +452,12 @@ namespace z7::app {
             prompt.skip_archive_supported = (flags & NRequestMemoryUseFlags::k_SkipArc_IsExpected) != 0;
             prompt.report_only = (flags & NRequestMemoryUseFlags::k_IsReport) != 0;
 
-            MemoryLimitReply const reply = hooks_.ask_memory_limit(prompt);
+            MemoryLimitReply reply;
+            try {
+                reply = hooks_.ask_memory_limit(prompt);
+            } catch (...) {
+                return E_FAIL;
+            }
             switch (reply.action) {
                 case MemoryLimitAction::kAllowOnce:
                     *answer_flags = NRequestMemoryAnswerFlags::k_Allow;

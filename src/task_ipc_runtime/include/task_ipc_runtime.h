@@ -27,6 +27,8 @@ namespace z7::task_ipc_runtime {
     };
 
     struct TaskIpcAddPayload {
+        // Filesystem paths and passwords are opaque user input. Producers and
+        // consumers must not trim or normalize them during IPC transport.
         QString archive_path;
         QString archive_type;
         QString update_mode;
@@ -50,6 +52,24 @@ namespace z7::task_ipc_runtime {
         bool encrypt_headers_defined = false;
         bool encrypt_headers = false;
         QString encryption_method;
+        bool symbolic_links_defined = false;
+        bool symbolic_links = false;
+        bool hard_links_defined = false;
+        bool hard_links = false;
+        bool alternate_streams_defined = false;
+        bool alternate_streams = false;
+        bool file_security_defined = false;
+        bool file_security = false;
+        bool preserve_access_time = false;
+        bool write_mtime_defined = false;
+        bool write_mtime = false;
+        bool write_ctime_defined = false;
+        bool write_ctime = false;
+        bool write_atime_defined = false;
+        bool write_atime = false;
+        bool set_archive_mtime = false;
+        // Handler method properties only (for example -mqs=on). Command-level
+        // switches such as -snl/-snh/-ssp/-stl use the typed fields above.
         QStringList extra_parameters;
         QStringList input_paths;
     };

@@ -57,8 +57,12 @@ namespace z7::app {
     };
 
     struct ExtractBudget {
-        std::optional<uint64_t> max_files; // max entries (files + dirs) to extract
-        std::optional<uint64_t> max_bytes; // max total declared unpacked bytes
+        // Limits count only successfully materialized files/directories. Skipped
+        // and failed entries do not consume the file budget.
+        std::optional<uint64_t> max_files;
+        // Enforced against bytes actually accepted by output streams. Declared
+        // sizes are used only for an early conservative preflight.
+        std::optional<uint64_t> max_bytes;
         BudgetExceededAction on_exceeded = BudgetExceededAction::kFailAndRollback;
     };
 
@@ -69,6 +73,9 @@ namespace z7::app {
     };
 
     struct ExtractRequest {
+        // Filesystem source when session_token is absent. In token mode this
+        // value is ignored; display naming and security metadata provenance are
+        // derived from the trusted session chain.
         std::string archive_path;
         // Optional multi-archive extraction source list.
         std::vector<std::string> archive_paths;
@@ -86,7 +93,7 @@ namespace z7::app {
         std::vector<std::string> entries;
         std::vector<ExtractPathRemap> path_remaps;
         // Optional extraction budget. When set, backend stops early if the total
-        // number of extracted entries or total declared bytes would exceed the limit.
+        // number of materialized entries or actual output bytes would exceed the limit.
         // Default nullopt = no budget, behaviour identical to previous semantics.
         std::optional<ExtractBudget> budget;
     };

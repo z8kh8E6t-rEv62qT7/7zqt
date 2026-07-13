@@ -49,7 +49,7 @@ namespace z7::ui::gui {
                         }
                         return std::nullopt;
                     }
-                    if (payload.add->archive_path.trimmed().isEmpty()) {
+                    if (payload.add->archive_path.isEmpty()) {
                         if (error_message != nullptr) {
                             *error_message = QStringLiteral("Missing archive path for add command.");
                         }
@@ -57,7 +57,7 @@ namespace z7::ui::gui {
                     }
                     AddTaskSpec spec;
                     spec.show_dialog = payload.show_dialog;
-                    spec.archive_path = z7::ui::archive_support::to_native_string(payload.add->archive_path.trimmed());
+                    spec.archive_path = z7::ui::archive_support::to_native_string(payload.add->archive_path);
                     spec.archive_type = z7::ui::archive_support::to_native_string(payload.add->archive_type.trimmed());
                     spec.update_mode = z7::ui::archive_support::to_native_string(payload.add->update_mode.trimmed());
                     spec.raw_update_switch =
@@ -76,11 +76,27 @@ namespace z7::ui::gui {
                         z7::ui::archive_support::to_native_string(payload.add->solid_block_size.trimmed());
                     spec.thread_count = z7::ui::archive_support::to_native_string(payload.add->thread_count.trimmed());
                     spec.volume_size = z7::ui::archive_support::to_native_string(payload.add->volume_size.trimmed());
-                    spec.password = z7::ui::archive_support::to_native_string(payload.add->password.trimmed());
+                    spec.password = z7::ui::archive_support::to_utf8_string(payload.add->password);
                     spec.encrypt_headers_defined = payload.add->encrypt_headers_defined;
                     spec.encrypt_headers = payload.add->encrypt_headers;
                     spec.encryption_method =
                         z7::ui::archive_support::to_native_string(payload.add->encryption_method.trimmed());
+                    spec.symbolic_links_defined = payload.add->symbolic_links_defined;
+                    spec.symbolic_links = payload.add->symbolic_links;
+                    spec.hard_links_defined = payload.add->hard_links_defined;
+                    spec.hard_links = payload.add->hard_links;
+                    spec.alternate_streams_defined = payload.add->alternate_streams_defined;
+                    spec.alternate_streams = payload.add->alternate_streams;
+                    spec.file_security_defined = payload.add->file_security_defined;
+                    spec.file_security = payload.add->file_security;
+                    spec.preserve_access_time = payload.add->preserve_access_time;
+                    spec.write_mtime_defined = payload.add->write_mtime_defined;
+                    spec.write_mtime = payload.add->write_mtime;
+                    spec.write_ctime_defined = payload.add->write_ctime_defined;
+                    spec.write_ctime = payload.add->write_ctime;
+                    spec.write_atime_defined = payload.add->write_atime_defined;
+                    spec.write_atime = payload.add->write_atime;
+                    spec.set_archive_mtime = payload.add->set_archive_mtime;
                     for (QString const& value : payload.add->raw_update_switches) {
                         spec.raw_update_switches.push_back(z7::ui::archive_support::to_native_string(value.trimmed()));
                     }
@@ -88,7 +104,7 @@ namespace z7::ui::gui {
                         spec.extra_parameters.push_back(z7::ui::archive_support::to_native_string(value.trimmed()));
                     }
                     for (QString const& value : payload.add->input_paths) {
-                        spec.input_paths.push_back(z7::ui::archive_support::to_native_string(value.trimmed()));
+                        spec.input_paths.push_back(z7::ui::archive_support::to_native_string(value));
                     }
                     return GuiTaskSpec{std::move(spec)};
                 }
@@ -102,7 +118,7 @@ namespace z7::ui::gui {
                     }
                     ExtractTaskSpec spec;
                     spec.show_dialog = payload.show_dialog;
-                    spec.output_dir = z7::ui::archive_support::to_native_string(payload.extract->output_dir.trimmed());
+                    spec.output_dir = z7::ui::archive_support::to_native_string(payload.extract->output_dir);
                     spec.split_dest_enabled = payload.extract->split_dest_enabled;
                     spec.split_dest_name =
                         z7::ui::archive_support::to_native_string(payload.extract->split_dest_name.trimmed());
@@ -114,7 +130,7 @@ namespace z7::ui::gui {
                     spec.restore_file_security = payload.extract->restore_file_security;
                     spec.zone_id_mode =
                         z7::ui::archive_support::to_native_string(payload.extract->zone_id_mode.trimmed());
-                    spec.password = z7::ui::archive_support::to_native_string(payload.extract->password.trimmed());
+                    spec.password = z7::ui::archive_support::to_utf8_string(payload.extract->password);
                     if (payload.show_dialog) {
                         spec.path_mode.clear();
                     } else {
@@ -124,13 +140,13 @@ namespace z7::ui::gui {
                     for (auto const& remap : payload.extract->path_remaps) {
                         ExtractPathRemap task_remap;
                         task_remap.match_kind = convert_remap_match_kind(remap.match_kind);
-                        task_remap.source_path = z7::ui::archive_support::to_native_string(remap.source_path.trimmed());
+                        task_remap.source_path = z7::ui::archive_support::to_utf8_string(remap.source_path);
                         task_remap.destination_path =
-                            z7::ui::archive_support::to_native_string(remap.destination_path.trimmed());
+                            z7::ui::archive_support::to_native_string(remap.destination_path);
                         spec.path_remaps.push_back(std::move(task_remap));
                     }
                     for (QString const& value : payload.extract->archive_inputs) {
-                        spec.archive_inputs.push_back(z7::ui::archive_support::to_native_string(value.trimmed()));
+                        spec.archive_inputs.push_back(z7::ui::archive_support::to_native_string(value));
                     }
                     return GuiTaskSpec{std::move(spec)};
                 }
@@ -142,13 +158,13 @@ namespace z7::ui::gui {
                         }
                         return std::nullopt;
                     }
-                    if (payload.archive_export->root_archive_path.trimmed().isEmpty()) {
+                    if (payload.archive_export->root_archive_path.isEmpty()) {
                         if (error_message != nullptr) {
                             *error_message = QStringLiteral("Archive export command requires root archive path.");
                         }
                         return std::nullopt;
                     }
-                    if (payload.archive_export->output_dir.trimmed().isEmpty()) {
+                    if (payload.archive_export->output_dir.isEmpty()) {
                         if (error_message != nullptr) {
                             *error_message = QStringLiteral("Archive export command requires output directory.");
                         }
@@ -156,11 +172,11 @@ namespace z7::ui::gui {
                     }
                     ArchiveExportTaskSpec spec;
                     spec.root_archive_path =
-                        z7::ui::archive_support::to_native_string(payload.archive_export->root_archive_path.trimmed());
+                        z7::ui::archive_support::to_native_string(payload.archive_export->root_archive_path);
                     spec.root_archive_type =
                         z7::ui::archive_support::to_native_string(payload.archive_export->root_archive_type.trimmed());
                     spec.output_dir =
-                        z7::ui::archive_support::to_native_string(payload.archive_export->output_dir.trimmed());
+                        z7::ui::archive_support::to_native_string(payload.archive_export->output_dir);
                     spec.overwrite_mode =
                         z7::ui::archive_support::to_native_string(payload.archive_export->overwrite_mode.trimmed());
                     spec.path_mode =
@@ -170,22 +186,22 @@ namespace z7::ui::gui {
                     spec.zone_id_mode =
                         z7::ui::archive_support::to_native_string(payload.archive_export->zone_id_mode.trimmed());
                     spec.password =
-                        z7::ui::archive_support::to_native_string(payload.archive_export->password.trimmed());
+                        z7::ui::archive_support::to_utf8_string(payload.archive_export->password);
                     spec.path_remaps.reserve(static_cast<size_t>(payload.archive_export->path_remaps.size()));
                     for (auto const& remap : payload.archive_export->path_remaps) {
                         ExtractPathRemap task_remap;
                         task_remap.match_kind = convert_remap_match_kind(remap.match_kind);
-                        task_remap.source_path = z7::ui::archive_support::to_native_string(remap.source_path.trimmed());
+                        task_remap.source_path = z7::ui::archive_support::to_utf8_string(remap.source_path);
                         task_remap.destination_path =
-                            z7::ui::archive_support::to_native_string(remap.destination_path.trimmed());
+                            z7::ui::archive_support::to_native_string(remap.destination_path);
                         spec.path_remaps.push_back(std::move(task_remap));
                     }
                     for (QString const& value : payload.archive_export->nested_archive_entries) {
                         spec.nested_archive_entries.push_back(
-                            z7::ui::archive_support::to_native_string(value.trimmed()));
+                            z7::ui::archive_support::to_utf8_string(value));
                     }
                     for (QString const& value : payload.archive_export->archive_entry_paths) {
-                        spec.archive_entry_paths.push_back(z7::ui::archive_support::to_native_string(value.trimmed()));
+                        spec.archive_entry_paths.push_back(z7::ui::archive_support::to_utf8_string(value));
                     }
                     return GuiTaskSpec{std::move(spec)};
                 }
@@ -198,7 +214,7 @@ namespace z7::ui::gui {
                         return std::nullopt;
                     }
                     if (payload.open.has_value()) {
-                        QString const open_archive_path = payload.open->archive_path.trimmed();
+                        QString const open_archive_path = payload.open->archive_path;
                         if (open_archive_path.isEmpty()) {
                             if (error_message != nullptr) {
                                 *error_message = QStringLiteral("Archive-aware test command requires archive path.");
@@ -207,22 +223,22 @@ namespace z7::ui::gui {
                         }
                         ArchiveTestTaskSpec spec;
                         spec.archive_path =
-                            z7::ui::archive_support::to_native_string(payload.open->archive_path.trimmed());
+                            z7::ui::archive_support::to_native_string(payload.open->archive_path);
                         spec.archive_type =
                             z7::ui::archive_support::to_native_string(payload.open->archive_type.trimmed());
                         for (QString const& value : payload.open->nested_archive_entries) {
                             spec.nested_archive_entries.push_back(
-                                z7::ui::archive_support::to_native_string(value.trimmed()));
+                                z7::ui::archive_support::to_utf8_string(value));
                         }
                         for (QString const& value : payload.test->archive_inputs) {
                             spec.archive_entry_paths.push_back(
-                                z7::ui::archive_support::to_native_string(value.trimmed()));
+                                z7::ui::archive_support::to_utf8_string(value));
                         }
                         return GuiTaskSpec{std::move(spec)};
                     }
                     TestTaskSpec spec;
                     for (QString const& value : payload.test->archive_inputs) {
-                        spec.archive_inputs.push_back(z7::ui::archive_support::to_native_string(value.trimmed()));
+                        spec.archive_inputs.push_back(z7::ui::archive_support::to_native_string(value));
                     }
                     return GuiTaskSpec{std::move(spec)};
                 }
@@ -235,7 +251,7 @@ namespace z7::ui::gui {
                         return std::nullopt;
                     }
                     if (payload.open.has_value()) {
-                        if (payload.open->archive_path.trimmed().isEmpty()) {
+                        if (payload.open->archive_path.isEmpty()) {
                             if (error_message != nullptr) {
                                 *error_message = QStringLiteral("Archive-aware hash command requires archive path.");
                             }
@@ -243,25 +259,25 @@ namespace z7::ui::gui {
                         }
                         ArchiveHashTaskSpec spec;
                         spec.archive_path =
-                            z7::ui::archive_support::to_native_string(payload.open->archive_path.trimmed());
+                            z7::ui::archive_support::to_native_string(payload.open->archive_path);
                         spec.archive_type =
                             z7::ui::archive_support::to_native_string(payload.open->archive_type.trimmed());
                         spec.hash_method =
                             z7::ui::archive_support::to_native_string(payload.hash->hash_method.trimmed());
                         for (QString const& value : payload.open->nested_archive_entries) {
                             spec.nested_archive_entries.push_back(
-                                z7::ui::archive_support::to_native_string(value.trimmed()));
+                                z7::ui::archive_support::to_utf8_string(value));
                         }
                         for (QString const& value : payload.hash->input_paths) {
                             spec.archive_entry_paths.push_back(
-                                z7::ui::archive_support::to_native_string(value.trimmed()));
+                                z7::ui::archive_support::to_utf8_string(value));
                         }
                         return GuiTaskSpec{std::move(spec)};
                     }
                     HashTaskSpec spec;
                     spec.hash_method = z7::ui::archive_support::to_native_string(payload.hash->hash_method.trimmed());
                     for (QString const& value : payload.hash->input_paths) {
-                        spec.input_paths.push_back(z7::ui::archive_support::to_native_string(value.trimmed()));
+                        spec.input_paths.push_back(z7::ui::archive_support::to_native_string(value));
                     }
                     return GuiTaskSpec{std::move(spec)};
                 }
@@ -294,12 +310,12 @@ namespace z7::ui::gui {
                         return std::nullopt;
                     }
                     OpenTaskSpec spec;
-                    spec.archive_path = z7::ui::archive_support::to_native_string(payload.open->archive_path.trimmed());
+                    spec.archive_path = z7::ui::archive_support::to_native_string(payload.open->archive_path);
                     spec.archive_type = z7::ui::archive_support::to_native_string(payload.open->archive_type.trimmed());
-                    spec.entry_path = z7::ui::archive_support::to_native_string(payload.open->entry_path.trimmed());
+                    spec.entry_path = z7::ui::archive_support::to_utf8_string(payload.open->entry_path);
                     for (QString const& value : payload.open->nested_archive_entries) {
                         spec.nested_archive_entries.push_back(
-                            z7::ui::archive_support::to_native_string(value.trimmed()));
+                            z7::ui::archive_support::to_utf8_string(value));
                     }
                     return GuiTaskSpec{std::move(spec)};
                 }

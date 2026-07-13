@@ -34,8 +34,8 @@ namespace z7::ui::gui {
         apply_persistent_format_options(current_format_id(), &initial);
         set_combo_data_or_text(volume_combo_, z7::ui::archive_support::from_native_string(initial.volume_size));
 
-        password_edit_->setText(z7::ui::archive_support::from_native_string(initial.password));
-        reenter_password_edit_->setText(z7::ui::archive_support::from_native_string(initial.password));
+        password_edit_->setText(z7::ui::archive_support::from_utf8_string(initial.password));
+        reenter_password_edit_->setText(z7::ui::archive_support::from_utf8_string(initial.password));
         show_password_checkbox_->setChecked(saved_show_password());
         encrypt_headers_checkbox_->setChecked(initial_or_saved_encrypt_headers(initial));
 

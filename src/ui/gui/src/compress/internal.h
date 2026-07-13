@@ -9,7 +9,11 @@
 
 class QComboBox;
 
-namespace z7::ui::gui::compress_internal {
+namespace z7::ui::gui {
+
+    struct CompressCommandOptions;
+
+namespace compress_internal {
 
     struct FormatRule {
         QString id;
@@ -50,5 +54,8 @@ namespace z7::ui::gui::compress_internal {
     QString size_token_for_bytes(uint64_t bytes);
     QString size_label_for_bytes(uint64_t bytes);
     uint64_t auto_solid_size_bytes(FormatRule const& rule, QString const& method, int level, uint64_t dictionary_size);
+    void parse_advanced_options(QString const& text, CompressCommandOptions* out);
+    QString advanced_options_text(CompressCommandOptions const& options);
 
-} // namespace z7::ui::gui::compress_internal
+} // namespace compress_internal
+} // namespace z7::ui::gui

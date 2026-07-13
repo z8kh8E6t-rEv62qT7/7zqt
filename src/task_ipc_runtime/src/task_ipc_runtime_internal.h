@@ -291,6 +291,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         bool pending_owner_notification_ = false;
         std::atomic_bool stop_waiter_{false};
         std::thread waiter_thread_;
+        std::unique_ptr<QSystemSemaphore> cancel_semaphore_owner_;
     };
 
     quint64 next_posix_task_session_id();

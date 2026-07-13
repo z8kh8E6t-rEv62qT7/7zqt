@@ -511,9 +511,19 @@ namespace z7::apps::gui {
                 spec.path_mode = to_add_path_mode(options.UpdateOptions.PathMode);
                 spec.create_sfx = options.UpdateOptions.SfxMode;
                 spec.delete_after_compressing = options.UpdateOptions.DeleteAfterCompressing;
+                spec.symbolic_links_defined = options.UpdateOptions.SymLinks.Def;
+                spec.symbolic_links = options.UpdateOptions.SymLinks.Val;
+                spec.hard_links_defined = options.UpdateOptions.HardLinks.Def;
+                spec.hard_links = options.UpdateOptions.HardLinks.Val;
+                spec.alternate_streams_defined = options.UpdateOptions.AltStreams.Def;
+                spec.alternate_streams = options.UpdateOptions.AltStreams.Val;
+                spec.file_security_defined = options.UpdateOptions.NtSecurity.Def;
+                spec.file_security = options.UpdateOptions.NtSecurity.Val;
+                spec.preserve_access_time = options.UpdateOptions.PreserveATime;
+                spec.set_archive_mtime = options.UpdateOptions.SetArcMTime;
                 for (unsigned i = 0; i < options.Properties.Size(); ++i) {
                     CProperty const& property = options.Properties[i];
-                    std::string parameter = to_native_string(from_ustring(property.Name));
+                    std::string parameter = "-m" + to_native_string(from_ustring(property.Name));
                     if (!property.Value.IsEmpty()) {
                         parameter += '=';
                         parameter += to_native_string(from_ustring(property.Value));

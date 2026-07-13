@@ -58,7 +58,7 @@ namespace z7::app {
             fs::path candidate = base / (std::string("z7-session-") + std::to_string(static_cast<long long>(ticks)));
             for (int i = 0; i < 32; ++i) {
                 std::error_code dir_ec;
-                if (fs::create_directories(candidate, dir_ec)) {
+                if (create_private_directory(candidate, dir_ec)) {
                     return candidate;
                 }
                 candidate = base / (std::string("z7-session-") + std::to_string(static_cast<long long>(ticks + i + 1)));
@@ -76,26 +76,29 @@ namespace z7::app {
 
         // Extract a single entry of the parent archive into `sink` using the
         // standard extract callback wired with a buffer sink.
-        HRESULT extract_entry_to_buffer(ArchiveOpenSession& parent,
-                                        UInt32 entry_index,
-                                        std::string const& password,
-                                        size_t size_budget,
-                                        std::vector<uint8_t>& sink,
-                                        std::atomic<bool>* cancel_requested,
-                                        std::function<bool()> wait_while_paused) {
+        ExtractInvocationStatus extract_entry_to_buffer(ArchiveOpenSession& parent,
+                                                        UInt32 entry_index,
+                                                        std::string const& password,
+                                                        size_t size_budget,
+                                                        std::vector<uint8_t>& sink,
+                                                        ArchiveBackendHooks const& hooks,
+                                                        std::atomic<bool>* cancel_requested,
+                                                        std::function<bool()> wait_while_paused) {
             CArchiveLink& link = archive_session_link(parent);
             CArc const* arc = link.GetArc();
             if (arc == nullptr || arc->Archive == nullptr) {
-                return E_FAIL;
+                ExtractInvocationStatus status;
+                status.hresult = E_FAIL;
+                return status;
             }
 
             sink.clear();
             sink.reserve(std::min<size_t>(size_budget, 1u << 16));
 
-            ArchiveBackendHooks no_hooks;
+            ArchiveBackendHooks const parent_hooks = make_session_password_hooks(parent, hooks);
             auto* callback = new NativeExtractCallback(arc->Archive,
                                                        std::filesystem::path{},
-                                                       no_hooks,
+                                                       parent_hooks,
                                                        cancel_requested,
                                                        std::move(wait_while_paused),
                                                        parent.display_path(),
@@ -111,9 +114,7 @@ namespace z7::app {
             callback->set_buffer_sink(&sink, size_budget);
 
             UInt32 const indices[1] = {entry_index};
-            const HRESULT hr = arc->Archive->Extract(indices, 1, /*testMode=*/0, callback);
-            callback->Release();
-            return hr;
+            return invoke_archive_extract_with_callback(arc->Archive, indices, 1, /*test_mode=*/false, callback);
         }
 
         // Try to obtain a seekable IInStream for `entry_index` from the parent
@@ -228,6 +229,8 @@ namespace z7::app {
         auto child = std::make_shared<ArchiveOpenSession>();
         ArchiveOpenSessionNativeAccess::set_display_path(*child, display_path);
         ArchiveOpenSessionNativeAccess::set_parent(*child, parent);
+        ArchiveOpenSessionNativeAccess::set_parent_generation_at_open(
+            *child, ArchiveOpenSessionNativeAccess::generation(*parent));
         ArchiveOpenSessionNativeAccess::set_entry_path_from_parent(*child, resolved_entry_path);
         if (parent->password_defined()) {
             child->set_password(parent->password());
@@ -277,13 +280,15 @@ namespace z7::app {
                                                                         &wrong_password,
                                                                         &password);
                 if (open_hr == S_OK) {
-                    child->set_password(std::move(password));
+                    if (!password.empty()) {
+                        child->set_password(std::move(password));
+                    }
                     auto holder_heap = std::make_shared<ParentStreamRefHolder>(std::move(holder));
                     child_state.stream_ref_holder = std::static_pointer_cast<void>(holder_heap);
                     finalize_success(OpenArchiveSessionResult::Strategy::kStream);
                     return result;
                 }
-                if (password_requested || wrong_password || !password.empty()) {
+                if (password_requested || wrong_password) {
                     static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
                         ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
                     return result;
@@ -305,18 +310,32 @@ namespace z7::app {
                                           : compute_nested_open_budget(child->depth());
         {
             std::vector<uint8_t> buffer;
-            const HRESULT extract_hr = extract_entry_to_buffer(*parent,
-                                                               resolved_index,
-                                                               child->password(),
-                                                               effective_budget,
-                                                               buffer,
-                                                               cancel_requested,
-                                                               wait_while_paused);
-            if (extract_hr == E_ABORT) {
+            ExtractInvocationStatus const extract_status = extract_entry_to_buffer(*parent,
+                                                                                   resolved_index,
+                                                                                   child->password(),
+                                                                                   effective_budget,
+                                                                                   buffer,
+                                                                                   hooks,
+                                                                                   cancel_requested,
+                                                                                   wait_while_paused);
+            if (extract_status.password_requested || extract_status.wrong_password) {
+                static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
+                return result;
+            }
+            if (extract_status.hresult == E_ABORT) {
                 static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
                 return result;
             }
-            if (extract_hr == S_OK && !buffer.empty()) {
+            if (extract_status.hresult == S_OK && extract_status.error_count != 0) {
+                static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo,
+                    extract_status.diagnostic.empty() ? "Failed to extract embedded archive entry"
+                                                      : extract_status.diagnostic,
+                    2);
+                return result;
+            }
+            if (extract_status.hresult == S_OK && !buffer.empty()) {
                 child_state.memory_buffer = std::move(buffer);
 
                 auto holder = std::make_shared<StreamRefHolder>();
@@ -347,12 +366,14 @@ namespace z7::app {
                                                                         &wrong_password,
                                                                         &password);
                 if (open_hr == S_OK) {
-                    child->set_password(std::move(password));
+                    if (!password.empty()) {
+                        child->set_password(std::move(password));
+                    }
                     child_state.stream_ref_holder = std::static_pointer_cast<void>(holder);
                     finalize_success(OpenArchiveSessionResult::Strategy::kMemory);
                     return result;
                 }
-                if (password_requested || wrong_password || !password.empty()) {
+                if (password_requested || wrong_password) {
                     static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
                         ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
                     return result;
@@ -387,10 +408,10 @@ namespace z7::app {
                 return result;
             }
 
-            ArchiveBackendHooks no_hooks;
+            ArchiveBackendHooks const parent_hooks = make_session_password_hooks(*parent, hooks);
             auto* callback = new NativeExtractCallback(parent_arc->Archive,
                                                        dir,
-                                                       no_hooks,
+                                                       parent_hooks,
                                                        cancel_requested,
                                                        wait_while_paused,
                                                        parent->display_path(),
@@ -404,13 +425,25 @@ namespace z7::app {
                                                        false,
                                                        1);
             UInt32 const indices[1] = {resolved_index};
-            const HRESULT ex_hr = parent_arc->Archive->Extract(indices, 1, /*testMode=*/0, callback);
-            callback->Release();
-            if (ex_hr != S_OK) {
+            ExtractInvocationStatus const extract_status =
+                invoke_archive_extract_with_callback(parent_arc->Archive, indices, 1, /*test_mode=*/false, callback);
+            if (extract_status.password_requested || extract_status.wrong_password) {
                 remove_path_tree(dir);
-                static_cast<OperationResult&>(result) = (ex_hr == E_ABORT)
-                                                          ? make_operation_canceled<OperationResult>()
-                                                          : make_operation_failure_from_hresult<OperationResult>(ex_hr);
+                static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
+                return result;
+            }
+            if (extract_status.hresult != S_OK || extract_status.error_count != 0) {
+                remove_path_tree(dir);
+                if (extract_status.hresult == E_ABORT) {
+                    static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
+                } else if (extract_status.error_count != 0 && !extract_status.diagnostic.empty()) {
+                    static_cast<OperationResult&>(result) =
+                        make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo, extract_status.diagnostic, 2);
+                } else {
+                    static_cast<OperationResult&>(result) =
+                        make_operation_failure_from_hresult<OperationResult>(extract_status.hresult);
+                }
                 return result;
             }
 
@@ -454,7 +487,7 @@ namespace z7::app {
                                                         &wrong_password,
                                                         &password);
             if (open_hr != S_OK) {
-                if (password_requested || wrong_password || !password.empty()) {
+                if (password_requested || wrong_password) {
                     static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
                         ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
                 } else {
@@ -465,7 +498,9 @@ namespace z7::app {
                 return result;
             }
 
-            child->set_password(std::move(password));
+            if (!password.empty()) {
+                child->set_password(std::move(password));
+            }
             finalize_success(OpenArchiveSessionResult::Strategy::kTempFile);
             return result;
         }

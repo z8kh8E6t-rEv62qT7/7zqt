@@ -21,6 +21,7 @@ namespace z7::app {
         // reads from the stream instead of opening `filePath` from disk.
         HRESULT prepare_open_options(std::string const& display_path,
                                      std::string const& archive_type_hint,
+                                     bool recursive_autodetect,
                                      CCodecs& codecs,
                                      CObjectVector<COpenType>& types,
                                      CIntVector& excluded_formats,
@@ -29,6 +30,12 @@ namespace z7::app {
             const HRESULT type_res = prepare_open_types_for_archive(archive_type_hint, codecs, types);
             if (type_res != S_OK) {
                 return type_res;
+            }
+            if (recursive_autodetect && archive_type_hint.empty()) {
+                // An empty type vector is the upstream signal to keep opening a
+                // handler's main subfile.  The old synthetic non-recursive type
+                // stopped path operations at DMG/GPT/container layers.
+                types.Clear();
             }
 
             excluded_formats.Clear();
@@ -83,7 +90,7 @@ namespace z7::app {
 
         COpenOptions open_options;
         const HRESULT prep_res = prepare_open_options(
-            archive_path, archive_type_hint, codecs, types, excluded_formats, nullptr, open_options);
+            archive_path, archive_type_hint, true, codecs, types, excluded_formats, nullptr, open_options);
         if (prep_res != S_OK) {
             return prep_res;
         }
@@ -105,13 +112,18 @@ namespace z7::app {
         }
 
         IOpenCallbackUI* callback_ui = open_callback ? open_callback.get() : nullptr;
-        const HRESULT open_res = archive_link.Open2(open_options, callback_ui);
+        // Path-based operations match the original extract/list pipeline: open
+        // through container and filesystem layers (for example DMG -> GPT ->
+        // HFS/APFS) and operate on the deepest supported archive.  Stream-based
+        // parent-session opens below intentionally remain one explicit layer.
+        const HRESULT open_res = archive_link.Open_Strict(open_options, callback_ui);
         if (open_callback) {
             if (out_password_requested != nullptr) {
                 *out_password_requested = open_callback->password_requested();
             }
             if (out_wrong_password != nullptr) {
-                *out_wrong_password = open_callback->wrong_password();
+                *out_wrong_password = open_callback->wrong_password()
+                                   || (open_res != S_OK && open_callback->password_defined());
             }
             if (out_password != nullptr) {
                 *out_password = open_callback->password();
@@ -173,7 +185,7 @@ namespace z7::app {
 
         COpenOptions open_options;
         const HRESULT prep_res = prepare_open_options(
-            display_path, archive_type_hint, codecs, types, excluded_formats, in_stream, open_options);
+            display_path, archive_type_hint, false, codecs, types, excluded_formats, in_stream, open_options);
         if (prep_res != S_OK) {
             return prep_res;
         }
@@ -201,7 +213,8 @@ namespace z7::app {
                 *out_password_requested = open_callback->password_requested();
             }
             if (out_wrong_password != nullptr) {
-                *out_wrong_password = open_callback->wrong_password();
+                *out_wrong_password = open_callback->wrong_password()
+                                   || (open_res != S_OK && open_callback->password_defined());
             }
             if (out_password != nullptr) {
                 *out_password = open_callback->password();
@@ -219,6 +232,43 @@ namespace z7::app {
             return E_FAIL;
         }
         return S_OK;
+    }
+
+    std::optional<ArchiveError> complete_operation_open_error(CArchiveLink const& archive_link) {
+        std::string diagnostic;
+        for (unsigned level = 0; level < archive_link.Arcs.Size(); ++level) {
+            CArc const& arc = archive_link.Arcs[level];
+            CArcErrorInfo const& error_info = arc.ErrorInfo;
+            UInt32 const error_flags = error_info.GetErrorFlags();
+            std::string const error_message =
+                z7::common::trim_ascii_space_copy(ustring_to_utf8(error_info.ErrorMessage));
+            if (error_flags == 0 && error_message.empty()) {
+                continue;
+            }
+
+            if (!diagnostic.empty()) {
+                diagnostic += "; ";
+            }
+            if (level != 0 && !arc.Path.IsEmpty()) {
+                diagnostic += ustring_to_utf8(arc.Path);
+                diagnostic += ": ";
+            }
+            if (!error_message.empty()) {
+                diagnostic += error_message;
+            } else {
+                diagnostic += "Archive open error";
+            }
+            if (error_flags != 0) {
+                diagnostic += " (error flags ";
+                diagnostic += std::to_string(error_flags);
+                diagnostic += ')';
+            }
+        }
+
+        if (diagnostic.empty()) {
+            return std::nullopt;
+        }
+        return make_archive_error(ArchiveErrorDomain::kIo, std::move(diagnostic), 2);
     }
 
 } // namespace z7::app

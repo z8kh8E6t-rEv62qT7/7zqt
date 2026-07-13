@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "core/internal.h"
+#include "operations/extract_output.h"
 #include "session/session_registry_internal.h"
 #include "third_party_adapter/callbacks_extract.h"
 #include "third_party_adapter/callbacks_update.h"
@@ -91,9 +92,30 @@ namespace z7::app {
             return expanded;
         }
 
+        std::optional<std::string>
+        selected_unnamed_stream_alias(IInArchive* archive,
+                                      UInt32 index,
+                                      UInt32 num_items,
+                                      std::string const& archive_display_path,
+                                      std::unordered_set<std::string> const& selected_entries) {
+            if (archive == nullptr || index != 0 || num_items != 1 || selected_entries.empty()) {
+                return std::nullopt;
+            }
+            std::string const raw_path = normalize_archive_item_path(archive_get_prop_text(archive, index, kpidPath));
+            if (!raw_path.empty()) {
+                return std::nullopt;
+            }
+            std::string const alias = normalize_archive_item_path(default_extracted_stream_name(archive_display_path));
+            if (alias.empty() || !archive_path_matches_selection(alias, selected_entries)) {
+                return std::nullopt;
+            }
+            return alias;
+        }
+
         std::vector<HashInputEntry> collect_archive_hash_entries(IInArchive* archive,
                                                                  UInt32 num_items,
                                                                  std::vector<std::string> const& requested_entries,
+                                                                 std::string const& archive_display_path,
                                                                  std::string* single_selected_entry) {
             std::unordered_set<std::string> selected_entries;
             selected_entries.reserve(requested_entries.size());
@@ -113,8 +135,17 @@ namespace z7::app {
             std::vector<HashInputEntry> entries;
             entries.reserve(static_cast<size_t>(num_items));
             for (UInt32 i = 0; i < num_items; ++i) {
-                std::string const item_path = archive_item_selection_path(archive, i);
-                if (item_path.empty() || !archive_path_matches_selection(item_path, selected_entries)) {
+                std::string item_path = archive_item_selection_path(archive, i);
+                bool matches = !item_path.empty() && archive_path_matches_selection(item_path, selected_entries);
+                if (!matches) {
+                    if (std::optional<std::string> const alias = selected_unnamed_stream_alias(
+                            archive, i, num_items, archive_display_path, selected_entries);
+                        alias.has_value()) {
+                        item_path = *alias;
+                        matches = true;
+                    }
+                }
+                if (!matches) {
                     continue;
                 }
 
@@ -161,8 +192,17 @@ namespace z7::app {
                 item_stats = collect_test_archive_item_stats(arc->Archive, num_items);
             } else {
                 for (UInt32 i = 0; i < num_items; ++i) {
-                    std::string const item_path = archive_item_selection_path(arc->Archive, i);
-                    if (!archive_path_matches_selection(item_path, selected_entries)) {
+                    std::string item_path = archive_item_selection_path(arc->Archive, i);
+                    bool matches = archive_path_matches_selection(item_path, selected_entries);
+                    if (!matches) {
+                        if (std::optional<std::string> const alias = selected_unnamed_stream_alias(
+                                arc->Archive, i, num_items, archive_display_path, selected_entries);
+                            alias.has_value()) {
+                            item_path = *alias;
+                            matches = true;
+                        }
+                    }
+                    if (!matches) {
                         continue;
                     }
                     if (first_matched_item_path.empty()) {
@@ -371,19 +411,33 @@ namespace z7::app {
                 return make_operation_failure<TestResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
             }
+            std::unique_lock<std::recursive_mutex> session_lock(
+                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+                return make_operation_failure<TestResult>(
+                    ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+            }
             CArc const* arc = archive_session_link(*session).GetArc();
+            if (std::optional<ArchiveError> open_error = complete_operation_open_error(archive_session_link(*session));
+                open_error.has_value()) {
+                return make_operation_failure<TestResult>(std::move(*open_error));
+            }
             UInt32 num_items = 0;
             const HRESULT num_items_hr = arc->Archive->GetNumberOfItems(&num_items);
             if (num_items_hr != S_OK) {
                 return from_base_result<TestResult>(make_operation_failure_from_hresult<OperationResult>(num_items_hr));
             }
+            std::string const archive_selection_path =
+                ArchiveOpenSessionNativeAccess::source_archive_path(*session).empty()
+                    ? session->display_path()
+                    : ArchiveOpenSessionNativeAccess::source_archive_path(*session);
             return run_test_on_arc(
                 arc,
                 request,
                 hooks,
                 cancel_requested_,
                 [this]() { return this->wait_while_paused(); },
-                session->display_path(),
+                archive_selection_path,
                 num_items);
         }
 
@@ -393,6 +447,11 @@ namespace z7::app {
             hooks,
             false,
             [&](OpenArchiveReadState const& open_state, UInt32 num_items) -> TestResult {
+                if (std::optional<ArchiveError> open_error =
+                        complete_operation_open_error(open_state.archive_link);
+                    open_error.has_value()) {
+                    return make_operation_failure<TestResult>(std::move(*open_error));
+                }
                 return run_test_on_arc(
                     open_state.arc,
                     request,
@@ -415,10 +474,20 @@ namespace z7::app {
                 return make_operation_failure<HashResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
             }
+            std::unique_lock<std::recursive_mutex> session_lock(
+                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+                return make_operation_failure<HashResult>(
+                    ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+            }
             CArc const* arc = archive_session_link(*session).GetArc();
             if (arc == nullptr || arc->Archive == nullptr) {
                 return make_operation_failure<HashResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Session archive unavailable", 7);
+            }
+            if (std::optional<ArchiveError> open_error = complete_operation_open_error(archive_session_link(*session));
+                open_error.has_value()) {
+                return make_operation_failure<HashResult>(std::move(*open_error));
             }
 
             UInt32 num_items = 0;
@@ -428,8 +497,12 @@ namespace z7::app {
             }
 
             std::string single_selected_entry;
-            std::vector<HashInputEntry> hash_entries =
-                collect_archive_hash_entries(arc->Archive, num_items, request.entries, &single_selected_entry);
+            std::string const archive_selection_path =
+                ArchiveOpenSessionNativeAccess::source_archive_path(*session).empty()
+                    ? session->display_path()
+                    : ArchiveOpenSessionNativeAccess::source_archive_path(*session);
+            std::vector<HashInputEntry> hash_entries = collect_archive_hash_entries(
+                arc->Archive, num_items, request.entries, archive_selection_path, &single_selected_entry);
             if (hash_entries.empty() && !request.entries.empty()) {
                 return make_operation_failure<HashResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Hash request entries do not exist in archive", 7);
@@ -488,6 +561,12 @@ namespace z7::app {
                 return make_operation_failure<DeleteResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
             }
+            std::unique_lock<std::recursive_mutex> session_lock(
+                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+                return make_operation_failure<DeleteResult>(
+                    ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+            }
             if (!request.password.empty()) {
                 session->set_password(request.password);
             }
@@ -503,6 +582,13 @@ namespace z7::app {
                     ArchiveErrorDomain::kIo, "Writable archive session does not have a backing file", 2);
             }
 
+            SessionMutationBackup mutation_backup;
+            if (std::optional<OperationResult> backup_error =
+                    create_archive_session_mutation_backup(*session, &mutation_backup);
+                backup_error.has_value()) {
+                return from_base_result<DeleteResult>(std::move(*backup_error));
+            }
+
             DeleteRequest writable_request = request;
             writable_request.session_token.reset();
             writable_request.archive_path = state.temp_file->string();
@@ -512,13 +598,28 @@ namespace z7::app {
 
             DeleteResult delete_result = remove(writable_request, hooks);
             if (!delete_result.ok) {
+                if (std::optional<OperationResult> restore_error = restore_archive_session_mutation_backup(
+                        *session, mutation_backup, hooks, nullptr, []() { return true; });
+                    restore_error.has_value()) {
+                    return from_base_result<DeleteResult>(std::move(*restore_error));
+                }
                 return delete_result;
             }
-            ArchiveOpenSessionNativeAccess::set_dirty(*session, true);
             if (std::optional<OperationResult> refresh_error = refresh_archive_session_from_backing_file(
                     *session, hooks, &cancel_requested_, [this]() { return this->wait_while_paused(); });
                 refresh_error.has_value()) {
+                if (std::optional<OperationResult> restore_error = restore_archive_session_mutation_backup(
+                        *session, mutation_backup, hooks, nullptr, []() { return true; });
+                    restore_error.has_value()) {
+                    return from_base_result<DeleteResult>(std::move(*restore_error));
+                }
                 return from_base_result<DeleteResult>(std::move(*refresh_error));
+            }
+            ArchiveOpenSessionNativeAccess::set_dirty(*session, true);
+            ArchiveOpenSessionNativeAccess::increment_generation(*session);
+            if (std::optional<OperationResult> cleanup_error = discard_archive_session_mutation_backup(mutation_backup);
+                cleanup_error.has_value()) {
+                emit_log_event(hooks, OperationStage::kRunning, OutputChannel::kStdErr, cleanup_error->error.message);
             }
             return delete_result;
         }

@@ -74,6 +74,11 @@ namespace z7::app {
         return password_;
     }
 
+    bool NativeUpdateOperationCallback::password_defined() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return password_defined_;
+    }
+
     bool NativeUpdateOperationCallback::password_requested() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return password_requested_;
