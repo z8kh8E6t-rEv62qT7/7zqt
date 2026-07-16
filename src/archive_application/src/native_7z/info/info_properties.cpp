@@ -76,7 +76,8 @@ namespace z7::app {
                                                     std::atomic<bool>* cancel_requested,
                                                     std::function<bool()> wait_while_paused,
                                                     CCodecs* preloaded_codecs,
-                                                    std::vector<ArchivePropertyLine>& out_lines) {
+                                                    std::vector<ArchivePropertyLine>& out_lines,
+                                                    OpenArchiveDiagnostics* out_diagnostics) {
         out_lines.clear();
         if (request.archive_path.empty()) {
             return E_INVALIDARG;
@@ -90,8 +91,11 @@ namespace z7::app {
             hooks,
             cancel_requested,
             std::move(wait_while_paused),
-            true,
+            OpenResultMessagePolicy::kSilentBrowse,
+            /*allow_password_prompt=*/true,
+            /*initial_password=*/{},
             preloaded_codecs,
+            out_diagnostics,
             [&](OpenArchiveReadState& open_state, UInt32) -> int {
                 CArc const* arc = open_state.arc;
                 CCodecs& codecs = preloaded_codecs != nullptr ? *preloaded_codecs : open_state.codecs;

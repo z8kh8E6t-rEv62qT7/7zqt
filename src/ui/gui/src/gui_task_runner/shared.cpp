@@ -55,7 +55,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
                                                    : log_line;
                 out->log_lines.push_back(display_log_line);
                 if (log.channel == z7::app::OutputChannel::kStdErr) {
-                    out->failure_messages.push_back(display_log_line);
+                    out->result_messages.push_back(display_log_line);
                     dialog->append_failure_result_message(display_log_line);
                 }
                 dialog->append_log(display_log_line);
@@ -526,6 +526,14 @@ namespace z7::ui::gui::gui_task_runner_shared {
             }
             options.nested_archive_entries << normalized;
         }
+        if (spec.filename_code_pages.size() != spec.nested_archive_entries.size() + 1) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral(
+                    "Archive export filename code-page count must equal root plus nested layers.");
+            }
+            return false;
+        }
+        options.filename_code_pages = spec.filename_code_pages;
 
         options.overwrite_mode =
             parse_archive_export_overwrite_mode(z7::ui::archive_support::from_native_string(spec.overwrite_mode));
@@ -636,6 +644,14 @@ namespace z7::ui::gui::gui_task_runner_shared {
             }
             options.nested_archive_entries << normalized;
         }
+        if (spec.filename_code_pages.size() != spec.nested_archive_entries.size() + 1) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral(
+                    "Archive hash filename code-page count must equal root plus nested layers.");
+            }
+            return false;
+        }
+        options.filename_code_pages = spec.filename_code_pages;
 
         *out = std::move(options);
         return true;
@@ -700,6 +716,14 @@ namespace z7::ui::gui::gui_task_runner_shared {
             }
             options.nested_archive_entries << normalized;
         }
+        if (spec.filename_code_pages.size() != spec.nested_archive_entries.size() + 1) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral(
+                    "Archive test filename code-page count must equal root plus nested layers.");
+            }
+            return false;
+        }
+        options.filename_code_pages = spec.filename_code_pages;
 
         *out = std::move(options);
         return true;

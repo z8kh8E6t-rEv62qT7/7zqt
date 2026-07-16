@@ -22,6 +22,8 @@ namespace z7::app {
 
         auto session = std::make_shared<ArchiveOpenSession>();
         ArchiveOpenSessionNativeAccess::set_display_path(*session, request.archive_path);
+        ArchiveOpenSessionNativeAccess::set_filename_code_page(*session, request.filename_code_page);
+        ArchiveOpenSessionNativeAccess::set_archive_type_hint(*session, request.archive_type_hint);
         std::error_code canonical_ec;
         std::filesystem::path const canonical_source =
             std::filesystem::canonical(std::filesystem::path(request.archive_path), canonical_ec);
@@ -52,7 +54,9 @@ namespace z7::app {
                                                hooks,
                                                cancel_requested,
                                                std::move(wait_while_paused),
-                                               /*enable_open_callback=*/true,
+                                               OpenResultMessagePolicy::kSilentBrowse,
+                                               /*allow_password_prompt=*/true,
+                                               /*initial_password=*/{},
                                                /*codecs_already_loaded=*/false,
                                                *session_state.codecs,
                                                *session_state.types,
@@ -61,7 +65,9 @@ namespace z7::app {
                                                arc,
                                                &password_requested,
                                                &wrong_password,
-                                               &password);
+                                               &password,
+                                               &session_state.open_diagnostics,
+                                               request.filename_code_page);
         if (hr != S_OK) {
             if (password_requested || wrong_password) {
                 static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(

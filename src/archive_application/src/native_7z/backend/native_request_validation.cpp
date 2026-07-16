@@ -303,6 +303,10 @@ namespace z7::app {
         if (request.archive_path.empty()) {
             return invalid_request("OpenArchiveFromPath requires archive path");
         }
+        if (request.filename_code_page.has_value()
+            && !is_filename_code_page_supported(*request.filename_code_page)) {
+            return invalid_request("unsupported filename code page");
+        }
         return std::nullopt;
     }
 
@@ -317,6 +321,21 @@ namespace z7::app {
         }
         if (has_entry_path && has_entry_index) {
             return invalid_request("OpenArchiveFromParent accepts only one selector");
+        }
+        if (request.filename_code_page.has_value()
+            && !is_filename_code_page_supported(*request.filename_code_page)) {
+            return invalid_request("unsupported filename code page");
+        }
+        return std::nullopt;
+    }
+
+    std::optional<OperationResult> validate_request(SetArchiveSessionFilenameCodePageRequest const& request) {
+        if (!request.token.is_valid()) {
+            return invalid_request("SetArchiveSessionFilenameCodePage requires valid session token");
+        }
+        if (request.filename_code_page.has_value()
+            && !is_filename_code_page_supported(*request.filename_code_page)) {
+            return invalid_request("unsupported filename code page");
         }
         return std::nullopt;
     }

@@ -96,7 +96,7 @@ namespace z7::app {
             sink.reserve(std::min<size_t>(size_budget, 1u << 16));
 
             ArchiveBackendHooks const parent_hooks = make_session_password_hooks(parent, hooks);
-            auto* callback = new NativeExtractCallback(arc->Archive,
+            auto* callback = new NativeExtractCallback(arc,
                                                        std::filesystem::path{},
                                                        parent_hooks,
                                                        cancel_requested,
@@ -129,20 +129,31 @@ namespace z7::app {
             }
 
             CMyComPtr<IInArchiveGetStream> get_stream;
-            if (arc->Archive->QueryInterface(IID_IInArchiveGetStream, reinterpret_cast<void**>(&get_stream)) != S_OK
-                || !get_stream) {
-                return S_FALSE;
+            HRESULT const query_get_stream =
+                arc->Archive->QueryInterface(IID_IInArchiveGetStream, reinterpret_cast<void**>(&get_stream));
+            if (query_get_stream != S_OK) {
+                return query_get_stream == E_NOINTERFACE ? S_FALSE : query_get_stream;
+            }
+            if (!get_stream) {
+                return E_FAIL;
             }
 
             CMyComPtr<ISequentialInStream> seq;
             const HRESULT get_res = get_stream->GetStream(entry_index, &seq);
-            if (get_res != S_OK || !seq) {
-                return S_FALSE;
+            if (get_res != S_OK) {
+                return get_res;
+            }
+            if (!seq) {
+                return E_FAIL;
             }
 
             CMyComPtr<IInStream> seekable;
-            if (seq.QueryInterface(IID_IInStream, &seekable) != S_OK || !seekable) {
-                return S_FALSE;
+            HRESULT const query_seekable = seq.QueryInterface(IID_IInStream, &seekable);
+            if (query_seekable != S_OK) {
+                return query_seekable == E_NOINTERFACE ? S_FALSE : query_seekable;
+            }
+            if (!seekable) {
+                return E_FAIL;
             }
 
             out.seq = std::move(seq);
@@ -165,6 +176,19 @@ namespace z7::app {
                 ArchiveErrorDomain::kInvalidArguments, "Parent session not found", 7);
             return result;
         }
+
+        std::vector<std::shared_ptr<ArchiveOpenSession>> parent_chain;
+        for (std::shared_ptr<ArchiveOpenSession> cursor = parent; cursor != nullptr;
+             cursor = ArchiveOpenSessionNativeAccess::parent(*cursor)) {
+            parent_chain.push_back(cursor);
+        }
+        std::reverse(parent_chain.begin(), parent_chain.end());
+        std::vector<std::unique_lock<std::recursive_mutex>> parent_locks;
+        parent_locks.reserve(parent_chain.size());
+        for (auto const& locked_session : parent_chain) {
+            parent_locks.emplace_back(ArchiveOpenSessionNativeAccess::operation_mutex(*locked_session));
+        }
+        ScopedFilenameCodePage parent_filename_scope(parent->filename_code_page());
 
         // Resolve the explicit child selector before attempting any nested-open
         // strategy so underspecified requests fail fast and audibly.
@@ -228,17 +252,22 @@ namespace z7::app {
 
         auto child = std::make_shared<ArchiveOpenSession>();
         ArchiveOpenSessionNativeAccess::set_display_path(*child, display_path);
+        ArchiveOpenSessionNativeAccess::set_filename_code_page(*child, request.filename_code_page);
+        ArchiveOpenSessionNativeAccess::set_archive_type_hint(*child, request.archive_type_hint);
         ArchiveOpenSessionNativeAccess::set_parent(*child, parent);
         ArchiveOpenSessionNativeAccess::set_parent_generation_at_open(
             *child, ArchiveOpenSessionNativeAccess::generation(*parent));
         ArchiveOpenSessionNativeAccess::set_entry_path_from_parent(*child, resolved_entry_path);
-        if (parent->password_defined()) {
-            child->set_password(parent->password());
-        }
+        ArchiveOpenSessionNativeAccess::set_parent_entry_index(*child, resolved_index);
         reset_archive_session_open_state(*child);
         ArchiveOpenSessionState& child_state = archive_session_state(*child);
+        std::string const parent_extraction_password =
+            parent->password_defined() ? parent->password() : std::string{};
 
         auto finalize_success = [&](OpenArchiveSessionResult::Strategy used) {
+            OpenArchiveDiagnostics inherited = archive_session_state(*parent).open_diagnostics;
+            append_open_archive_diagnostics(inherited, child_state.open_diagnostics);
+            child_state.open_diagnostics = std::move(inherited);
             ArchiveOpenSessionNativeAccess::set_strategy(*child, used);
             ArchiveOpenSessionNativeAccess::set_token(*child,
                                                       ArchiveSessionRegistryNativeAccess::allocate_token(registry));
@@ -247,6 +276,7 @@ namespace z7::app {
             result.token = child->token();
             result.used_strategy = used;
             result.archive_path = child->display_path();
+            result.parent_entry_index = resolved_index;
         };
 
         // Strategy 1: parent IInArchiveGetStream -> seekable IInStream.
@@ -255,6 +285,10 @@ namespace z7::app {
             const HRESULT acquire = acquire_parent_sub_stream(*parent, resolved_index, holder);
             if (acquire == E_ABORT) {
                 static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
+                return result;
+            }
+            if (acquire != S_OK && acquire != S_FALSE) {
+                static_cast<OperationResult&>(result) = make_operation_failure_from_hresult<OperationResult>(acquire);
                 return result;
             }
             if (acquire == S_OK) {
@@ -269,7 +303,9 @@ namespace z7::app {
                                                                         hooks,
                                                                         cancel_requested,
                                                                         wait_while_paused,
-                                                                        /*enable_open_callback=*/true,
+                                                                        OpenResultMessagePolicy::kSilentBrowse,
+                                                                        /*allow_password_prompt=*/true,
+                                                                        /*initial_password=*/{},
                                                                         /*codecs_already_loaded=*/false,
                                                                         *child_state.codecs,
                                                                         *child_state.types,
@@ -278,7 +314,9 @@ namespace z7::app {
                                                                         arc,
                                                                         &password_requested,
                                                                         &wrong_password,
-                                                                        &password);
+                                                                        &password,
+                                                                        &child_state.open_diagnostics,
+                                                                        request.filename_code_page);
                 if (open_hr == S_OK) {
                     if (!password.empty()) {
                         child->set_password(std::move(password));
@@ -297,6 +335,12 @@ namespace z7::app {
                     static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
                     return result;
                 }
+                if (open_hr != S_FALSE) {
+                    OperationResult failure = make_operation_failure_from_hresult<OperationResult>(open_hr);
+                    apply_open_archive_diagnostics(failure, child_state.open_diagnostics);
+                    static_cast<OperationResult&>(result) = std::move(failure);
+                    return result;
+                }
                 // Rebuild a fresh CArchiveLink / types / codecs; the previous attempt
                 // may have partially consumed internal state.
                 reset_archive_session_open_state(*child);
@@ -312,7 +356,7 @@ namespace z7::app {
             std::vector<uint8_t> buffer;
             ExtractInvocationStatus const extract_status = extract_entry_to_buffer(*parent,
                                                                                    resolved_index,
-                                                                                   child->password(),
+                                                                                   parent_extraction_password,
                                                                                    effective_budget,
                                                                                    buffer,
                                                                                    hooks,
@@ -325,6 +369,11 @@ namespace z7::app {
             }
             if (extract_status.hresult == E_ABORT) {
                 static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
+                return result;
+            }
+            if (extract_status.hresult != S_OK && extract_status.hresult != E_OUTOFMEMORY) {
+                static_cast<OperationResult&>(result) =
+                    make_operation_failure_from_hresult<OperationResult>(extract_status.hresult);
                 return result;
             }
             if (extract_status.hresult == S_OK && extract_status.error_count != 0) {
@@ -355,7 +404,9 @@ namespace z7::app {
                                                                         hooks,
                                                                         cancel_requested,
                                                                         wait_while_paused,
-                                                                        /*enable_open_callback=*/true,
+                                                                        OpenResultMessagePolicy::kSilentBrowse,
+                                                                        /*allow_password_prompt=*/true,
+                                                                        /*initial_password=*/{},
                                                                         /*codecs_already_loaded=*/false,
                                                                         *child_state.codecs,
                                                                         *child_state.types,
@@ -364,7 +415,9 @@ namespace z7::app {
                                                                         arc,
                                                                         &password_requested,
                                                                         &wrong_password,
-                                                                        &password);
+                                                                        &password,
+                                                                        &child_state.open_diagnostics,
+                                                                        request.filename_code_page);
                 if (open_hr == S_OK) {
                     if (!password.empty()) {
                         child->set_password(std::move(password));
@@ -380,6 +433,12 @@ namespace z7::app {
                 }
                 if (open_hr == E_ABORT) {
                     static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
+                    return result;
+                }
+                if (open_hr != S_FALSE) {
+                    OperationResult failure = make_operation_failure_from_hresult<OperationResult>(open_hr);
+                    apply_open_archive_diagnostics(failure, child_state.open_diagnostics);
+                    static_cast<OperationResult&>(result) = std::move(failure);
                     return result;
                 }
                 // Reset per-attempt state and fall through.
@@ -409,7 +468,7 @@ namespace z7::app {
             }
 
             ArchiveBackendHooks const parent_hooks = make_session_password_hooks(*parent, hooks);
-            auto* callback = new NativeExtractCallback(parent_arc->Archive,
+            auto* callback = new NativeExtractCallback(parent_arc,
                                                        dir,
                                                        parent_hooks,
                                                        cancel_requested,
@@ -420,7 +479,7 @@ namespace z7::app {
                                                        ExtractPathMode::kNoPaths,
                                                        std::string{},
                                                        {},
-                                                       child->password(),
+                                                       parent_extraction_password,
                                                        ExtractZoneIdMode::kNone,
                                                        false,
                                                        1);
@@ -476,7 +535,9 @@ namespace z7::app {
                                                         hooks,
                                                         cancel_requested,
                                                         std::move(wait_while_paused),
-                                                        /*enable_open_callback=*/true,
+                                                        OpenResultMessagePolicy::kSilentBrowse,
+                                                        /*allow_password_prompt=*/true,
+                                                        /*initial_password=*/{},
                                                         /*codecs_already_loaded=*/false,
                                                         *child_state.codecs,
                                                         *child_state.types,
@@ -485,7 +546,9 @@ namespace z7::app {
                                                         arc,
                                                         &password_requested,
                                                         &wrong_password,
-                                                        &password);
+                                                        &password,
+                                                        &child_state.open_diagnostics,
+                                                        request.filename_code_page);
             if (open_hr != S_OK) {
                 if (password_requested || wrong_password) {
                     static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
@@ -504,6 +567,198 @@ namespace z7::app {
             finalize_success(OpenArchiveSessionResult::Strategy::kTempFile);
             return result;
         }
+    }
+
+    OperationResult set_native_archive_session_filename_code_page(
+        ArchiveSessionRegistry& registry,
+        SetArchiveSessionFilenameCodePageRequest const& request,
+        ArchiveBackendHooks const& hooks,
+        std::atomic<bool>* cancel_requested,
+        std::function<bool()> wait_while_paused) {
+        if (!request.token.is_valid()) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
+        }
+        if (request.filename_code_page.has_value()
+            && !is_filename_code_page_supported(*request.filename_code_page)) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kInvalidArguments, "unsupported filename code page", 7);
+        }
+
+        std::shared_ptr<ArchiveOpenSession> session = registry.find(request.token);
+        if (session == nullptr) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
+        }
+
+        std::vector<std::shared_ptr<ArchiveOpenSession>> lock_chain;
+        for (std::shared_ptr<ArchiveOpenSession> cursor = session; cursor != nullptr;
+             cursor = ArchiveOpenSessionNativeAccess::parent(*cursor)) {
+            lock_chain.push_back(cursor);
+        }
+        std::reverse(lock_chain.begin(), lock_chain.end());
+        std::vector<std::unique_lock<std::recursive_mutex>> session_locks;
+        session_locks.reserve(lock_chain.size());
+        for (auto const& locked_session : lock_chain) {
+            session_locks.emplace_back(ArchiveOpenSessionNativeAccess::operation_mutex(*locked_session));
+        }
+
+        if (ArchiveOpenSessionNativeAccess::closed(*session)) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
+        }
+        if (session->filename_code_page() == request.filename_code_page) {
+            return make_operation_success<OperationResult>("Archive filename code page unchanged");
+        }
+        if (registry.has_descendant(request.token)) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kInvalidArguments, "active descendant session", 7);
+        }
+
+        ArchiveOpenSessionState const& current_state = archive_session_state(*session);
+        auto next_state = std::make_unique<ArchiveOpenSessionState>();
+        next_state->source_version = current_state.source_version;
+        next_state->archive_link = std::make_unique<CArchiveLink>();
+        next_state->types = std::make_unique<CObjectVector<COpenType>>();
+        next_state->excluded_formats = std::make_unique<CIntVector>();
+        next_state->codecs = std::make_unique<CCodecs>();
+
+        CArc const* arc = nullptr;
+        bool password_requested = false;
+        bool wrong_password = false;
+        std::string opened_password;
+        HRESULT open_hr = E_FAIL;
+        std::string const initial_password = session->password_defined() ? session->password() : std::string();
+
+        auto open_from_path = [&](std::filesystem::path const& path) {
+            return open_archive_shared(path.string(),
+                                       ArchiveOpenSessionNativeAccess::archive_type_hint(*session),
+                                       hooks,
+                                       cancel_requested,
+                                       wait_while_paused,
+                                       OpenResultMessagePolicy::kOperationMessages,
+                                       /*allow_password_prompt=*/true,
+                                       initial_password,
+                                       /*codecs_already_loaded=*/false,
+                                       *next_state->codecs,
+                                       *next_state->types,
+                                       *next_state->excluded_formats,
+                                       *next_state->archive_link,
+                                       arc,
+                                       &password_requested,
+                                       &wrong_password,
+                                       &opened_password,
+                                       &next_state->open_diagnostics,
+                                       request.filename_code_page);
+        };
+        auto open_from_stream = [&](IInStream* stream) {
+            return open_archive_shared_from_stream(stream,
+                                                   session->display_path(),
+                                                   ArchiveOpenSessionNativeAccess::archive_type_hint(*session),
+                                                   hooks,
+                                                   cancel_requested,
+                                                   wait_while_paused,
+                                                   OpenResultMessagePolicy::kOperationMessages,
+                                                   /*allow_password_prompt=*/true,
+                                                   initial_password,
+                                                   /*codecs_already_loaded=*/false,
+                                                   *next_state->codecs,
+                                                   *next_state->types,
+                                                   *next_state->excluded_formats,
+                                                   *next_state->archive_link,
+                                                   arc,
+                                                   &password_requested,
+                                                   &wrong_password,
+                                                   &opened_password,
+                                                   &next_state->open_diagnostics,
+                                                   request.filename_code_page);
+        };
+
+        std::shared_ptr<ArchiveOpenSession> const& parent = ArchiveOpenSessionNativeAccess::parent(*session);
+        if (parent == nullptr) {
+            if (ArchiveOpenSessionNativeAccess::dirty(*session)) {
+                if (current_state.temp_file == nullptr || current_state.temp_file->empty()) {
+                    return make_operation_failure<OperationResult>(
+                        ArchiveErrorDomain::kIo, "Dirty root session has no writable archive file", 2);
+                }
+                next_state->temp_dir = current_state.temp_dir;
+                next_state->temp_file = std::make_unique<std::filesystem::path>(*current_state.temp_file);
+                open_hr = open_from_path(*next_state->temp_file);
+            } else {
+                open_hr = open_from_path(ArchiveOpenSessionNativeAccess::source_archive_path(*session));
+            }
+        } else if (session->strategy() == OpenArchiveSessionResult::Strategy::kTempFile) {
+            if (current_state.temp_file == nullptr || current_state.temp_file->empty()) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo, "Session has no materialized archive file", 2);
+            }
+            next_state->temp_dir = current_state.temp_dir;
+            next_state->temp_file = std::make_unique<std::filesystem::path>(*current_state.temp_file);
+            open_hr = open_from_path(*next_state->temp_file);
+        } else if (session->strategy() == OpenArchiveSessionResult::Strategy::kMemory) {
+            next_state->memory_buffer = current_state.memory_buffer;
+            auto holder = std::make_shared<StreamRefHolder>();
+            CMyComPtr2_Create<IInStream, CBufInStream> buffer_stream;
+            buffer_stream->Init(next_state->memory_buffer.data(), next_state->memory_buffer.size(), nullptr);
+            holder->stream = buffer_stream;
+            open_hr = open_from_stream(holder->stream);
+            if (open_hr == S_OK) {
+                next_state->stream_ref_holder = std::static_pointer_cast<void>(holder);
+            }
+        } else {
+            CArc const* parent_arc = archive_session_link(*parent).GetArc();
+            if (parent_arc == nullptr || parent_arc->Archive == nullptr) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo, "Parent archive unavailable during encoding reload", 2);
+            }
+            ScopedFilenameCodePage parent_scope(parent->filename_code_page());
+            UInt32 resolved_index = 0;
+            if (std::optional<OperationResult> validation_error =
+                    validate_archive_session_parent_item(*session, *parent_arc, &resolved_index);
+                validation_error.has_value()) {
+                return *validation_error;
+            }
+            ParentStreamRefHolder holder;
+            HRESULT const acquire_hr = acquire_parent_sub_stream(*parent, resolved_index, holder);
+            if (acquire_hr != S_OK) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo, "Parent stream unavailable during encoding reload", acquire_hr);
+            }
+            open_hr = open_from_stream(holder.seekable);
+            if (open_hr == S_OK) {
+                next_state->stream_ref_holder =
+                    std::static_pointer_cast<void>(std::make_shared<ParentStreamRefHolder>(std::move(holder)));
+            }
+        }
+
+        if (open_hr != S_OK) {
+            if (password_requested || wrong_password) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
+            }
+            if (open_hr == E_ABORT) {
+                return make_operation_canceled<OperationResult>();
+            }
+            OperationResult failure = make_operation_failure_from_hresult<OperationResult>(open_hr);
+            apply_open_archive_diagnostics(failure, next_state->open_diagnostics);
+            return failure;
+        }
+
+        if (parent != nullptr) {
+            OpenArchiveDiagnostics inherited = archive_session_state(*parent).open_diagnostics;
+            append_open_archive_diagnostics(inherited, next_state->open_diagnostics);
+            next_state->open_diagnostics = std::move(inherited);
+        }
+        if (next_state->open_diagnostics.has_errors()) {
+            return make_operation_failure_from_open_diagnostics<OperationResult>(next_state->open_diagnostics);
+        }
+
+        ArchiveOpenSessionNativeAccess::replace_state(*session, std::move(next_state));
+        ArchiveOpenSessionNativeAccess::set_filename_code_page(*session, request.filename_code_page);
+        if (!opened_password.empty()) {
+            session->set_password(std::move(opened_password));
+        }
+        return make_operation_success<OperationResult>("Archive filename code page changed");
     }
 
 } // namespace z7::app

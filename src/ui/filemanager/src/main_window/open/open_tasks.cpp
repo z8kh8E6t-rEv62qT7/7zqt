@@ -8,6 +8,18 @@ namespace z7::ui::filemanager {
 
     namespace {
 
+        z7::task_ipc_runtime::TaskIpcFilenameCodePage
+        to_task_ipc_filename_code_page(z7::app::FilenameCodePage value) {
+            z7::task_ipc_runtime::TaskIpcFilenameCodePage out;
+            out.automatic = !value.has_value();
+            out.code_page = value.value_or(0);
+            return out;
+        }
+
+    } // namespace
+
+    namespace {
+
         struct ArchiveExportDestinationPlan {
             QString output_dir;
             QString path_mode = QStringLiteral("full");
@@ -95,6 +107,10 @@ namespace z7::ui::filemanager {
         out_payload->archive_path = archive_path;
         out_payload->archive_type = writeback_plan.root_type_hint().trimmed();
         out_payload->nested_archive_entries = writeback_plan.nested_archive_entries;
+        out_payload->filename_code_pages.reserve(static_cast<qsizetype>(writeback_plan.filename_code_pages.size()));
+        for (z7::app::FilenameCodePage code_page : writeback_plan.filename_code_pages) {
+            out_payload->filename_code_pages.push_back(to_task_ipc_filename_code_page(code_page));
+        }
         return true;
     }
 
@@ -171,6 +187,7 @@ namespace z7::ui::filemanager {
         archive_export.root_archive_path = open_payload.archive_path;
         archive_export.root_archive_type = open_payload.archive_type;
         archive_export.nested_archive_entries = open_payload.nested_archive_entries;
+        archive_export.filename_code_pages = open_payload.filename_code_pages;
         archive_export.archive_entry_paths = archive_entries;
         archive_export.output_dir = destination_plan.output_dir;
         archive_export.overwrite_mode = QStringLiteral("ask");

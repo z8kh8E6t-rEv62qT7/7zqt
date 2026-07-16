@@ -132,16 +132,14 @@ namespace z7::app {
         return check_break();
     }
 
-    HRESULT NativeUpdateOperationCallback::OpenFileError(FString const& path, DWORD) {
-        std::string const value = ustring_to_utf8(fs2us(path));
-        note_error(value.empty() ? "Open file error" : ("Open file error: " + value));
-        return S_FALSE;
+    HRESULT NativeUpdateOperationCallback::OpenFileError(FString const& path, DWORD system_error) {
+        note_system_error(path, system_error);
+        return S_OK;
     }
 
-    HRESULT NativeUpdateOperationCallback::ReadingFileError(FString const& path, DWORD) {
-        std::string const value = ustring_to_utf8(fs2us(path));
-        note_error(value.empty() ? "Read file error" : ("Read file error: " + value));
-        return S_FALSE;
+    HRESULT NativeUpdateOperationCallback::ReadingFileError(FString const& path, DWORD system_error) {
+        note_system_error(path, system_error);
+        return S_OK;
     }
 
     HRESULT NativeUpdateOperationCallback::SetOperationResult(Int32 op_res) {
@@ -156,14 +154,16 @@ namespace z7::app {
         return check_break();
     }
 
-    HRESULT NativeUpdateOperationCallback::ReportExtractResult(Int32 op_res, Int32, wchar_t const* name) {
+    HRESULT NativeUpdateOperationCallback::ReportExtractResult(Int32 op_res,
+                                                               Int32 is_encrypted,
+                                                               wchar_t const* name) {
         if (op_res == NArchive::NExtract::NOperationResult::kWrongPassword) {
             std::lock_guard<std::mutex> lock(mutex_);
             wrong_password_ = true;
         }
         if (op_res != NArchive::NExtract::NOperationResult::kOK) {
             std::string const path = update_wide_name_to_utf8(name);
-            note_error(path.empty() ? "Update extract error" : (path + " : " + test_operation_result_message(op_res)));
+            note_error(format_operation_result_message(op_res, is_encrypted != 0, path));
         }
         return check_break();
     }

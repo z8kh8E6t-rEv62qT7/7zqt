@@ -134,6 +134,7 @@ namespace z7::app {
                                                OpenArchiveRequest,
                                                OpenArchiveFromPathRequest,
                                                OpenArchiveFromParentRequest,
+                                               SetArchiveSessionFilenameCodePageRequest,
                                                CloseArchiveSessionRequest,
                                                ListRequest,
                                                ArchivePropertiesRequest,

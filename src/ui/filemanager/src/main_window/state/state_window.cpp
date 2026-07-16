@@ -5,6 +5,7 @@
 
 #include "main_window/deps.h"
 #include "main_window/internal.h"
+#include "native_archive_session_registry.h"
 
 namespace z7::ui::filemanager {
 
@@ -332,44 +333,6 @@ namespace z7::ui::filemanager {
             return deduped;
         }
 
-        class DetachedArchiveSessionCloser final : public QObject {
-        public:
-            static void dispatch(QVector<z7::app::ArchiveSessionToken> tokens) {
-                QVector<z7::app::ArchiveSessionToken> const pending = dedupe_archive_session_tokens(std::move(tokens));
-                if (pending.isEmpty()) {
-                    return;
-                }
-
-                auto* closer = new DetachedArchiveSessionCloser(pending);
-                closer->start_next();
-            }
-
-        private:
-            explicit DetachedArchiveSessionCloser(QVector<z7::app::ArchiveSessionToken> tokens) :
-                tokens_(std::move(tokens)), runner_(new ArchiveProcessRunner(this)) {
-                connect(runner_, &ArchiveProcessRunner::finished, this, [this](bool, int, int, QString const&) {
-                    start_next();
-                });
-            }
-
-            void start_next() {
-                if (next_token_index_ >= tokens_.size()) {
-                    deleteLater();
-                    return;
-                }
-
-                z7::app::ArchiveSessionToken const token = tokens_.at(next_token_index_++);
-                // ArchiveProcessRunner emits finished() even when startup fails
-                // immediately, so the finished handler remains the single place
-                // that advances the queue.
-                (void)runner_->start_close_session(token);
-            }
-
-            QVector<z7::app::ArchiveSessionToken> tokens_;
-            int next_token_index_ = 0;
-            ArchiveProcessRunner* runner_ = nullptr;
-        };
-
     } // namespace
 
     FmPanelsState read_fm_panels_state(z7::platform::qt::PortableSettings const& settings) {
@@ -637,12 +600,15 @@ namespace z7::ui::filemanager {
         return dedupe_archive_session_tokens(std::move(tokens_to_close));
     }
 
-    void MainWindow::dispatch_detached_archive_session_close(QVector<z7::app::ArchiveSessionToken> tokens) {
-        DetachedArchiveSessionCloser::dispatch(std::move(tokens));
+    void MainWindow::close_archive_sessions_for_shutdown(QVector<z7::app::ArchiveSessionToken> tokens) {
+        z7::app::ArchiveSessionRegistry& registry = z7::app::ArchiveSessionRegistry::instance();
+        for (z7::app::ArchiveSessionToken const token : dedupe_archive_session_tokens(std::move(tokens))) {
+            (void)registry.close(token);
+        }
     }
 
     void MainWindow::closeEvent(QCloseEvent* event) {
-        dispatch_detached_archive_session_close(run_shutdown_cleanup_once());
+        close_archive_sessions_for_shutdown(run_shutdown_cleanup_once());
         QMainWindow::closeEvent(event);
     }
 

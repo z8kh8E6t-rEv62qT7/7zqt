@@ -179,6 +179,8 @@ namespace z7::app {
     struct OpenArchiveFromPathRequest {
         std::string archive_path;
         std::string archive_type_hint;
+        // nullopt preserves the upstream Auto behavior for this archive layer.
+        std::optional<uint32_t> filename_code_page;
     };
 
     struct OpenArchiveFromParentRequest {
@@ -193,6 +195,15 @@ namespace z7::app {
         std::string archive_type_hint;
         size_t size_budget = 0;
         std::string display_path_hint;
+        // Applies only to the child layer. Parent decoding remains bound to the
+        // parent session's independently selected code page.
+        std::optional<uint32_t> filename_code_page;
+    };
+
+    struct SetArchiveSessionFilenameCodePageRequest {
+        ArchiveSessionToken token;
+        // nullopt selects Auto.
+        std::optional<uint32_t> filename_code_page;
     };
 
     struct CloseArchiveSessionRequest {

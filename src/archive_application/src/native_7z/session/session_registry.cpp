@@ -9,6 +9,7 @@
 #include "common/archive_type_normalization.h"
 #include "core/filesystem_replace.h"
 #include "core/internal.h"
+#include "session/session_parent_item_replace.h"
 #include "session/session_registry_internal.h"
 #include "third_party_adapter/callbacks_extract_run.h"
 
@@ -147,6 +148,16 @@ namespace z7::app {
             return normalize_session_format_token(ustring_to_utf8(UString(format_name)));
         }
 
+        std::string archive_session_reopen_format_hint(ArchiveOpenSession const& session) {
+            ArchiveOpenSessionState const& state = archive_session_state(session);
+            CArc const* const arc = state.archive_link == nullptr ? nullptr : state.archive_link->GetArc();
+            // Preserve parser-owned prefixes (for example SFX stubs) instead of forcing the inner format.
+            if (arc != nullptr && arc->ArcStreamOffset != 0) {
+                return {};
+            }
+            return archive_session_format_token(session);
+        }
+
         std::filesystem::path session_materialized_file_path(ArchiveOpenSession const& session,
                                                              std::filesystem::path const& directory) {
             namespace fs = std::filesystem;
@@ -196,26 +207,6 @@ namespace z7::app {
             return std::nullopt;
         }
 
-        std::optional<UInt32> resolve_entry_index_in_parent(ArchiveOpenSession& parent, std::string const& entry_path) {
-            CArchiveLink& link = archive_session_link(parent);
-            CArc const* arc = link.GetArc();
-            if (arc == nullptr || arc->Archive == nullptr) {
-                return std::nullopt;
-            }
-            UInt32 num_items = 0;
-            if (arc->Archive->GetNumberOfItems(&num_items) != S_OK) {
-                return std::nullopt;
-            }
-            std::string const needle = normalize_archive_item_path(entry_path);
-            for (UInt32 i = 0; i < num_items; ++i) {
-                std::string const candidate = archive_item_path_for_matching(*arc, i);
-                if (candidate == needle) {
-                    return i;
-                }
-            }
-            return std::nullopt;
-        }
-
         std::optional<OperationResult> materialize_session_backing_file(ArchiveOpenSession& session,
                                                                         ArchiveBackendHooks const& hooks,
                                                                         std::atomic<bool>* cancel_requested,
@@ -254,17 +245,6 @@ namespace z7::app {
                                                                        2);
                     }
                 } else if (ArchiveOpenSessionNativeAccess::parent(session) != nullptr) {
-                    std::string const& entry_path = ArchiveOpenSessionNativeAccess::entry_path_from_parent(session);
-                    auto resolved_index =
-                        resolve_entry_index_in_parent(*ArchiveOpenSessionNativeAccess::parent(session), entry_path);
-                    if (!resolved_index.has_value()) {
-                        remove_path_tree(dir);
-                        return make_operation_failure<OperationResult>(
-                            ArchiveErrorDomain::kInvalidArguments,
-                            "Nested session entry path not found in parent archive: " + entry_path,
-                            7);
-                    }
-
                     auto const& parent = ArchiveOpenSessionNativeAccess::parent(session);
                     CArchiveLink& parent_link = archive_session_link(*parent);
                     CArc const* parent_arc = parent_link.GetArc();
@@ -275,10 +255,17 @@ namespace z7::app {
                             "Parent archive not available for writable nested session materialization",
                             2);
                     }
+                    UInt32 resolved_index = 0;
+                    if (std::optional<OperationResult> validation_error =
+                            validate_archive_session_parent_item(session, *parent_arc, &resolved_index);
+                        validation_error.has_value()) {
+                        remove_path_tree(dir);
+                        return validation_error;
+                    }
 
                     ArchiveBackendHooks const parent_hooks = make_session_password_hooks(*parent, hooks);
                     auto* callback =
-                        new NativeExtractCallback(parent_arc->Archive,
+                        new NativeExtractCallback(parent_arc,
                                                   dir,
                                                   parent_hooks,
                                                   cancel_requested,
@@ -293,7 +280,7 @@ namespace z7::app {
                                                   ExtractZoneIdMode::kNone,
                                                   false,
                                                   1);
-                    UInt32 const indices[1] = {*resolved_index};
+                    UInt32 const indices[1] = {resolved_index};
                     const HRESULT extract_hr = parent_arc->Archive->Extract(indices, 1, /*testMode=*/0, callback);
                     callback->Release();
                     if (extract_hr != S_OK) {
@@ -351,7 +338,7 @@ namespace z7::app {
                 return invalid_request("Session reopen requires a materialized archive file");
             }
 
-            std::string const format_hint = archive_session_format_token(session);
+            std::string const format_hint = archive_session_reopen_format_hint(session);
             auto next_state = std::make_unique<ArchiveOpenSessionState>();
             next_state->source_version = archive_session_state(session).source_version;
             next_state->temp_dir = dir_path;
@@ -371,7 +358,9 @@ namespace z7::app {
                                                    reopen_hooks,
                                                    cancel_requested,
                                                    std::move(wait_while_paused),
-                                                   /*enable_open_callback=*/true,
+                                                   OpenResultMessagePolicy::kOperationMessages,
+                                                   /*allow_password_prompt=*/true,
+                                                   session.password_defined() ? session.password() : std::string(),
                                                    /*codecs_already_loaded=*/false,
                                                    *next_state->codecs,
                                                    *next_state->types,
@@ -380,7 +369,9 @@ namespace z7::app {
                                                    arc,
                                                    &password_requested,
                                                    &wrong_password,
-                                                   &password);
+                                                   &password,
+                                                   &next_state->open_diagnostics,
+                                                   session.filename_code_page());
             if (hr != S_OK) {
                 if (password_requested || wrong_password) {
                     return make_operation_failure<OperationResult>(
@@ -390,6 +381,16 @@ namespace z7::app {
                     return make_operation_canceled<OperationResult>();
                 }
                 return make_operation_failure_from_hresult<OperationResult>(hr);
+            }
+
+            if (auto const& parent = ArchiveOpenSessionNativeAccess::parent(session); parent != nullptr) {
+                OpenArchiveDiagnostics inherited = archive_session_state(*parent).open_diagnostics;
+                append_open_archive_diagnostics(inherited, next_state->open_diagnostics);
+                next_state->open_diagnostics = std::move(inherited);
+            }
+            if (next_state->open_diagnostics.has_errors()) {
+                return make_operation_failure_from_open_diagnostics<OperationResult>(
+                    next_state->open_diagnostics);
             }
 
             if (!password.empty()) {
@@ -408,6 +409,7 @@ namespace z7::app {
             if (parent == nullptr) {
                 return invalid_request("Parent session commit requires a parent session");
             }
+            ScopedFilenameCodePage parent_filename_scope(parent->filename_code_page());
 
             if (ArchiveOpenSessionNativeAccess::parent_generation_at_open(session)
                 != ArchiveOpenSessionNativeAccess::generation(*parent)) {
@@ -423,12 +425,10 @@ namespace z7::app {
                     ArchiveErrorDomain::kIo, "Dirty nested session has no writable archive file", 2);
             }
 
-            std::string const parent_format = archive_session_format_token(*parent);
-            if (parent_format.empty()) {
-                return make_operation_failure<OperationResult>(
-                    ArchiveErrorDomain::kUnsupportedFormat,
-                    "Cannot determine parent archive format for nested session commit",
-                    2);
+            if (std::optional<OperationResult> validation_error =
+                    validate_archive_session_parent_item_replacement(*parent);
+                validation_error.has_value()) {
+                return validation_error;
             }
 
             if (std::optional<OperationResult> writable_error =
@@ -440,6 +440,17 @@ namespace z7::app {
             if (parent_state.temp_file == nullptr || parent_state.temp_file->empty()) {
                 return make_operation_failure<OperationResult>(
                     ArchiveErrorDomain::kIo, "Parent session has no writable backing file", 2);
+            }
+            CArc const* parent_arc = archive_session_link(*parent).GetArc();
+            if (parent_arc == nullptr || parent_arc->Archive == nullptr) {
+                return make_operation_failure<OperationResult>(
+                    ArchiveErrorDomain::kIo, "Parent archive is unavailable for nested session commit", 2);
+            }
+            UInt32 parent_entry_index = 0;
+            if (std::optional<OperationResult> validation_error =
+                    validate_archive_session_parent_item(session, *parent_arc, &parent_entry_index);
+                validation_error.has_value()) {
+                return validation_error;
             }
 
             SessionMutationBackup parent_backup;
@@ -460,23 +471,18 @@ namespace z7::app {
                 return restore_error;
             };
 
-            AddRequest request;
-            request.archive_path = parent_state.temp_file->string();
-            request.format = parent_format;
-            request.update_mode = "update";
-            if (parent->password_defined()) {
-                request.password = parent->password();
-            }
-            request.input_items.push_back(AddInputItem{
-                state.temp_file->string(), ArchiveOpenSessionNativeAccess::entry_path_from_parent(session)});
-
-            NativeArchiveBackend backend;
-            AddResult const add_result = backend.add(request, hooks);
-            if (!add_result.ok) {
+            OperationResult const replace_result = replace_archive_session_item_by_index(
+                *parent,
+                parent_entry_index,
+                *state.temp_file,
+                hooks,
+                cancel_requested,
+                wait_while_paused);
+            if (!replace_result.ok) {
                 if (std::optional<OperationResult> restore_error = restore_parent(); restore_error.has_value()) {
                     return restore_error;
                 }
-                return static_cast<OperationResult>(add_result);
+                return replace_result;
             }
 
             if (std::optional<OperationResult> refresh_error =
@@ -614,6 +620,47 @@ namespace z7::app {
         return normalize_archive_item_path(archive_get_prop_text(arc.Archive, index, kpidPath));
     }
 
+    std::optional<OperationResult> validate_archive_session_parent_item(ArchiveOpenSession const& session,
+                                                                        CArc const& parent_arc,
+                                                                        UInt32* out_index) {
+        if (out_index == nullptr) {
+            return invalid_request("Nested session parent-item validation requires an output index");
+        }
+        std::optional<uint32_t> const stored_index =
+            ArchiveOpenSessionNativeAccess::parent_entry_index(session);
+        if (!stored_index.has_value()) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kInvalidArguments, "Nested session is missing its parent entry index", 7);
+        }
+        if (parent_arc.Archive == nullptr) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo, "Parent archive is unavailable for nested session validation", 2);
+        }
+
+        UInt32 num_items = 0;
+        HRESULT const count_hr = parent_arc.Archive->GetNumberOfItems(&num_items);
+        if (count_hr != S_OK) {
+            return make_operation_failure_from_hresult<OperationResult>(count_hr);
+        }
+        UInt32 const index = static_cast<UInt32>(*stored_index);
+        if (index >= num_items) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo, "Nested archive parent entry index is no longer valid", 2);
+        }
+
+        std::string const expected = normalize_archive_item_path(
+            ArchiveOpenSessionNativeAccess::entry_path_from_parent(session));
+        std::string const actual = archive_item_path_for_matching(parent_arc, index);
+        if (actual != expected) {
+            return make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo,
+                "Nested archive parent entry changed at index " + std::to_string(index),
+                2);
+        }
+        *out_index = index;
+        return std::nullopt;
+    }
+
     ArchiveBackendHooks make_session_password_hooks(ArchiveOpenSession& session,
                                                     ArchiveBackendHooks const& base_hooks) {
         ArchiveBackendHooks hooks = base_hooks;
@@ -704,7 +751,7 @@ namespace z7::app {
     }
 
     bool ArchiveSessionRegistry::close(ArchiveSessionToken token) {
-        OperationResult const result = close_native_archive_session(*this, token, {}, nullptr, [] { return false; });
+        OperationResult const result = close_native_archive_session(*this, token, {}, nullptr, [] { return true; });
         return result.ok;
     }
 
@@ -725,11 +772,34 @@ namespace z7::app {
         return sessions_.size();
     }
 
+    bool ArchiveSessionRegistry::has_descendant(ArchiveSessionToken token) const {
+        if (!token.is_valid()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto const& [candidate_token, candidate] : sessions_) {
+            if (candidate_token == token.value || candidate == nullptr) {
+                continue;
+            }
+            for (std::shared_ptr<ArchiveOpenSession> cursor = ArchiveOpenSessionNativeAccess::parent(*candidate);
+                 cursor != nullptr;
+                 cursor = ArchiveOpenSessionNativeAccess::parent(*cursor)) {
+                if (cursor->token() == token) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     std::optional<OperationResult> ensure_archive_session_writable(ArchiveOpenSession& session,
                                                                    ArchiveBackendHooks const& hooks,
                                                                    std::atomic<bool>* cancel_requested,
                                                                    std::function<bool()> wait_while_paused) {
         ArchiveOpenSessionState& state = archive_session_state(session);
+        if (state.open_diagnostics.has_errors()) {
+            return make_operation_failure_from_open_diagnostics<OperationResult>(state.open_diagnostics);
+        }
         if (state.temp_file != nullptr && !state.temp_file->empty()) {
             return std::nullopt;
         }

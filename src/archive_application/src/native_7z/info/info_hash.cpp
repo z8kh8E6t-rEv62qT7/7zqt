@@ -4,6 +4,7 @@
 #include "core/internal.h"
 #include "third_party_adapter/callbacks_extract_test.h"
 #include "third_party_adapter/third_party_adapter.h"
+#include "Windows/ErrorMsg.h"
 
 namespace z7::app {
 
@@ -60,23 +61,45 @@ namespace z7::app {
     HashResult NativeArchiveBackend::run_hash_entries(HashRequest const& request,
                                                       ArchiveBackendHooks const& hooks,
                                                       std::vector<HashInputEntry> const& entries,
-                                                      std::string const& main_name) {
+                                                      std::string const& main_name,
+                                                      uint64_t initial_error_count) {
         uint64_t const total_files = hash_entry_file_count(entries);
         uint64_t const total_bytes = hash_entry_total_bytes(entries);
 
-        uint64_t error_count = 0;
-        emit_hash_progress(hooks, "Hashing", true, total_bytes, 0, total_files, 0, 0, {});
+        uint64_t error_count = initial_error_count;
+        emit_hash_progress(hooks, "Hashing", true, total_bytes, 0, total_files, 0, error_count, {});
 
         CHashBundle bundle;
         if (std::optional<HashResult> configure_error = configure_hash_bundle(request, main_name, bundle);
             configure_error.has_value()) {
             return std::move(*configure_error);
         }
+        bundle.NumErrors = initial_error_count;
 
         uint64_t completed_bytes = 0;
         uint64_t completed_files = 0;
         bool first_file_set = false;
         std::vector<char> buffer(kHashReadChunkSize);
+
+        auto publish_file_error = [&](HashInputEntry const& entry, HRESULT error) {
+            ++bundle.NumErrors;
+            ++error_count;
+            std::string message = entry.absolute_path.generic_string();
+            if (!message.empty()) {
+                message.push_back('\n');
+            }
+            message += ustring_to_utf8(NWindows::NError::MyFormatMessage(error));
+            emit_log_event(hooks, OperationStage::kRunning, OutputChannel::kStdErr, message);
+            emit_hash_progress(hooks,
+                               entry.relative_path,
+                               true,
+                               total_bytes,
+                               completed_bytes,
+                               total_files,
+                               completed_files,
+                               error_count,
+                               entry.relative_path);
+        };
 
         for (HashInputEntry const& entry : entries) {
             if (cancel_requested_.load() || !wait_while_paused()) {
@@ -89,10 +112,10 @@ namespace z7::app {
                 continue;
             }
 
-            std::ifstream in(entry.absolute_path, std::ios::binary);
-            if (!in) {
-                ++bundle.NumErrors;
-                ++error_count;
+            CMyComPtr2_Create<IInStream, CInFileStream> in;
+            FString const native_path = us2fs(utf8_to_ustring(entry.absolute_path.string()));
+            if (!in->Open(native_path)) {
+                publish_file_error(entry, GetLastError_noZero_HRESULT());
                 continue;
             }
 
@@ -113,19 +136,30 @@ namespace z7::app {
 
             uint64_t file_progress_prev = 0;
             bool file_ok = true;
-            while (in) {
+            uint64_t file_bytes_read = 0;
+            for (;;) {
                 if (cancel_requested_.load() || !wait_while_paused()) {
                     return make_operation_canceled<HashResult>();
                 }
 
-                in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-                std::streamsize const got = in.gcount();
-                if (got <= 0) {
+                UInt32 got = 0;
+                HRESULT const read_result =
+                    in.Interface()->Read(buffer.data(), static_cast<UInt32>(buffer.size()), &got);
+                if (read_result != S_OK) {
+                    if (entry.file_size > file_bytes_read) {
+                        completed_bytes += entry.file_size - file_bytes_read;
+                    }
+                    publish_file_error(entry, read_result);
+                    file_ok = false;
+                    break;
+                }
+                if (got == 0) {
                     break;
                 }
 
-                bundle.Update(buffer.data(), static_cast<UInt32>(got));
-                completed_bytes += static_cast<uint64_t>(got);
+                bundle.Update(buffer.data(), got);
+                file_bytes_read += got;
+                completed_bytes += got;
                 if (bundle.CurSize - file_progress_prev >= kHashProgressStepBytes) {
                     file_progress_prev = bundle.CurSize;
                     emit_hash_progress(hooks,
@@ -138,12 +172,6 @@ namespace z7::app {
                                        error_count,
                                        entry.relative_path);
                 }
-            }
-
-            if (in.bad()) {
-                ++bundle.NumErrors;
-                ++error_count;
-                file_ok = false;
             }
 
             if (!file_ok) {
@@ -174,12 +202,13 @@ namespace z7::app {
 
     HashResult NativeArchiveBackend::run_hash_archive_entries(HashRequest const& request,
                                                               ArchiveBackendHooks const& hooks,
-                                                              IInArchive* archive,
+                                                              CArc const* arc,
                                                               std::vector<HashInputEntry> const& entries,
                                                               std::string const& main_name,
                                                               std::string const& archive_display_path,
-                                                              std::string const& password) {
-        if (archive == nullptr) {
+                                                              std::string const& password,
+                                                              OpenArchiveDiagnostics const* open_diagnostics) {
+        if (arc == nullptr || arc->Archive == nullptr) {
             return make_operation_failure<HashResult>(
                 ArchiveErrorDomain::kInvalidArguments, "Archive hash requires an open archive", 7);
         }
@@ -207,7 +236,7 @@ namespace z7::app {
         }
 
         auto* callback = new NativeTestExtractCallback(
-            archive,
+            arc,
             hooks,
             &cancel_requested_,
             [this]() { return this->wait_while_paused(); },
@@ -219,7 +248,7 @@ namespace z7::app {
         callback->set_hash_bundle(&bundle);
 
         ExtractInvocationStatus const status = invoke_archive_extract_with_callback(
-            archive,
+            arc->Archive,
             indices.empty() ? nullptr : indices.data(),
             indices.empty() ? static_cast<UInt32>(-1) : static_cast<UInt32>(indices.size()),
             false,
@@ -228,6 +257,9 @@ namespace z7::app {
         auto attach_summary = [&](HashResult result) {
             result.summary_data = make_hash_summary(bundle);
             result.summary_data.num_archives = 1;
+            if (open_diagnostics != nullptr) {
+                result.summary_data.num_errors += open_diagnostics->error_count;
+            }
             result.hash_summary = result.summary_data;
             return result;
         };
@@ -244,7 +276,9 @@ namespace z7::app {
             },
             [&](ExtractInvocationStatus const&) {
                 return attach_summary(make_operation_success<HashResult>("Success"));
-            });
+            },
+            "Password required or incorrect",
+            open_diagnostics);
     }
 
     HashResult NativeArchiveBackend::run_hash_internal(HashRequest const& request, ArchiveBackendHooks const& hooks) {
@@ -252,6 +286,7 @@ namespace z7::app {
 
         std::vector<HashInputEntry> entries;
         entries.reserve(request.input_paths.size() * 2);
+        std::vector<HashScanError> scan_errors;
 
         for (std::string const& input : request.input_paths) {
             if (cancel_requested_.load()) {
@@ -262,12 +297,38 @@ namespace z7::app {
             uint64_t total_bytes_unused = 0;
             fs::path const path(input);
             collect_hash_entries_for_path(
-                path, path_leaf_name(path), request.recursive_dirs, entries, total_files_unused, total_bytes_unused);
+                path,
+                path_leaf_name(path),
+                request.recursive_dirs,
+                entries,
+                scan_errors,
+                total_files_unused,
+                total_bytes_unused);
+        }
+
+        uint64_t published_scan_errors = 0;
+        for (HashScanError const& scan_error : scan_errors) {
+            ++published_scan_errors;
+            std::string message = scan_error.path.generic_string();
+            if (!message.empty()) {
+                message.push_back('\n');
+            }
+            message += scan_error.error.message();
+            emit_log_event(hooks, OperationStage::kRunning, OutputChannel::kStdErr, message);
+            emit_hash_progress(hooks,
+                               "Scanning",
+                               false,
+                               0,
+                               0,
+                               0,
+                               0,
+                               published_scan_errors,
+                               scan_error.path.generic_string());
         }
 
         std::string const main_name =
             request.input_paths.size() == 1 ? path_leaf_name(fs::path(request.input_paths.front())) : std::string();
-        return run_hash_entries(request, hooks, entries, main_name);
+        return run_hash_entries(request, hooks, entries, main_name, scan_errors.size());
     }
 
     std::unique_ptr<INativeArchiveBackend> create_native_archive_backend() {

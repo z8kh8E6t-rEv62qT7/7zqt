@@ -490,7 +490,14 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             return;
         }
         QByteArray const utf8 = value.toUtf8();
-        int const copy_len = std::min(capacity - 1, static_cast<int>(utf8.size()));
+        int const utf8_size = static_cast<int>(utf8.size());
+        int copy_len = std::min(capacity - 1, utf8_size);
+        if (copy_len < utf8_size) {
+            while (copy_len > 0
+                   && (static_cast<unsigned char>(utf8.at(copy_len)) & 0xC0U) == 0x80U) {
+                --copy_len;
+            }
+        }
         if (copy_len <= 0) {
             return;
         }

@@ -58,10 +58,12 @@ namespace z7::ui::filemanager {
         ArchiveState::ParentContext parent;
         parent.archive_path = archive.source_archive;
         parent.archive_entry_from_parent = archive.archive_entry_from_parent;
+        parent.parent_entry_index = archive.parent_entry_index;
         parent.virtual_display_source = archive.virtual_display_source;
         parent.virtual_dir = archive.virtual_dir;
         parent.origin_dir = archive.origin_dir;
         parent.type_hint = archive.type_hint;
+        parent.filename_code_page = archive.filename_code_page;
         parent.temp_session = archive.temp_session;
         parent.session_token = archive.current_token;
         return parent;
@@ -88,22 +90,28 @@ namespace z7::ui::filemanager {
         ParentArchiveReturnTransition transition;
         transition.parent = archive.parent_stack.back();
         transition.leaving_archive_entry_from_parent = archive.archive_entry_from_parent;
+        transition.leaving_parent_entry_index = archive.parent_entry_index;
         transition.leaving_temp_session = archive.temp_session;
         transition.leaving_token = archive.current_token;
+        transition.leaving_filename_code_page = archive.filename_code_page;
         archive.parent_stack.removeLast();
         return transition;
     }
 
     void MainWindow::PanelController::commit_return_to_parent_archive(ParentArchiveReturnTransition const& transition) {
         archive.archive_entry_from_parent = transition.parent.archive_entry_from_parent;
+        archive.parent_entry_index = transition.parent.parent_entry_index;
         archive.temp_session = transition.parent.temp_session;
+        archive.filename_code_page = transition.parent.filename_code_page;
     }
 
     void
     MainWindow::PanelController::rollback_return_to_parent_archive(ParentArchiveReturnTransition const& transition) {
         archive.parent_stack.push_back(transition.parent);
         archive.archive_entry_from_parent = transition.leaving_archive_entry_from_parent;
+        archive.parent_entry_index = transition.leaving_parent_entry_index;
         archive.temp_session = transition.leaving_temp_session;
+        archive.filename_code_page = transition.leaving_filename_code_page;
     }
 
     MainWindow::PanelController::ArchiveFilesystemExitTransition
@@ -152,9 +160,11 @@ namespace z7::ui::filemanager {
         archive.virtual_dir.clear();
         archive.source_archive.clear();
         archive.archive_entry_from_parent.clear();
+        archive.parent_entry_index.reset();
         archive.virtual_display_source.clear();
         archive.origin_dir.clear();
         archive.type_hint.clear();
+        archive.filename_code_page.reset();
         archive.parent_stack.clear();
         archive.temp_session.clear();
         archive.current_token = {};
@@ -199,7 +209,9 @@ namespace z7::ui::filemanager {
         archive.parent_stack.clear();
         archive.current_token = {};
         archive.archive_entry_from_parent.clear();
+        archive.parent_entry_index.reset();
         archive.virtual_display_source = source_archive;
+        archive.filename_code_page.reset();
     }
 
 } // namespace z7::ui::filemanager

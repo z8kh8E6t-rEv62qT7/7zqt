@@ -20,8 +20,8 @@ namespace z7::ui::gui {
     struct GuiTaskRunResult {
         z7::app::OperationResult result;
         QStringList log_lines;
-        QStringList failure_messages;
-        bool failure_displayed = false;
+        QStringList result_messages;
+        bool final_error_displayed = false;
     };
 
     class GuiTaskRunner {

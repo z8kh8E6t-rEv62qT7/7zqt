@@ -467,7 +467,7 @@ namespace z7::ui::widgets {
                 if (deferred) {
                     select_single(primary);
                 }
-                emit primary_clicked(primary);
+                emit primary_clicked(primary, event->modifiers());
             }
         }
         QTableView::mouseReleaseEvent(event);

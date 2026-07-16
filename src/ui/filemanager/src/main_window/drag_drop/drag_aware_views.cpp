@@ -106,6 +106,7 @@ namespace z7::ui::filemanager {
             return {};
         }
 
+#ifdef Z7_TESTING
         int mouse_shift_anchor_row_for_diagnostic(QAbstractItemView* view,
                                                   QPersistentModelIndex const& persistent_anchor,
                                                   QPointer<QAbstractItemModel> const& anchor_model,
@@ -116,6 +117,7 @@ namespace z7::ui::filemanager {
             QModelIndex const persistent = persistent_anchor;
             return persistent.isValid() ? persistent.row() : -1;
         }
+#endif
 
         QModelIndex selection_column_index(QAbstractItemView* view, QModelIndex const& index, int selection_column) {
             if (view == nullptr || view->model() == nullptr || !index.isValid()) {

@@ -76,16 +76,6 @@ namespace z7::app {
         return resolved;
     }
 
-    std::string default_extracted_stream_name(std::string const& archive_path) {
-        std::filesystem::path const archive_name = std::filesystem::path(archive_path).filename();
-        std::string const output_name =
-            archive_name.has_extension() ? archive_name.stem().string() : archive_name.string();
-        if (output_name.empty() || output_name == "." || output_name == "..") {
-            return "unnamed-stream";
-        }
-        return output_name;
-    }
-
     std::string output_tail_name(std::string output_dir) {
         output_dir = z7::common::normalize_native_separators_copy(std::move(output_dir));
         while (!output_dir.empty() && output_dir.back() == '/') {

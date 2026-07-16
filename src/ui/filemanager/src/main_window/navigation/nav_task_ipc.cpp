@@ -51,6 +51,31 @@ namespace z7::ui::filemanager {
             return out;
         }
 
+        QStringList normalized_archive_chain(QStringList const& paths) {
+            QStringList out;
+            out.reserve(paths.size());
+            for (QString const& path : paths) {
+                out << z7::ui::archive_support::normalize_virtual_dir(path);
+            }
+            return out;
+        }
+
+        bool filename_code_pages_match(
+            std::vector<z7::app::FilenameCodePage> const& expected,
+            QVector<z7::task_ipc_runtime::TaskIpcFilenameCodePage> const& encoded) {
+            if (expected.size() != static_cast<size_t>(encoded.size())) {
+                return false;
+            }
+            for (size_t index = 0; index < expected.size(); ++index) {
+                auto const& item = encoded.at(static_cast<qsizetype>(index));
+                if (item.automatic != !expected[index].has_value()
+                    || item.code_page != expected[index].value_or(0)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         QString task_ipc_command_name(z7::task_ipc_runtime::TaskIpcCommandKind command) {
             switch (command) {
                 case z7::task_ipc_runtime::TaskIpcCommandKind::kAdd:
@@ -211,7 +236,9 @@ namespace z7::ui::filemanager {
             && plan.root_type_hint().trimmed()
                    == (payload.open.has_value() ? payload.open->archive_type.trimmed() : QString())
             && plan.nested_archive_entries
-                   == (payload.open.has_value() ? payload.open->nested_archive_entries : QStringList{});
+                   == (payload.open.has_value() ? payload.open->nested_archive_entries : QStringList{})
+            && payload.open.has_value()
+            && filename_code_pages_match(plan.filename_code_pages, payload.open->filename_code_pages);
     }
 
     bool MainWindow::refresh_archive_panels_for_task_ipc_payload(z7::task_ipc_runtime::TaskIpcPayload const& payload) {
@@ -255,7 +282,7 @@ namespace z7::ui::filemanager {
             payload.archive_export->root_archive_path =
                 root_archive_path.isEmpty() ? QString() : QFileInfo(root_archive_path).absoluteFilePath();
             payload.archive_export->nested_archive_entries =
-                unique_non_empty_archive_entries(payload.archive_export->nested_archive_entries);
+                normalized_archive_chain(payload.archive_export->nested_archive_entries);
             payload.archive_export->archive_entry_paths =
                 unique_non_empty_archive_entries(payload.archive_export->archive_entry_paths);
         }

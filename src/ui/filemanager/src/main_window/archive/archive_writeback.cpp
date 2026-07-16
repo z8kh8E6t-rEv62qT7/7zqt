@@ -137,6 +137,7 @@ namespace z7::ui::filemanager {
     bool MainWindow::ArchiveWritebackPlan::is_valid() const {
         return !source_archive.trimmed().isEmpty()
             && !reopen_frames.isEmpty()
+            && filename_code_pages.size() == static_cast<size_t>(reopen_frames.size())
             && !current_display_source().trimmed().isEmpty();
     }
 
@@ -190,35 +191,45 @@ namespace z7::ui::filemanager {
 
         auto append_frame = [&plan](QString const& source_archive,
                                     QString const& archive_entry_from_parent,
+                                    std::optional<uint32_t> parent_entry_index,
                                     QString const& virtual_display_source,
                                     QString const& virtual_dir,
-                                    QString const& type_hint) {
+                                    QString const& type_hint,
+                                    z7::app::FilenameCodePage filename_code_page) {
             ArchiveWritebackFrame frame;
             frame.archive_entry_from_parent = z7::ui::archive_support::normalize_virtual_dir(archive_entry_from_parent);
+            frame.parent_entry_index = parent_entry_index;
             frame.virtual_display_source = virtual_display_source.isEmpty() ? source_archive : virtual_display_source;
             frame.virtual_dir = virtual_dir;
             frame.type_hint = type_hint;
+            frame.filename_code_page = filename_code_page;
             plan.reopen_frames.push_back(std::move(frame));
+            plan.filename_code_pages.push_back(filename_code_page);
         };
 
         for (PanelController::ArchiveState::ParentContext const& parent_ctx : panel.archive.parent_stack) {
             append_frame(plan.source_archive,
                          parent_ctx.archive_entry_from_parent,
+                         parent_ctx.parent_entry_index,
                          parent_ctx.virtual_display_source,
                          parent_ctx.virtual_dir,
-                         parent_ctx.type_hint);
+                         parent_ctx.type_hint,
+                         parent_ctx.filename_code_page);
         }
         append_frame(plan.source_archive,
                      panel.archive.archive_entry_from_parent,
+                     panel.archive.parent_entry_index,
                      panel.archive_display_source(),
                      panel.archive.virtual_dir,
-                     panel.archive.type_hint);
+                     panel.archive.type_hint,
+                     panel.archive.filename_code_page);
 
         for (int i = 1; i < plan.reopen_frames.size(); ++i) {
             QString const nested_entry = plan.reopen_frames[i].archive_entry_from_parent;
             if (nested_entry.isEmpty()) {
                 plan.reopen_frames.clear();
                 plan.nested_archive_entries.clear();
+                plan.filename_code_pages.clear();
                 return plan;
             }
             plan.nested_archive_entries.push_back(nested_entry);
@@ -356,16 +367,22 @@ namespace z7::ui::filemanager {
             ArchiveState::ParentContext parent_ctx;
             parent_ctx.archive_path = plan.source_archive;
             parent_ctx.archive_entry_from_parent = plan.reopen_frames[i].archive_entry_from_parent;
+            parent_ctx.parent_entry_index = plan.reopen_frames[i].parent_entry_index;
             parent_ctx.virtual_display_source = plan.reopen_frames[i].virtual_display_source;
             parent_ctx.virtual_dir = plan.reopen_frames[i].virtual_dir;
             parent_ctx.origin_dir = plan.origin_dir;
             parent_ctx.type_hint = plan.reopen_frames[i].type_hint;
+            parent_ctx.filename_code_page = plan.reopen_frames[i].filename_code_page;
             parent_ctx.session_token = opened_tokens[i];
             archive.parent_stack.push_back(std::move(parent_ctx));
         }
 
         archive.archive_entry_from_parent =
             plan.reopen_frames.isEmpty() ? QString() : plan.reopen_frames.back().archive_entry_from_parent;
+        archive.parent_entry_index =
+            plan.reopen_frames.isEmpty() ? std::nullopt : plan.reopen_frames.back().parent_entry_index;
+        archive.filename_code_page =
+            plan.reopen_frames.isEmpty() ? z7::app::FilenameCodePage{} : plan.reopen_frames.back().filename_code_page;
         archive.temp_session.clear();
     }
 
@@ -418,7 +435,10 @@ namespace z7::ui::filemanager {
                     [this, out_session_result](ArchiveProcessRunner* runner) {
                         return runner != nullptr
                             && runner->start_open_from_path(
-                                plan.source_archive, plan.root_type_hint(), out_session_result);
+                                plan.source_archive,
+                                plan.root_type_hint(),
+                                out_session_result,
+                                plan.filename_code_pages.front());
                     },
                     [self = shared_from_this(),
                      out_session_result](bool ok, int, int, QString const&, z7::app::OperationOutcome const&) {
@@ -459,13 +479,28 @@ namespace z7::ui::filemanager {
                         z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)), child_display_source),
                     z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)),
                     [this, index, out_session_result, child_display_source](ArchiveProcessRunner* runner) {
-                        return runner != nullptr
-                            && runner->start_open_nested_by_path(opened_tokens.back(),
+                        if (runner == nullptr) {
+                            return false;
+                        }
+                        ArchiveWritebackFrame const& frame = plan.reopen_frames[index + 1];
+                        if (frame.parent_entry_index.has_value()) {
+                            return runner->start_open_nested(opened_tokens.back(),
+                                                             *frame.parent_entry_index,
+                                                             frame.type_hint,
+                                                             0,
+                                                             child_display_source,
+                                                             out_session_result,
+                                                             plan.filename_code_pages.at(
+                                                                 static_cast<size_t>(index + 1)));
+                        }
+                        return runner->start_open_nested_by_path(opened_tokens.back(),
                                                                  plan.nested_archive_entries[index],
-                                                                 plan.reopen_frames[index + 1].type_hint,
+                                                                 frame.type_hint,
                                                                  0,
                                                                  child_display_source,
-                                                                 out_session_result);
+                                                                 out_session_result,
+                                                                 plan.filename_code_pages.at(
+                                                                     static_cast<size_t>(index + 1)));
                     },
                     [self = shared_from_this(), index, out_session_result](
                         bool ok, int, int, QString const&, z7::app::OperationOutcome const&) {
@@ -476,6 +511,8 @@ namespace z7::ui::filemanager {
                             self->finish(false, true);
                             return;
                         }
+                        self->plan.reopen_frames[index + 1].parent_entry_index =
+                            out_session_result->value().parent_entry_index;
                         self->opened_tokens.push_back(out_session_result->value().token);
                         if (index + 1 >= self->plan.nested_archive_entries.size()) {
                             self->start_list_reload();

@@ -14,9 +14,11 @@ set(Z7_NATIVE_7Z_SOURCES
   "src/native_7z/core/event_hash.cpp"
   "src/native_7z/core/event_list.cpp"
   "src/native_7z/core/event_open.cpp"
+  "src/native_7z/core/filename_code_page.cpp"
   "src/native_7z/core/event_update.cpp"
   "src/native_7z/core/filesystem_replace.cpp"
   "src/native_7z/core/internal_raii.cpp"
+  "src/native_7z/core/open_diagnostics.cpp"
 
   "src/native_7z/callbacks/callbacks_extract_memory.cpp"
   "src/native_7z/callbacks/callbacks_extract_com.cpp"
@@ -57,6 +59,7 @@ set(Z7_NATIVE_7Z_SOURCES
   "src/native_7z/info/info_runtime.cpp"
 
   "src/native_7z/session/session_registry.cpp"
+  "src/native_7z/session/session_parent_item_replace.cpp"
   "src/native_7z/session/session_registry_open_parent.cpp"
   "src/native_7z/session/session_registry_open_path.cpp")
 

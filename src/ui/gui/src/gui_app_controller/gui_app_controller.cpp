@@ -5,10 +5,12 @@
 #include <utility>
 
 #include "archive_error.h"
+#include "archive_failure_messages.h"
 #include "archive_format.h"
 #include "archive_string_codec_qt.h"
 #include "benchmark_dialog.h"
 #include "gui_task_runner.h"
+#include "task_result_presentation.h"
 #include "gui_task_spec_ipc.h"
 #include "hash_result_dialog.h"
 #include "helpers.h"
@@ -151,7 +153,7 @@ namespace z7::ui::gui {
                 && !suppress_result_dialogs_for_tests()
 #endif
             ) {
-                QMessageBox::critical(nullptr, QStringLiteral("7zG"), error);
+                QMessageBox::critical(nullptr, QStringLiteral("7-Zip"), error);
             }
             if (on_finished) {
                 GuiTaskCompletion completion;
@@ -237,6 +239,7 @@ namespace z7::ui::gui {
 
         auto on_task_finished = [finish = std::move(finish), spec](GuiTaskRunResult run_result) mutable {
             int exit_code = run_result.result.native_exit_code;
+            bool const canceled = z7::app::is_operation_canceled(run_result.result.error);
             QString completion_summary;
 
 #ifdef Z7_TESTING
@@ -247,18 +250,31 @@ namespace z7::ui::gui {
             }
 #endif
 
-            if (run_result.result.native_exit_code != 0) {
+            z7::ui::runtime_support::TaskResultPresentation const presentation =
+                z7::ui::runtime_support::classify_task_result(run_result.result.ok,
+                                                              run_result.result.error.domain,
+                                                              !run_result.result_messages.isEmpty());
+            if (presentation == z7::ui::runtime_support::TaskResultPresentation::kFinalError
+                || presentation == z7::ui::runtime_support::TaskResultPresentation::kFinalErrorThenMessages
+                || canceled) {
                 completion_summary = run_result.result.summary.empty()
                                        ? z7::ui::archive_support::from_native_string(
                                              z7::app::describe_archive_error(run_result.result.error))
                                        : z7::ui::archive_support::from_native_string(run_result.result.summary);
-                if (!run_result.failure_displayed
+                if (!canceled
+                    && !run_result.final_error_displayed
+                    && (presentation == z7::ui::runtime_support::TaskResultPresentation::kFinalError
+                        || presentation
+                            == z7::ui::runtime_support::TaskResultPresentation::kFinalErrorThenMessages)
                     && !completion_summary.isEmpty()
 #ifdef Z7_TESTING
                     && !suppress_result_dialogs_for_tests()
 #endif
                 ) {
-                    QMessageBox::critical(nullptr, QStringLiteral("7zG"), completion_summary);
+                    QMessageBox::critical(
+                        nullptr,
+                        QStringLiteral("7-Zip"),
+                        z7::ui::runtime_support::localize_archive_failure_message(completion_summary));
                 }
             }
 

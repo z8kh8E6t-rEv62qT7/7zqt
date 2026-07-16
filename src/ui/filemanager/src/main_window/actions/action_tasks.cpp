@@ -12,6 +12,7 @@
 #include "main_window/deps.h"
 #include "main_window/internal.h"
 #include "task_background_mode.h"
+#include "task_result_presentation.h"
 
 namespace z7::ui::filemanager {
 
@@ -320,13 +321,14 @@ namespace z7::ui::filemanager {
         std::function<void(bool, int, int, QString const&, z7::app::OperationOutcome const&)> const& finished_cb,
         RunnerTaskUiMode task_ui_mode,
         std::function<bool(int, QString const&)> const& should_show_failure) {
+        (void)failure_caption;
         auto* const created_runner = new ArchiveProcessRunner(this);
         TaskProgressDialog* const created_dialog =
             task_ui_mode == RunnerTaskUiMode::kSilent ? nullptr : new TaskProgressDialog(this);
         auto const progress_presenter =
             std::make_shared<z7::ui::runtime_support::DelayedProgressDialogPresenter>(created_dialog);
         std::shared_ptr<RunningTaskContext> const task = std::make_shared<RunningTaskContext>();
-        auto const failure_messages = std::make_shared<QStringList>();
+        auto const result_messages = std::make_shared<QStringList>();
         task->runner = created_runner;
         task->dialog = created_dialog;
         active_runner_tasks_.push_back(task);
@@ -349,14 +351,13 @@ namespace z7::ui::filemanager {
         connect(created_runner,
                 &ArchiveProcessRunner::failure_message,
                 this,
-                [failure_messages, dialog_guard](QString const& message) {
-                    QString const trimmed = message.trimmed();
-                    if (trimmed.isEmpty()) {
+                [result_messages, dialog_guard](QString const& message) {
+                    if (message.isEmpty()) {
                         return;
                     }
-                    failure_messages->push_back(trimmed);
+                    result_messages->push_back(message);
                     if (dialog_guard) {
-                        dialog_guard->append_failure_result_message(trimmed);
+                        dialog_guard->append_failure_result_message(message);
                     }
                 });
 
@@ -466,13 +467,13 @@ namespace z7::ui::filemanager {
             &ArchiveProcessRunner::finished,
             this,
             [this,
+             task,
              remove_task,
              created_runner,
              dialog_guard,
              progress_presenter,
              background_mode,
-             failure_messages,
-             failure_caption,
+             result_messages,
              finished_cb,
              should_show_failure,
              origin_panel_index](bool ok, int exit_code, int error_domain, QString const& summary) {
@@ -485,35 +486,24 @@ namespace z7::ui::filemanager {
 
                 bool const canceled =
                     static_cast<z7::app::ArchiveErrorDomain>(error_domain) == z7::app::ArchiveErrorDomain::kCanceled;
-
-                QStringList result_messages = *failure_messages;
                 QString const localized_summary =
                     z7::ui::runtime_support::localize_archive_failure_message(summary).trimmed();
-                if (!ok && !canceled && result_messages.isEmpty()) {
-                    if (!localized_summary.isEmpty()) {
-                        result_messages.push_back(localized_summary);
-                    } else {
-                        result_messages.push_back(stable_error_message(error_domain));
-                    }
-                }
-
-                bool const keep_dialog_for_result = dialog_guard && !canceled && (!ok || !result_messages.isEmpty());
-                if (keep_dialog_for_result) {
-                    dialog_guard->set_failure_result_messages(result_messages);
-                    dialog_guard->set_failure_result_mode();
-                    progress_presenter->show_now();
-                }
-
-                if (!dialog_guard
-                    && !ok
-                    && !canceled
-                    && (!should_show_failure || should_show_failure(error_domain, summary))) {
-                    QString const failure_message =
-                        !result_messages.isEmpty()
-                            ? result_messages.join(QLatin1Char('\n'))
-                            : (localized_summary.isEmpty() ? stable_error_message(error_domain) : localized_summary);
-                    QMessageBox::warning(this, failure_caption, failure_message);
-                }
+                z7::ui::runtime_support::TaskResultPresentation const presentation =
+                    z7::ui::runtime_support::classify_task_result(
+                        ok, static_cast<z7::app::ArchiveErrorDomain>(error_domain), !result_messages->isEmpty());
+                bool const keep_dialog_for_result =
+                    dialog_guard
+                    && (presentation == z7::ui::runtime_support::TaskResultPresentation::kMessages
+                        || presentation
+                            == z7::ui::runtime_support::TaskResultPresentation::kFinalErrorThenMessages);
+                bool const show_final_error =
+                    !canceled
+                    && (presentation == z7::ui::runtime_support::TaskResultPresentation::kFinalError
+                        || presentation
+                            == z7::ui::runtime_support::TaskResultPresentation::kFinalErrorThenMessages)
+                    && (!should_show_failure || should_show_failure(error_domain, summary));
+                QString const final_error_message =
+                    localized_summary.isEmpty() ? stable_error_message(error_domain) : localized_summary;
 
                 z7::app::OperationResult const finished_result =
                     created_runner != nullptr ? created_runner->last_result() : z7::app::OperationResult();
@@ -521,22 +511,53 @@ namespace z7::ui::filemanager {
                     created_runner != nullptr ? created_runner->last_outcome()
                                               : z7::app::archive_session_helpers::make_outcome(
                                                     finished_result, z7::app::OperationPayload{std::monostate{}});
-                remove_task();
+                task->runner = nullptr;
                 if (created_runner != nullptr) {
                     created_runner->deleteLater();
                 }
 
-                if (finished_cb) {
-                    finished_cb(ok, exit_code, error_domain, summary, finished_outcome);
-                }
+                auto const completion_called = std::make_shared<bool>(false);
+                auto complete = [remove_task,
+                                 finished_cb,
+                                 completion_called,
+                                 ok,
+                                 exit_code,
+                                 error_domain,
+                                 summary,
+                                 finished_outcome]() mutable {
+                    if (*completion_called) {
+                        return;
+                    }
+                    *completion_called = true;
+                    remove_task();
+                    if (finished_cb) {
+                        finished_cb(ok, exit_code, error_domain, summary, finished_outcome);
+                    }
+                };
 
                 if (!dialog_guard) {
+                    if (show_final_error && !final_error_message.isEmpty()) {
+                        QMessageBox::critical(this, QStringLiteral("7-Zip"), final_error_message);
+                    }
+                    complete();
                     return;
                 }
 
-                if (!keep_dialog_for_result) {
+                if (keep_dialog_for_result) {
+                    if (show_final_error && !final_error_message.isEmpty()) {
+                        QMessageBox::critical(this, QStringLiteral("7-Zip"), final_error_message);
+                    }
+                    connect(dialog_guard.data(), &QDialog::finished, this, [complete](int) mutable { complete(); });
+                    dialog_guard->set_failure_result_messages(*result_messages);
+                    dialog_guard->set_failure_result_mode();
+                    progress_presenter->show_now();
+                } else {
                     progress_presenter->cancel_pending();
-                    dialog_guard->deleteLater();
+                    dialog_guard->close();
+                    if (show_final_error && !final_error_message.isEmpty()) {
+                        QMessageBox::critical(this, QStringLiteral("7-Zip"), final_error_message);
+                    }
+                    complete();
                 }
             });
 

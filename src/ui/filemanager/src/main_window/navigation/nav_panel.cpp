@@ -489,7 +489,7 @@ namespace z7::ui::filemanager {
             connect(details_view,
                     &z7::ui::widgets::StructuredListView::primary_clicked,
                     this,
-                    [this, i](QModelIndex const& index) {
+                    [this, i](QModelIndex const& index, Qt::KeyboardModifiers modifiers) {
                         set_active_panel(i);
                         if (!display_settings_.single_click_open || !index.isValid()) {
                             return;
@@ -499,7 +499,7 @@ namespace z7::ui::filemanager {
                         if (activate_archive_parent_link_for_panel(i, index)) {
                             return;
                         }
-                        activate_panel_selection(QApplication::keyboardModifiers());
+                        activate_panel_selection(modifiers);
                     });
             connect(details_view,
                     &z7::ui::widgets::StructuredListView::primary_double_clicked,

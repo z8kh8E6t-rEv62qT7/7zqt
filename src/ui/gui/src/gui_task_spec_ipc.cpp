@@ -26,6 +26,42 @@ namespace z7::ui::gui {
             }
         }
 
+        bool decode_filename_code_pages(
+            QVector<z7::task_ipc_runtime::TaskIpcFilenameCodePage> const& encoded,
+            qsizetype nested_layer_count,
+            std::vector<std::optional<uint32_t>>* out,
+            QString* error_message) {
+            if (out == nullptr || encoded.size() != nested_layer_count + 1) {
+                if (error_message != nullptr) {
+                    *error_message = QStringLiteral(
+                        "Archive filename code-page count must equal root plus nested layer count.");
+                }
+                return false;
+            }
+            out->clear();
+            out->reserve(static_cast<size_t>(encoded.size()));
+            for (auto const& item : encoded) {
+                if (item.automatic) {
+                    if (item.code_page != 0) {
+                        if (error_message != nullptr) {
+                            *error_message = QStringLiteral("Auto filename code page must have value zero.");
+                        }
+                        return false;
+                    }
+                    out->push_back(std::nullopt);
+                    continue;
+                }
+                if (item.code_page < 2 || item.code_page > 65535) {
+                    if (error_message != nullptr) {
+                        *error_message = QStringLiteral("Archive filename code page is out of range.");
+                    }
+                    return false;
+                }
+                out->push_back(static_cast<uint32_t>(item.code_page));
+            }
+            return true;
+        }
+
     } // namespace
 
     std::optional<GuiTaskSpec>
@@ -200,6 +236,12 @@ namespace z7::ui::gui {
                         spec.nested_archive_entries.push_back(
                             z7::ui::archive_support::to_utf8_string(value));
                     }
+                    if (!decode_filename_code_pages(payload.archive_export->filename_code_pages,
+                                                    payload.archive_export->nested_archive_entries.size(),
+                                                    &spec.filename_code_pages,
+                                                    error_message)) {
+                        return std::nullopt;
+                    }
                     for (QString const& value : payload.archive_export->archive_entry_paths) {
                         spec.archive_entry_paths.push_back(z7::ui::archive_support::to_utf8_string(value));
                     }
@@ -229,6 +271,12 @@ namespace z7::ui::gui {
                         for (QString const& value : payload.open->nested_archive_entries) {
                             spec.nested_archive_entries.push_back(
                                 z7::ui::archive_support::to_utf8_string(value));
+                        }
+                        if (!decode_filename_code_pages(payload.open->filename_code_pages,
+                                                        payload.open->nested_archive_entries.size(),
+                                                        &spec.filename_code_pages,
+                                                        error_message)) {
+                            return std::nullopt;
                         }
                         for (QString const& value : payload.test->archive_inputs) {
                             spec.archive_entry_paths.push_back(
@@ -267,6 +315,12 @@ namespace z7::ui::gui {
                         for (QString const& value : payload.open->nested_archive_entries) {
                             spec.nested_archive_entries.push_back(
                                 z7::ui::archive_support::to_utf8_string(value));
+                        }
+                        if (!decode_filename_code_pages(payload.open->filename_code_pages,
+                                                        payload.open->nested_archive_entries.size(),
+                                                        &spec.filename_code_pages,
+                                                        error_message)) {
+                            return std::nullopt;
                         }
                         for (QString const& value : payload.hash->input_paths) {
                             spec.archive_entry_paths.push_back(
@@ -316,6 +370,12 @@ namespace z7::ui::gui {
                     for (QString const& value : payload.open->nested_archive_entries) {
                         spec.nested_archive_entries.push_back(
                             z7::ui::archive_support::to_utf8_string(value));
+                    }
+                    if (!decode_filename_code_pages(payload.open->filename_code_pages,
+                                                    payload.open->nested_archive_entries.size(),
+                                                    &spec.filename_code_pages,
+                                                    error_message)) {
+                        return std::nullopt;
                     }
                     return GuiTaskSpec{std::move(spec)};
                 }

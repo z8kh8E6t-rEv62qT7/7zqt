@@ -877,7 +877,9 @@ namespace z7::app {
             return "Cannot set file attribute: " + output_path.generic_string();
         }
 #ifndef _WIN32
-        if (finalize_directory && (attributes.attrib & FILE_ATTRIBUTE_UNIX_EXTENSION) != 0) {
+        if (finalize_directory
+            && (attributes.attrib & FILE_ATTRIBUTE_UNIX_EXTENSION) != 0
+            && MY_LIN_S_ISDIR(attributes.attrib >> 16)) {
             std::error_code ec;
             fs::perms const current = fs::status(output_path, ec).permissions();
             if (ec) {
@@ -2199,12 +2201,10 @@ namespace z7::app {
                         && (op_res == NArchive::NExtract::NOperationResult::kDataError
                             || op_res == NArchive::NExtract::NOperationResult::kCRCError
                             || op_res == NArchive::NExtract::NOperationResult::kHeadersError))) {
+                    password_retry_required_ = true;
                     wrong_password_ = true;
                 }
-                diagnostic = test_operation_result_message(op_res);
-                if (!path.empty()) {
-                    diagnostic = path + " : " + diagnostic;
-                }
+                diagnostic = format_operation_result_message(op_res, encrypted_item, path);
                 if (!diagnostic.empty()) {
                     append_diagnostic_locked(diagnostic);
                 }
@@ -2221,12 +2221,9 @@ namespace z7::app {
         if (op_res != NArchive::NExtract::NOperationResult::kOK || force_hresult_failure) {
             std::string message = std::move(diagnostic);
             if (message.empty()) {
-                message = test_operation_result_message(op_res);
-                if (!path.empty()) {
-                    message = path + " : " + message;
-                }
+                message = format_operation_result_message(op_res, encrypted_item, path);
             }
-            emit_log_event(hooks_, OperationStage::kRunning, OutputChannel::kStdErr, message);
+            emit_archive_scoped_error(hooks_, archive_path_, archive_error_path_reported_, message);
         }
 
         emit_progress_snapshot();

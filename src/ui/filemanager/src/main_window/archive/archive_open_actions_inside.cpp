@@ -22,8 +22,7 @@ namespace z7::ui::filemanager {
             return;
         }
 
-        QString const override_hint = archive_type_hint.trimmed();
-        QString const effective_hint = override_hint.isEmpty() ? panel.archive.type_hint : override_hint;
+        QString const effective_hint = archive_type_hint.trimmed();
         QString const archive_path = panel.archive.source_archive;
         QString const origin_dir = panel.archive.origin_dir;
         QString const display_source = panel.archive_display_source();
@@ -76,6 +75,8 @@ namespace z7::ui::filemanager {
                 current_panel.push_current_archive_to_parent_stack();
 
                 z7::app::ArchiveSessionToken const child_token = out_session_result->value().token;
+                std::optional<uint32_t> const parent_entry_index =
+                    out_session_result->value().parent_entry_index;
                 auto nested_open_finished = std::make_shared<bool>(false);
                 auto const rollback_nested_open = [this, panel_index, child_token, nested_open_finished]() {
                     if (*nested_open_finished) {
@@ -86,14 +87,17 @@ namespace z7::ui::filemanager {
                     panel.discard_last_parent_archive_frame();
                     close_archive_sessions_async(QVector<z7::app::ArchiveSessionToken>{child_token});
                 };
-                auto const commit_nested_open = [this, panel_index, normalized_entry, nested_open_finished]() {
+                auto const commit_nested_open =
+                    [this, panel_index, normalized_entry, parent_entry_index, nested_open_finished]() {
                     if (*nested_open_finished) {
                         return;
                     }
                     *nested_open_finished = true;
                     PanelController& panel = panel_controller(panel_index);
                     panel.archive.archive_entry_from_parent = normalized_entry;
+                    panel.archive.parent_entry_index = parent_entry_index;
                     panel.archive.temp_session.clear();
+                    panel.archive.filename_code_page.reset();
                     set_active_panel(panel_index);
                 };
 
@@ -231,6 +235,7 @@ namespace z7::ui::filemanager {
                             return;
                         }
                         panel_controller(panel_index).archive.archive_entry_from_parent.clear();
+                        panel_controller(panel_index).archive.parent_entry_index.reset();
                         set_active_panel(panel_index);
                         if (options.finished_cb) {
                             options.finished_cb(true);

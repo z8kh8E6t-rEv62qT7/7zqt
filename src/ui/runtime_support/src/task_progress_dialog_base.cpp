@@ -1,9 +1,13 @@
 #include "task_progress_dialog_base.h"
 
 #include <QAbstractItemView>
+#include <QApplication>
+#include <QClipboard>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QProgressBar>
@@ -17,6 +21,60 @@
 namespace z7::ui::runtime_support {
 
     namespace {
+
+        class ResultMessagesTable final : public QTableWidget {
+        public:
+            using QTableWidget::QTableWidget;
+
+        protected:
+            void keyPressEvent(QKeyEvent* event) override {
+                if (event == nullptr) {
+                    return;
+                }
+
+                bool const control = event->modifiers().testFlag(Qt::ControlModifier);
+                bool const select_all = event->matches(QKeySequence::SelectAll)
+                                     || (control && event->key() == Qt::Key_A);
+                if (select_all) {
+                    selectAll();
+                    event->accept();
+                    return;
+                }
+
+                bool const copy = event->matches(QKeySequence::Copy)
+                               || (control && (event->key() == Qt::Key_C || event->key() == Qt::Key_Insert));
+                if (copy) {
+                    copy_selected_or_all_rows();
+                    event->accept();
+                    return;
+                }
+
+                QTableWidget::keyPressEvent(event);
+            }
+
+        private:
+            void copy_selected_or_all_rows() const {
+                QStringList selected_lines;
+                QStringList all_lines;
+                all_lines.reserve(rowCount());
+
+                for (int row = 0; row < rowCount(); ++row) {
+                    QTableWidgetItem const* message_item = item(row, 1);
+                    QString const line = message_item != nullptr ? message_item->text() : QString();
+                    all_lines.push_back(line);
+                    if (message_item != nullptr && message_item->isSelected()) {
+                        selected_lines.push_back(line);
+                    }
+                }
+
+                QStringList const& lines = selected_lines.isEmpty() ? all_lines : selected_lines;
+                QString text = lines.join(QLatin1Char('\n'));
+                if (!lines.isEmpty()) {
+                    text += QLatin1Char('\n');
+                }
+                QApplication::clipboard()->setText(text);
+            }
+        };
 
         void set_value_alignment(QLabel* label) {
             if (label == nullptr) {
@@ -136,7 +194,7 @@ namespace z7::ui::runtime_support {
         log_view_->setVisible(false);
         layout->addWidget(log_view_, 1);
 
-        result_messages_view_ = new QTableWidget(this);
+        result_messages_view_ = new ResultMessagesTable(this);
         set_widget_object_name(result_messages_view_, behavior_.result_messages_view_object_name);
         result_messages_view_->setColumnCount(2);
         result_messages_view_->setHorizontalHeaderLabels({QString(), QString()});
@@ -144,7 +202,8 @@ namespace z7::ui::runtime_support {
         result_messages_view_->verticalHeader()->setVisible(false);
         result_messages_view_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         result_messages_view_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-        result_messages_view_->setSelectionMode(QAbstractItemView::NoSelection);
+        result_messages_view_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        result_messages_view_->setSelectionMode(QAbstractItemView::ExtendedSelection);
         result_messages_view_->setEditTriggers(QAbstractItemView::NoEditTriggers);
         result_messages_view_->setShowGrid(false);
         result_messages_view_->setTextElideMode(Qt::ElideNone);

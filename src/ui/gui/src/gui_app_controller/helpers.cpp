@@ -10,6 +10,7 @@
 #include <string>
 #ifdef Z7_TESTING
 #include <QString>
+#include <QTimer>
 #endif
 
 #include "archive_string_codec_qt.h"
@@ -39,6 +40,15 @@ namespace z7::ui::gui::gui_app_controller_helpers {
 
 #ifdef Z7_TESTING
         constexpr char const* kSuppressResultDialogsEnv = "Z7_SUPPRESS_GUI_RESULT_DIALOGS_FOR_TESTS";
+        constexpr char const* kAutoAcceptTaskSetupDialogsEnv = "Z7_TEST_AUTO_ACCEPT_TASK_SETUP_DIALOGS";
+
+        void schedule_task_setup_dialog_auto_accept(QDialog* dialog) {
+            if (dialog == nullptr
+                || qEnvironmentVariable(kAutoAcceptTaskSetupDialogsEnv).trimmed() != QStringLiteral("1")) {
+                return;
+            }
+            QTimer::singleShot(0, dialog, &QDialog::accept);
+        }
 #endif
 
         struct AddDialogInputContext {
@@ -232,6 +242,9 @@ namespace z7::ui::gui::gui_app_controller_helpers {
                     }
                     CompressCommandOptions const options = compress_options_from_add_task_spec(typed_spec);
                     CompressDialog dialog(options);
+#ifdef Z7_TESTING
+                    schedule_task_setup_dialog_auto_accept(&dialog);
+#endif
                     int const dialog_result = dialog.exec();
                     if (dialog_result == QDialog::Rejected) {
                         return TaskSpecPreparationStatus::kCanceled;
@@ -263,6 +276,9 @@ namespace z7::ui::gui::gui_app_controller_helpers {
                     }
 
                     ExtractDialog dialog(options);
+#ifdef Z7_TESTING
+                    schedule_task_setup_dialog_auto_accept(&dialog);
+#endif
                     int const dialog_result = dialog.exec();
                     if (dialog_result == QDialog::Rejected) {
                         return TaskSpecPreparationStatus::kCanceled;

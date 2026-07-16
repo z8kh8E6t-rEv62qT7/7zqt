@@ -9,7 +9,7 @@
 
 namespace z7::app {
 
-    NativeExtractCallback::NativeExtractCallback(IInArchive* archive,
+    NativeExtractCallback::NativeExtractCallback(CArc const* arc,
                                                  fs::path output_dir,
                                                  ArchiveBackendHooks const& hooks,
                                                  std::atomic<bool>* cancel_requested,
@@ -30,7 +30,8 @@ namespace z7::app {
                                                  bool configured_memory_limit_defined,
                                                  std::string archive_metadata_source_path) :
         CallbackBase(cancel_requested, std::move(wait_while_paused)),
-        archive_(archive),
+        arc_(arc),
+        archive_(arc != nullptr ? arc->Archive : nullptr),
         output_dir_(std::move(output_dir)),
         hooks_(hooks),
         archive_path_(std::move(archive_path)),
@@ -219,6 +220,10 @@ namespace z7::app {
     std::string NativeExtractCallback::diagnostic_message() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return diagnostic_message_;
+    }
+
+    bool NativeExtractCallback::memory_skip_handled() const {
+        return memory_skip_handled_.load();
     }
 
     std::vector<ExtractMaterializedEntry> NativeExtractCallback::take_materialized_entries() {

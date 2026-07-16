@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QFutureWatcher>
+#include <QMessageBox>
 #include <QPointer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <memory>
@@ -17,6 +18,7 @@
 #include "../gui_app_controller/helpers.h"
 #include "../gui_task_runner_helpers.h"
 #include "archive_error.h"
+#include "archive_failure_messages.h"
 #include "archive_string_codec_qt.h"
 #include "delayed_progress_dialog_presenter.h"
 #include "gui_task_progress_dialog.h"
@@ -25,6 +27,7 @@
 #include "large_pages_settings.h"
 #include "official_lang_catalog.h"
 #include "shared.h"
+#include "task_result_presentation.h"
 
 namespace z7::ui::gui {
 
@@ -336,16 +339,17 @@ namespace z7::ui::gui {
                 finished_ = true;
                 release_active_request();
                 progress_presenter_.cancel_pending();
+                z7::ui::runtime_support::TaskResultPresentation const presentation =
+                    z7::ui::runtime_support::classify_task_result(out_.result.ok,
+                                                                  out_.result.error.domain,
+                                                                  !out_.result_messages.isEmpty());
                 bool const delayed_result_success =
                     (test_mode_ || hash_mode_) && out_.result.ok && out_.result.native_exit_code == 0;
-                if (should_show_failure_progress_result()) {
-                    show_failure_progress_result();
-                    return;
-                }
+                bool const show_result_messages = should_show_result_messages(presentation);
                 bool const dialog_was_shown = progress_presenter_.was_shown();
                 if (!dialog_.isNull()) {
                     dialog_->set_running(false);
-                    if (!delayed_result_success || !dialog_was_shown) {
+                    if (!show_result_messages && (!delayed_result_success || !dialog_was_shown)) {
                         dialog_->close();
                     }
                 }
@@ -359,31 +363,15 @@ namespace z7::ui::gui {
                                      out_.result.hash_summary.has_value() ? out_.result.hash_summary->num_archives : 1)
                                : QString();
                 bool const show_test_result =
-                    test_mode_ && delayed_result_success && !test_result_message.trimmed().isEmpty();
+                    test_mode_ && delayed_result_success
+                    && presentation == z7::ui::runtime_support::TaskResultPresentation::kNormal
+                    && !test_result_message.trimmed().isEmpty();
                 bool show_hash_result = hash_mode_ && delayed_result_success && out_.result.hash_summary.has_value();
 #ifdef Z7_TESTING
                 if (show_hash_result && gui_app_controller_helpers::suppress_result_dialogs_for_tests()) {
                     show_hash_result = false;
                 }
 #endif
-                if (!callback_) {
-                    if (show_test_result) {
-                        gui_app_controller_helpers::show_test_result_dialog(
-                            dialog_was_shown ? dialog_.data() : nullptr,
-                            z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(3302)),
-                            test_result_message);
-                    }
-                    if (show_hash_result) {
-                        HashResultDialog hash_dialog(dialog_was_shown ? dialog_.data() : nullptr);
-                        hash_dialog.set_rows(gui_app_controller_helpers::hash_result_dialog_rows(out_));
-                        hash_dialog.exec();
-                    }
-                    if (dialog_was_shown && !dialog_.isNull()) {
-                        dialog_->close();
-                    }
-                    deleteLater();
-                    return;
-                }
                 if (show_test_result) {
                     gui_app_controller_helpers::show_test_result_dialog(
                         dialog_was_shown ? dialog_.data() : nullptr,
@@ -395,10 +383,22 @@ namespace z7::ui::gui {
                     hash_dialog.set_rows(gui_app_controller_helpers::hash_result_dialog_rows(out_));
                     hash_dialog.exec();
                 }
-                GuiTaskRunner::FinishedCallback callback = std::move(callback_);
-                callback(std::move(out_));
+
+                if (presentation == z7::ui::runtime_support::TaskResultPresentation::kFinalErrorThenMessages
+                    && show_result_messages) {
+                    show_final_error_dialog(dialog_was_shown ? dialog_.data() : nullptr);
+                }
+                if (show_result_messages) {
+                    show_progress_result_messages();
+                    return;
+                }
+
                 if (dialog_was_shown && !dialog_.isNull()) {
                     dialog_->close();
+                }
+                if (callback_) {
+                    GuiTaskRunner::FinishedCallback callback = std::move(callback_);
+                    callback(std::move(out_));
                 }
                 deleteLater();
             }
@@ -463,43 +463,17 @@ namespace z7::ui::gui {
                 start_request_attempt(std::move(request), std::move(on_complete));
             }
 
-            bool should_show_failure_progress_result() const {
+            bool should_show_result_messages(
+                z7::ui::runtime_support::TaskResultPresentation presentation) const {
 #ifdef Z7_TESTING
                 if (gui_app_controller_helpers::suppress_result_dialogs_for_tests()) {
                     return false;
                 }
 #endif
                 return !dialog_.isNull()
-                    && !out_.result.ok
-                    && out_.result.native_exit_code != 0
-                    && out_.result.error.domain != z7::app::ArchiveErrorDomain::kCanceled;
-            }
-
-            QString failure_summary_text() const {
-                if (!out_.result.summary.empty()) {
-                    return z7::ui::archive_support::from_native_string(out_.result.summary).trimmed();
-                }
-                return z7::ui::archive_support::from_native_string(z7::app::describe_archive_error(out_.result.error))
-                    .trimmed();
-            }
-
-            void ensure_failure_result_messages() {
-                if (dialog_.isNull()) {
-                    return;
-                }
-                if (!out_.failure_messages.isEmpty()) {
-                    return;
-                }
-                QString const summary = gui_task_runner_shared::localize_failure_message(failure_summary_text());
-                if (summary.isEmpty()) {
-                    return;
-                }
-                out_.failure_messages.push_back(summary);
-                if (out_.log_lines.contains(summary)) {
-                    return;
-                }
-                out_.log_lines.push_back(summary);
-                dialog_->append_log(summary);
+                    && (presentation == z7::ui::runtime_support::TaskResultPresentation::kMessages
+                        || presentation
+                            == z7::ui::runtime_support::TaskResultPresentation::kFinalErrorThenMessages);
             }
 
             void complete_after_result_dialog_closed() {
@@ -516,11 +490,22 @@ namespace z7::ui::gui {
                 });
             }
 
-            void show_failure_progress_result() {
-                out_.failure_displayed = true;
+            void show_final_error_dialog(QWidget* parent) {
+                QString const raw_summary = out_.result.summary.empty()
+                                              ? z7::ui::archive_support::from_native_string(
+                                                    z7::app::describe_archive_error(out_.result.error))
+                                              : z7::ui::archive_support::from_native_string(out_.result.summary);
+                QString const summary =
+                    z7::ui::runtime_support::localize_archive_failure_message(raw_summary);
+                if (!summary.isEmpty()) {
+                    QMessageBox::critical(parent, QStringLiteral("7-Zip"), summary);
+                    out_.final_error_displayed = true;
+                }
+            }
+
+            void show_progress_result_messages() {
                 dialog_->set_running(false);
-                ensure_failure_result_messages();
-                dialog_->set_failure_result_messages(out_.failure_messages);
+                dialog_->set_failure_result_messages(out_.result_messages);
                 dialog_->set_failure_result_mode();
                 show_dialog();
                 if (background_connection_) {
@@ -592,6 +577,7 @@ namespace z7::ui::gui {
                              QString const& archive_type_hint,
                              std::string_view diagnostic_stage,
                              QStringList nested_archive_entries,
+                             std::vector<std::optional<uint32_t>> filename_code_pages,
                              std::function<void(ArchiveTaskAsyncSequencer*)> on_opened) {
             Q_UNUSED(diagnostic_stage);
             if (sequence == nullptr) {
@@ -606,9 +592,20 @@ namespace z7::ui::gui {
             z7::app::OpenArchiveFromPathRequest open_root_request;
             open_root_request.archive_path = z7::ui::archive_support::to_native_string(archive_path);
             open_root_request.archive_type_hint = z7::ui::archive_support::to_native_string(archive_type_hint);
+            if (filename_code_pages.size() != static_cast<size_t>(nested_archive_entries.size() + 1)) {
+                sequence->fail_immediate(
+                    1,
+                    z7::app::ArchiveErrorDomain::kInvalidArguments,
+                    QStringLiteral("Archive filename code-page count must equal root plus nested layers."));
+                sequence->finalize();
+                return;
+            }
+            open_root_request.filename_code_page = filename_code_pages.front();
             sequence->start_request(
                 z7::app::ArchiveRequest{open_root_request},
-                [nested_archive_entries = std::move(nested_archive_entries), on_opened = std::move(on_opened)](
+                [nested_archive_entries = std::move(nested_archive_entries),
+                 filename_code_pages = std::move(filename_code_pages),
+                 on_opened = std::move(on_opened)](
                     ArchiveTaskAsyncSequencer* self, z7::app::OperationOutcome const& outcome) mutable {
                     auto const root_payload = z7::app::outcome_payload_as<z7::app::OpenArchiveSessionResult>(outcome);
                     if (!root_payload.has_value() || !root_payload->ok || !root_payload->token.is_valid()) {
@@ -629,8 +626,10 @@ namespace z7::ui::gui {
                     }
 
                     auto nested_entries = std::make_shared<QStringList>(std::move(nested_archive_entries));
+                    auto nested_code_pages =
+                        std::make_shared<std::vector<std::optional<uint32_t>>>(std::move(filename_code_pages));
                     auto open_nested = std::make_shared<std::function<void(int)>>();
-                    *open_nested = [self, nested_entries, open_nested, on_opened](int index) mutable {
+                    *open_nested = [self, nested_entries, nested_code_pages, open_nested, on_opened](int index) mutable {
                         if (self->cancel_already_requested()) {
                             self->fail_immediate(5, z7::app::ArchiveErrorDomain::kCanceled, canceled_export_message());
                             self->close_tokens_then([](ArchiveTaskAsyncSequencer* sequence) { sequence->finalize(); });
@@ -648,6 +647,7 @@ namespace z7::ui::gui {
                         open_child_request.archive_type_hint =
                             z7::ui::archive_support::to_native_string(infer_archive_format(nested_entry, QString()));
                         open_child_request.display_path_hint = z7::ui::archive_support::to_utf8_string(nested_entry);
+                        open_child_request.filename_code_page = nested_code_pages->at(static_cast<size_t>(index + 1));
                         self->start_request(
                             z7::app::ArchiveRequest{open_child_request},
                             [index, open_nested](ArchiveTaskAsyncSequencer* sequence,
@@ -695,12 +695,14 @@ namespace z7::ui::gui {
             QString const archive_path = options.archive_path;
             QString const archive_type_hint = options.archive_type_hint;
             QStringList const nested_archive_entries = options.nested_archive_entries;
+            auto const filename_code_pages = options.filename_code_pages;
             start_open_root(
                 sequence,
                 archive_path,
                 archive_type_hint,
                 open_root_diagnostic_stage,
                 nested_archive_entries,
+                filename_code_pages,
                 [options = std::move(options), start_member_request = std::forward<TStartFn>(start_member_request)](
                     ArchiveTaskAsyncSequencer* self) mutable {
                     if (self->cancel_already_requested()) {

@@ -31,7 +31,7 @@ namespace z7::ui::filemanager {
     }
 
     MainWindow::~MainWindow() {
-        dispatch_detached_archive_session_close(run_shutdown_cleanup_once());
+        close_archive_sessions_for_shutdown(run_shutdown_cleanup_once());
         if (!task_ipc_owner_instance_id_.trimmed().isEmpty()) {
             z7::task_ipc_runtime::clear_task_ipc_event_notifier(task_ipc_owner_instance_id_, nullptr);
         }

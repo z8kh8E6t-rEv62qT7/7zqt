@@ -12,6 +12,7 @@ namespace z7::ui::filemanager {
         file_menu_ = menuBar()->addMenu(QString());
         edit_menu_ = menuBar()->addMenu(QString());
         view_menu_ = menuBar()->addMenu(QString());
+        encoding_menu_ = menuBar()->addMenu(QString());
         favorites_menu_ = menuBar()->addMenu(QString());
         tools_menu_ = menuBar()->addMenu(QString());
         help_menu_ = menuBar()->addMenu(QString());
@@ -84,6 +85,7 @@ namespace z7::ui::filemanager {
         view_mode_action_group_ = new QActionGroup(this);
         sort_action_group_ = new QActionGroup(this);
         time_action_group_ = new QActionGroup(this);
+        setup_encoding_menu();
 
         options_action_ = new QAction(this);
         benchmark_action_ = new QAction(this);

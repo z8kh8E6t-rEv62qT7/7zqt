@@ -7,6 +7,7 @@
 
 #include "archive_error.h"
 #include "archive_session_core.h"
+#include "filename_code_page.h"
 #include "ports/archive_backend_port.h"
 
 namespace z7::app {
@@ -60,6 +61,9 @@ namespace z7::app {
     }
 
     ArchiveSession ArchiveEngine::start(ArchiveRequest const& request, std::shared_ptr<IArchiveDelegate> delegate) {
+        // MY_SetLocale mutates process-wide conversion state. Complete its
+        // one-time initialization before starting any archive worker thread.
+        initialize_archive_filename_locale();
         std::unique_ptr<INativeArchiveBackend> backend = create_native_archive_backend();
         if (backend == nullptr) {
             return ArchiveSession();

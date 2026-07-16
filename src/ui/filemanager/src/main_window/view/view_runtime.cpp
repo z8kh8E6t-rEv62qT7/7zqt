@@ -98,6 +98,7 @@ namespace z7::ui::filemanager {
         file_menu_->setTitle(z7::ui::runtime_support::L(500));
         edit_menu_->setTitle(z7::ui::runtime_support::L(501));
         view_menu_->setTitle(z7::ui::runtime_support::L(502));
+        retranslate_encoding_menu();
         favorites_menu_->setTitle(z7::ui::runtime_support::L(503));
         tools_menu_->setTitle(z7::ui::runtime_support::L(504));
         help_menu_->setTitle(z7::ui::runtime_support::L(505));
@@ -215,6 +216,7 @@ namespace z7::ui::filemanager {
         refresh_all_details_column_visibility();
         update_time_menu();
         update_view_menu_checks();
+        update_encoding_menu_state();
         sync_path_bar_from_current_dir();
         update_status();
     }

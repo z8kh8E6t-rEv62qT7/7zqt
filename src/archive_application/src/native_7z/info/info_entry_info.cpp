@@ -126,6 +126,7 @@ namespace z7::app {
             }
             std::unique_lock<std::recursive_mutex> session_lock(
                 ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            ScopedFilenameCodePage filename_scope(session->filename_code_page());
             if (ArchiveOpenSessionNativeAccess::closed(*session)) {
                 return make_operation_failure<GetEntryInfoResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
@@ -137,10 +138,14 @@ namespace z7::app {
             }
             UInt32 num_items = 0;
             if (arc->Archive->GetNumberOfItems(&num_items) != S_OK) {
-                return make_operation_failure<GetEntryInfoResult>(
+                GetEntryInfoResult result = make_operation_failure<GetEntryInfoResult>(
                     ArchiveErrorDomain::kUnknown, "GetNumberOfItems failed", 2);
+                apply_open_archive_diagnostics(result, archive_session_state(*session).open_diagnostics);
+                return result;
             }
-            return resolve_entry_info_from_arc(arc->Archive, num_items, request.entry_path);
+            GetEntryInfoResult result = resolve_entry_info_from_arc(arc->Archive, num_items, request.entry_path);
+            apply_open_archive_diagnostics(result, archive_session_state(*session).open_diagnostics);
+            return result;
         }
 
         // Direct-open path: open the archive once, query, close.
@@ -148,7 +153,9 @@ namespace z7::app {
             request.archive_path,
             request.archive_type_hint,
             hooks,
+            OpenResultMessagePolicy::kSilentBrowse,
             false,
+            {},
             [&](OpenArchiveReadState const& open_state, UInt32 num_items) -> GetEntryInfoResult {
                 return resolve_entry_info_from_arc(open_state.arc->Archive, num_items, request.entry_path);
             });

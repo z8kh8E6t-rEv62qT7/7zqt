@@ -26,6 +26,13 @@ namespace z7::task_ipc_runtime {
         QString destination_path;
     };
 
+    struct TaskIpcFilenameCodePage {
+        bool automatic = true;
+        quint32 code_page = 0;
+
+        friend bool operator==(TaskIpcFilenameCodePage const&, TaskIpcFilenameCodePage const&) = default;
+    };
+
     struct TaskIpcAddPayload {
         // Filesystem paths and passwords are opaque user input. Producers and
         // consumers must not trim or normalize them during IPC transport.
@@ -92,6 +99,8 @@ namespace z7::task_ipc_runtime {
         QString root_archive_path;
         QString root_archive_type;
         QStringList nested_archive_entries;
+        // Exactly one element for the root plus one for every nested layer.
+        QVector<TaskIpcFilenameCodePage> filename_code_pages;
         QStringList archive_entry_paths;
         QString output_dir;
         QString overwrite_mode;
@@ -123,6 +132,8 @@ namespace z7::task_ipc_runtime {
         QString archive_path;
         QString archive_type;
         QStringList nested_archive_entries;
+        // Exactly one element for the root plus one for every nested layer.
+        QVector<TaskIpcFilenameCodePage> filename_code_pages;
         QString entry_path;
     };
 

@@ -226,7 +226,29 @@ namespace z7::app {
             case NArchive::NExtract::NOperationResult::kWrongPassword:
                 return "Wrong password";
         }
-        return "Unknown extract error";
+        return "Error #" + std::to_string(static_cast<UInt32>(op_res));
+    }
+
+    std::string format_operation_result_message(Int32 op_res, bool encrypted, std::string const& path) {
+        std::string message = test_operation_result_message(op_res);
+        if (encrypted && op_res != NArchive::NExtract::NOperationResult::kWrongPassword) {
+            message += " : Wrong password?";
+        }
+        if (!path.empty()) {
+            message += " : ";
+            message += path;
+        }
+        return message;
+    }
+
+    void emit_archive_scoped_error(ArchiveBackendHooks const& hooks,
+                                   std::string const& archive_path,
+                                   std::atomic<bool>& archive_path_reported,
+                                   std::string const& message) {
+        if (!archive_path_reported.exchange(true) && !archive_path.empty()) {
+            emit_log_event(hooks, OperationStage::kRunning, OutputChannel::kStdErr, archive_path);
+        }
+        emit_log_event(hooks, OperationStage::kRunning, OutputChannel::kStdErr, message);
     }
 
 } // namespace z7::app

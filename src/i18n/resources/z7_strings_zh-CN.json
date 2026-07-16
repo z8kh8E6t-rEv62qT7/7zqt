@@ -139,6 +139,36 @@
     "view": {
       "crc_menu_title": "CRC",
       "time_utc": "UTC"
+    },
+    "encoding": {
+      "menu": "编码",
+      "auto": "自动",
+      "charsets": "字符集",
+      "input_code_page": "输入代码页…",
+      "input_title": "归档文件名编码",
+      "input_prompt": "代码页（2–65535）：",
+      "region": {
+        "arabic": "阿拉伯语",
+        "baltic": "波罗的海语系",
+        "celtic": "凯尔特语系",
+        "cyrillic": "西里尔语系",
+        "central_european": "中欧语系",
+        "chinese": "中文",
+        "eastern_european": "东欧语系",
+        "greek": "希腊语",
+        "hebrew": "希伯来语",
+        "japanese": "日语",
+        "korean": "韩语",
+        "north_western_european": "北欧/西欧语系",
+        "thai": "泰语",
+        "turkish": "土耳其语",
+        "vietnamese": "越南语"
+      },
+      "error": {
+        "active_descendant": "请先关闭子归档视图，再更改当前归档层的文件名编码。",
+        "unsupported": "当前平台不支持此文件名代码页。",
+        "reload_failed": "无法使用所选文件名编码重新加载归档；已保留原视图。"
+      }
     }
   }
 }

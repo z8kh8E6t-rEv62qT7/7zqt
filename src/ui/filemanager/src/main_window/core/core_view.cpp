@@ -270,9 +270,11 @@ namespace z7::ui::filemanager {
         target.type_hint = panel.archive.type_hint;
         target.virtual_display_source = panel.archive_display_source();
         target.archive_entry_from_parent = panel.archive.archive_entry_from_parent;
+        target.parent_entry_index = panel.archive.parent_entry_index;
         target.parent_stack = panel.archive.parent_stack;
         target.temp_session = panel.archive.temp_session;
         target.session_token = panel.archive.current_token;
+        target.filename_code_page = panel.archive.filename_code_page;
         return target;
     }
 
@@ -314,9 +316,11 @@ namespace z7::ui::filemanager {
                                                               ? out.archive_target.source_archive
                                                               : parent.virtual_display_source;
                 out.archive_target.archive_entry_from_parent = parent.archive_entry_from_parent;
+                out.archive_target.parent_entry_index = parent.parent_entry_index;
                 out.archive_target.parent_stack = std::move(parent_stack);
                 out.archive_target.temp_session = parent.temp_session;
                 out.archive_target.session_token = parent.session_token;
+                out.archive_target.filename_code_page = parent.filename_code_page;
                 return out;
             }
 
@@ -390,7 +394,9 @@ namespace z7::ui::filemanager {
                     PanelController& panel = panel_controller(panel_index);
                     panel.archive.parent_stack = target.parent_stack;
                     panel.archive.archive_entry_from_parent = target.archive_entry_from_parent;
+                    panel.archive.parent_entry_index = target.parent_entry_index;
                     panel.archive.temp_session = target.temp_session;
+                    panel.archive.filename_code_page = target.filename_code_page;
                     if (panel_index == active_panel_index_) {
                         refresh_active_panel_chrome();
                     } else {

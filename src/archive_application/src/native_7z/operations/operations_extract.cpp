@@ -78,34 +78,6 @@ namespace z7::app {
             return candidate_path;
         }
 
-        ArchiveBackendHooks hooks_with_extract_open_password(ExtractRequest const& request,
-                                                             ArchiveBackendHooks const& hooks) {
-            if (request.password.empty()) {
-                return hooks;
-            }
-
-            ArchiveBackendHooks wrapped = hooks;
-            wrapped.ask_password = [password = request.password, provided = false, base = hooks.ask_password](
-                                       PasswordPrompt const& prompt) mutable {
-                if (!provided && prompt.reason_kind != PasswordPromptReason::kWrongPassword) {
-                    provided = true;
-                    PasswordReply reply;
-                    reply.kind = PasswordReplyKind::kProvide;
-                    reply.password = password;
-                    return reply;
-                }
-                if (base) {
-                    return base(prompt);
-                }
-                return PasswordReply{};
-            };
-            return wrapped;
-        }
-
-        bool extract_open_requires_callback(ExtractRequest const& request, ArchiveBackendHooks const& hooks) {
-            return !request.password.empty() || static_cast<bool>(hooks.ask_password);
-        }
-
         std::vector<std::string> normalized_selected_entries_for_request(ExtractRequest const& request) {
             std::vector<std::string> normalized;
             normalized.reserve(request.entries.size());
@@ -118,30 +90,38 @@ namespace z7::app {
             return normalized;
         }
 
-        bool alternate_stream_parent_matches_selection(
-            IInArchive* archive,
+        HRESULT alternate_stream_parent_matches_selection(
+            CArc const* arc,
             UInt32 index,
-            std::unordered_set<std::string> const& selected_entries) {
+            std::unordered_set<std::string> const& selected_entries,
+            bool& matches) {
+            matches = false;
+            IInArchive* archive = arc != nullptr ? arc->Archive : nullptr;
             bool is_alternate_stream = false;
             if (archive == nullptr
                 || !archive_get_prop_bool(archive, index, kpidIsAltStream, is_alternate_stream)
                 || !is_alternate_stream) {
-                return false;
+                return S_OK;
             }
             CMyComPtr<IArchiveGetRawProps> raw_props;
             if (archive->QueryInterface(IID_IArchiveGetRawProps, reinterpret_cast<void**>(&raw_props)) != S_OK
                 || !raw_props) {
-                return false;
+                return S_OK;
             }
             UInt32 parent_index = static_cast<UInt32>(-1);
             UInt32 parent_type = NParentType::kDir;
             if (raw_props->GetParent(index, &parent_index, &parent_type) != S_OK
                 || parent_type != NParentType::kAltStream
                 || parent_index == static_cast<UInt32>(-1)) {
-                return false;
+                return S_OK;
             }
-            return archive_path_matches_selection(
-                archive_item_selection_path(archive, parent_index), selected_entries);
+            ArchiveItemPath parent_path;
+            HRESULT const path_result = resolve_archive_item_path(arc, parent_index, parent_path);
+            if (path_result != S_OK) {
+                return path_result;
+            }
+            matches = archive_path_matches_selection(parent_path.normalized, selected_entries);
+            return S_OK;
         }
 
         std::optional<std::pair<std::string, bool>>
@@ -405,7 +385,8 @@ namespace z7::app {
                                          std::atomic<bool>& cancel_requested,
                                          std::function<bool()> wait_while_paused,
                                          std::shared_ptr<ExtractBudgetTracker> const& budget_tracker,
-                                         std::vector<ExtractRollbackEntry>& request_rollback_entries) {
+                                         std::vector<ExtractRollbackEntry>& request_rollback_entries,
+                                         OpenArchiveDiagnostics const* open_diagnostics) {
             std::unordered_set<std::string> selected_entries;
             selected_entries.reserve(request.entries.size());
             for (std::string const& entry : request.entries) {
@@ -425,10 +406,23 @@ namespace z7::app {
                 }
             } else {
                 for (UInt32 i = 0; i < num_items; ++i) {
-                    std::string const item_path = archive_item_selection_path(arc->Archive, i);
-                    if (!archive_path_matches_selection(item_path, selected_entries)
-                        && !alternate_stream_parent_matches_selection(arc->Archive, i, selected_entries)) {
-                        continue;
+                    ArchiveItemPath item_path;
+                    HRESULT const path_result = resolve_archive_item_path(arc, i, item_path);
+                    if (path_result != S_OK) {
+                        return from_base_result<ExtractResult>(
+                            make_operation_failure_from_hresult<OperationResult>(path_result));
+                    }
+                    if (!archive_path_matches_selection(item_path.normalized, selected_entries)) {
+                        bool parent_matches = false;
+                        HRESULT const parent_result =
+                            alternate_stream_parent_matches_selection(arc, i, selected_entries, parent_matches);
+                        if (parent_result != S_OK) {
+                            return from_base_result<ExtractResult>(
+                                make_operation_failure_from_hresult<OperationResult>(parent_result));
+                        }
+                        if (!parent_matches) {
+                            continue;
+                        }
                     }
                     selected_indices.push_back(i);
                     accumulate_extract_item_stats(arc->Archive, i, item_stats);
@@ -526,7 +520,7 @@ namespace z7::app {
             }
 
             auto* callback =
-                new NativeExtractCallback(arc->Archive,
+                new NativeExtractCallback(arc,
                                           fs::path(request.output_dir),
                                           hooks,
                                           &cancel_requested,
@@ -557,6 +551,17 @@ namespace z7::app {
             ExtractInvocationStatus status =
                 invoke_archive_extract_with_callback(arc->Archive, indices, num_indices, false, callback);
 
+            std::string const truncate_summary = "Extract truncated: budget exceeded; partial results kept.";
+            if (status.budget_triggered && status.budget_policy == BudgetExceededAction::kTruncate) {
+                status.hresult = S_OK;
+                ++status.error_count;
+                if (!status.diagnostic.empty()) {
+                    status.diagnostic.push_back('\n');
+                }
+                status.diagnostic += truncate_summary;
+                emit_log_event(hooks, OperationStage::kRunning, OutputChannel::kStdErr, truncate_summary);
+            }
+
             request_rollback_entries.reserve(request_rollback_entries.size() + status.rollback_entries.size());
             for (ExtractRollbackEntry& entry : status.rollback_entries) {
                 request_rollback_entries.push_back(std::move(entry));
@@ -575,42 +580,50 @@ namespace z7::app {
                 },
                 [](ExtractInvocationStatus const&) {
                     return make_operation_success<ExtractResult>("Everything is Ok");
-                });
+                },
+                "Password required or incorrect",
+                open_diagnostics);
 
-            // Budget exceeded: override result with the appropriate outcome.
+            // Budget exceeded: replace the callback HRESULT result with a coherent
+            // operation outcome. The extraction callback uses E_ABORT only to stop
+            // materialization at the configured boundary; that is not user cancel.
             if (status.budget_triggered) {
-                result.materialized_entries = std::move(status.materialized_entries);
-                result.error.domain = ArchiveErrorDomain::kBudgetExceeded;
-                result.error.message = status.budget_trigger_reason;
+                std::vector<ExtractMaterializedEntry> materialized_entries = std::move(status.materialized_entries);
                 switch (status.budget_policy) {
                     case BudgetExceededAction::kFailAndRollback:
                         {
                             RollbackAttemptResult const rollback = rollback_extract_entries(request_rollback_entries);
-                            result.ok = false;
+                            std::string summary;
                             if (rollback.ok) {
-                                result.materialized_entries.clear();
-                                result.summary = "Extract stopped: budget exceeded; extracted files removed.";
+                                materialized_entries.clear();
+                                summary = "Extract stopped: budget exceeded; extracted files removed.";
                             } else {
-                                result.summary = rollback.first_error.empty()
-                                                   ? "Extract stopped: budget exceeded; rollback incomplete and "
-                                                     "destination files may have been modified."
-                                                   : "Extract stopped: budget exceeded; rollback incomplete: "
-                                                         + rollback.first_error;
+                                summary = rollback.first_error.empty()
+                                              ? "Extract stopped: budget exceeded; rollback incomplete and "
+                                                "destination files may have been modified."
+                                              : "Extract stopped: budget exceeded; rollback incomplete: "
+                                                    + rollback.first_error;
                             }
+                            result = make_operation_failure<ExtractResult>(
+                                ArchiveErrorDomain::kBudgetExceeded, std::move(summary), 2);
                             break;
                         }
                     case BudgetExceededAction::kFailAndKeepPartial:
-                        result.ok = false;
-                        result.summary = "Extract stopped: budget exceeded; partial results kept.";
+                        result = make_operation_failure<ExtractResult>(
+                            ArchiveErrorDomain::kBudgetExceeded,
+                            "Extract stopped: budget exceeded; partial results kept.",
+                            2);
                         break;
                     case BudgetExceededAction::kTruncate:
-                        result.ok = true;
-                        result.error.domain = ArchiveErrorDomain::kPartialSuccess;
-                        result.summary = "Extract truncated: budget exceeded; partial results kept.";
+                        result = make_operation_warning_success<ExtractResult>(truncate_summary);
                         break;
                 }
+                result.materialized_entries = std::move(materialized_entries);
                 result.primary_output_path.clear();
                 result.primary_is_directory = false;
+                if (open_diagnostics != nullptr) {
+                    apply_open_archive_diagnostics(result, *open_diagnostics);
+                }
                 return result;
             }
 
@@ -692,6 +705,7 @@ namespace z7::app {
                 }
                 std::unique_lock<std::recursive_mutex> session_lock(
                     ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+                ScopedFilenameCodePage filename_scope(session->filename_code_page());
                 if (ArchiveOpenSessionNativeAccess::closed(*session)) {
                     return make_operation_failure<ExtractResult>(
                         ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
@@ -700,11 +714,6 @@ namespace z7::app {
                 if (arc == nullptr || arc->Archive == nullptr) {
                     return make_operation_failure<ExtractResult>(
                         ArchiveErrorDomain::kInvalidArguments, "Session archive unavailable", 7);
-                }
-                if (std::optional<ArchiveError> open_error =
-                        complete_operation_open_error(archive_session_link(*session));
-                    open_error.has_value()) {
-                    return make_operation_failure<ExtractResult>(std::move(*open_error));
                 }
                 UInt32 num_items = 0;
                 if (arc->Archive->GetNumberOfItems(&num_items) != S_OK) {
@@ -738,37 +747,10 @@ namespace z7::app {
                     cancel_requested_,
                     [this]() { return this->wait_while_paused(); },
                     budget_tracker,
-                    request_rollback_entries);
+                    request_rollback_entries,
+                    &archive_session_state(*session).open_diagnostics);
                 if (!result.ok && result.error.domain == ArchiveErrorDomain::kPassword) {
                     session->clear_password();
-                }
-                return result;
-            }
-
-            if (extract_open_requires_callback(single_request, single_hooks)) {
-                OpenArchiveFromPathRequest open_request;
-                open_request.archive_path = single_request.archive_path;
-                open_request.archive_type_hint = single_request.archive_type_hint;
-                ArchiveBackendHooks const open_hooks = hooks_with_extract_open_password(single_request, single_hooks);
-                OpenArchiveSessionResult const opened = open_native_archive_session_from_path(
-                    ArchiveSessionRegistry::instance(), open_request, open_hooks, &cancel_requested_, [this]() {
-                        return this->wait_while_paused();
-                    });
-                if (!opened.ok) {
-                    return from_base_result<ExtractResult>(static_cast<OperationResult>(opened));
-                }
-
-                ExtractRequest session_request = single_request;
-                session_request.session_token = opened.token;
-                session_request.archive_path.clear();
-                session_request.archive_type_hint.clear();
-                ExtractResult result = extract_single(session_request, single_hooks);
-                OperationResult const close_result = close_native_archive_session(
-                    ArchiveSessionRegistry::instance(), opened.token, single_hooks, &cancel_requested_, [this]() {
-                        return this->wait_while_paused();
-                    });
-                if (result.ok && !close_result.ok) {
-                    return from_base_result<ExtractResult>(close_result);
                 }
                 return result;
             }
@@ -777,13 +759,10 @@ namespace z7::app {
                 single_request.archive_path,
                 single_request.archive_type_hint,
                 single_hooks,
-                false,
+                OpenResultMessagePolicy::kOperationMessages,
+                true,
+                single_request.password,
                 [&](OpenArchiveReadState const& open_state, UInt32 num_items) -> ExtractResult {
-                    if (std::optional<ArchiveError> open_error =
-                            complete_operation_open_error(open_state.archive_link);
-                        open_error.has_value()) {
-                        return make_operation_failure<ExtractResult>(std::move(*open_error));
-                    }
                     return run_extract_on_arc(
                         open_state.arc,
                         num_items,
@@ -793,7 +772,8 @@ namespace z7::app {
                         cancel_requested_,
                         [this]() { return this->wait_while_paused(); },
                         budget_tracker,
-                        request_rollback_entries);
+                        request_rollback_entries,
+                        &open_state.open_diagnostics);
                 });
         };
 

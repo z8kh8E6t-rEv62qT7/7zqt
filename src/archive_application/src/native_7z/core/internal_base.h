@@ -25,6 +25,7 @@
 
 #include "archive_error.h"
 #include "archive_session.h"
+#include "filename_code_page.h"
 #include "backend/benchmark_typed_parser.h"
 #include "common/ascii_text.h"
 #include "ports/archive_backend_port.h"
@@ -45,6 +46,11 @@ namespace z7::app {
         uint64_t volume = 0;
         uint64_t object = 0;
         bool defined = false;
+    };
+
+    enum class OpenResultMessagePolicy {
+        kSilentBrowse,
+        kOperationMessages
     };
 
     class NativeUpdateOperationCallback;
@@ -120,12 +126,42 @@ namespace z7::app {
     int prepare_open_types_for_archive(std::string const& archive_type_hint,
                                        CCodecs& codecs,
                                        CObjectVector<COpenType>& types);
+
+    struct OpenArchiveDiagnostics {
+        uint64_t error_count = 0;
+        uint64_t warning_count = 0;
+        std::string error_message;
+        std::string warning_message;
+        std::string operation_message;
+
+        bool has_errors() const { return error_count != 0; }
+        bool has_warnings() const { return warning_count != 0; }
+    };
+
+    OpenArchiveDiagnostics collect_open_archive_diagnostics(CCodecs const* codecs,
+                                                             CArchiveLink const& archive_link,
+                                                             wchar_t const* name,
+                                                             HRESULT result);
+    void append_open_archive_diagnostics(OpenArchiveDiagnostics& destination,
+                                         OpenArchiveDiagnostics const& source);
+    void apply_open_archive_diagnostics(OperationResult& result,
+                                        OpenArchiveDiagnostics const& diagnostics);
+
+    template <typename TResult>
+    TResult make_operation_failure_from_open_diagnostics(OpenArchiveDiagnostics const& diagnostics) {
+        TResult result;
+        apply_open_archive_diagnostics(result, diagnostics);
+        return result;
+    }
+
     int open_archive_shared(std::string const& archive_path,
                             std::string const& archive_type_hint,
                             ArchiveBackendHooks const& hooks,
                             std::atomic<bool>* cancel_requested,
                             std::function<bool()> wait_while_paused,
-                            bool enable_open_callback,
+                            OpenResultMessagePolicy message_policy,
+                            bool allow_password_prompt,
+                            std::string const& initial_password,
                             bool codecs_already_loaded,
                             CCodecs& codecs,
                             CObjectVector<COpenType>& types,
@@ -134,7 +170,9 @@ namespace z7::app {
                             CArc const*& arc,
                             bool* out_password_requested = nullptr,
                             bool* out_wrong_password = nullptr,
-                            std::string* out_password = nullptr);
+                            std::string* out_password = nullptr,
+                            OpenArchiveDiagnostics* out_diagnostics = nullptr,
+                            FilenameCodePage filename_code_page = std::nullopt);
 
     // Open an archive whose bytes are already available as an IInStream (seekable)
     // rather than a filesystem path. `display_path` is used purely for extension /
@@ -145,7 +183,9 @@ namespace z7::app {
                                         ArchiveBackendHooks const& hooks,
                                         std::atomic<bool>* cancel_requested,
                                         std::function<bool()> wait_while_paused,
-                                        bool enable_open_callback,
+                                        OpenResultMessagePolicy message_policy,
+                                        bool allow_password_prompt,
+                                        std::string const& initial_password,
                                         bool codecs_already_loaded,
                                         CCodecs& codecs,
                                         CObjectVector<COpenType>& types,
@@ -154,12 +194,9 @@ namespace z7::app {
                                         CArc const*& arc,
                                         bool* out_password_requested = nullptr,
                                         bool* out_wrong_password = nullptr,
-                                        std::string* out_password = nullptr);
-
-    // Complete-data operations must not consume the partial item set that some
-    // multi-volume handlers expose while reporting an open error. Listing and
-    // property browsing intentionally do not call this validator.
-    std::optional<ArchiveError> complete_operation_open_error(CArchiveLink const& archive_link);
+                                        std::string* out_password = nullptr,
+                                        OpenArchiveDiagnostics* out_diagnostics = nullptr,
+                                        FilenameCodePage filename_code_page = std::nullopt);
 
     struct OpenArchiveReadState {
         CCodecs codecs;
@@ -167,6 +204,7 @@ namespace z7::app {
         CIntVector excluded_formats;
         CArchiveLink archive_link;
         CArc const* arc = nullptr;
+        OpenArchiveDiagnostics open_diagnostics;
     };
 
     template <typename TResult>
@@ -178,7 +216,9 @@ namespace z7::app {
                                        ArchiveBackendHooks const& hooks,
                                        std::atomic<bool>* cancel_requested,
                                        std::function<bool()> wait_while_paused,
-                                       bool enable_open_callback,
+                                       OpenResultMessagePolicy message_policy,
+                                       bool allow_password_prompt,
+                                       std::string const& initial_password,
                                        CCodecs* preloaded_codecs,
                                        Handler&& handler) {
         OpenArchiveReadState open_state;
@@ -190,7 +230,9 @@ namespace z7::app {
                                                      hooks,
                                                      cancel_requested,
                                                      std::move(wait_while_paused),
-                                                     enable_open_callback,
+                                                     message_policy,
+                                                     allow_password_prompt,
+                                                     initial_password,
                                                      preloaded_codecs != nullptr,
                                                      codecs,
                                                      open_state.types,
@@ -199,22 +241,31 @@ namespace z7::app {
                                                      open_state.arc,
                                                      &password_requested,
                                                      &wrong_password,
-                                                     nullptr);
+                                                     nullptr,
+                                                     &open_state.open_diagnostics);
         if (open_res != S_OK) {
+            TResult result;
             if (password_requested || wrong_password) {
-                return make_operation_failure<TResult>(
+                result = make_operation_failure<TResult>(
                     ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
+            } else {
+                result = make_operation_failure_from_hresult<TResult>(open_res);
             }
-            return make_operation_failure_from_hresult<TResult>(open_res);
+            apply_open_archive_diagnostics(result, open_state.open_diagnostics);
+            return result;
         }
 
         UInt32 num_items = 0;
         const HRESULT num_res = open_state.arc->Archive->GetNumberOfItems(&num_items);
         if (num_res != S_OK) {
-            return make_operation_failure_from_hresult<TResult>(num_res);
+            TResult result = make_operation_failure_from_hresult<TResult>(num_res);
+            apply_open_archive_diagnostics(result, open_state.open_diagnostics);
+            return result;
         }
 
-        return handler(open_state, num_items);
+        TResult result = handler(open_state, num_items);
+        apply_open_archive_diagnostics(result, open_state.open_diagnostics);
+        return result;
     }
 
     template <typename TResult, typename Handler>
@@ -223,14 +274,18 @@ namespace z7::app {
                                        ArchiveBackendHooks const& hooks,
                                        std::atomic<bool>* cancel_requested,
                                        std::function<bool()> wait_while_paused,
-                                       bool enable_open_callback,
+                                       OpenResultMessagePolicy message_policy,
+                                       bool allow_password_prompt,
+                                       std::string const& initial_password,
                                        Handler&& handler) {
         return run_with_open_archive_read<TResult>(archive_path,
                                                    archive_type_hint,
                                                    hooks,
                                                    cancel_requested,
                                                    std::move(wait_while_paused),
-                                                   enable_open_callback,
+                                                   message_policy,
+                                                   allow_password_prompt,
+                                                   initial_password,
                                                    nullptr,
                                                    std::forward<Handler>(handler));
     }
@@ -241,8 +296,11 @@ namespace z7::app {
                                            ArchiveBackendHooks const& hooks,
                                            std::atomic<bool>* cancel_requested,
                                            std::function<bool()> wait_while_paused,
-                                           bool enable_open_callback,
+                                           OpenResultMessagePolicy message_policy,
+                                           bool allow_password_prompt,
+                                           std::string const& initial_password,
                                            CCodecs* preloaded_codecs,
+                                           OpenArchiveDiagnostics* out_diagnostics,
                                            Handler&& handler) {
         OpenArchiveReadState open_state;
         CCodecs& codecs = preloaded_codecs != nullptr ? *preloaded_codecs : open_state.codecs;
@@ -251,24 +309,40 @@ namespace z7::app {
                                                      hooks,
                                                      cancel_requested,
                                                      std::move(wait_while_paused),
-                                                     enable_open_callback,
+                                                     message_policy,
+                                                     allow_password_prompt,
+                                                     initial_password,
                                                      preloaded_codecs != nullptr,
                                                      codecs,
                                                      open_state.types,
                                                      open_state.excluded_formats,
                                                      open_state.archive_link,
-                                                     open_state.arc);
+                                                     open_state.arc,
+                                                     nullptr,
+                                                     nullptr,
+                                                     nullptr,
+                                                     &open_state.open_diagnostics);
         if (open_res != S_OK) {
+            if (out_diagnostics != nullptr) {
+                *out_diagnostics = std::move(open_state.open_diagnostics);
+            }
             return open_res;
         }
 
         UInt32 num_items = 0;
         const HRESULT num_res = open_state.arc->Archive->GetNumberOfItems(&num_items);
         if (num_res != S_OK) {
+            if (out_diagnostics != nullptr) {
+                *out_diagnostics = std::move(open_state.open_diagnostics);
+            }
             return num_res;
         }
 
-        return handler(open_state, num_items);
+        const HRESULT result = handler(open_state, num_items);
+        if (out_diagnostics != nullptr) {
+            *out_diagnostics = std::move(open_state.open_diagnostics);
+        }
+        return result;
     }
 
     template <typename Handler>
@@ -277,14 +351,19 @@ namespace z7::app {
                                            ArchiveBackendHooks const& hooks,
                                            std::atomic<bool>* cancel_requested,
                                            std::function<bool()> wait_while_paused,
-                                           bool enable_open_callback,
+                                           OpenResultMessagePolicy message_policy,
+                                           bool allow_password_prompt,
+                                           std::string const& initial_password,
                                            Handler&& handler) {
         return run_with_open_archive_read_hresult(archive_path,
                                                   archive_type_hint,
                                                   hooks,
                                                   cancel_requested,
                                                   std::move(wait_while_paused),
-                                                  enable_open_callback,
+                                                  message_policy,
+                                                  allow_password_prompt,
+                                                  initial_password,
+                                                  nullptr,
                                                   nullptr,
                                                   std::forward<Handler>(handler));
     }

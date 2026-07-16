@@ -16,7 +16,7 @@ namespace {
         QString lang_error;
         if (!z7::ui::runtime_support::OfficialLangCatalog::validate_required_language_resources(&lang_error)) {
             QMessageBox::critical(nullptr,
-                                  QStringLiteral("7zG"),
+                                  QStringLiteral("7-Zip"),
                                   QStringLiteral("Cannot initialize language resources:\n%1").arg(lang_error));
             return 2;
         }
@@ -24,7 +24,7 @@ namespace {
         QString settings_error;
         if (!z7::platform::qt::initialize_portable_settings(&settings_error)) {
             QMessageBox::critical(nullptr,
-                                  QStringLiteral("7zG"),
+                                  QStringLiteral("7-Zip"),
                                   QStringLiteral("Cannot initialize portable config at \"%1\":\n%2")
                                       .arg(z7::platform::qt::portable_settings_root_dir(), settings_error));
             return 1;
@@ -188,7 +188,7 @@ int main(int argc, char* argv[]) {
             bool const likely_no_task =
                 detail.contains(QStringLiteral("Requested task IPC task is no longer available"), Qt::CaseInsensitive);
             if (!likely_no_task && !QGuiApplication::screens().isEmpty()) {
-                QMessageBox::critical(nullptr, QStringLiteral("7zG"), detail);
+                QMessageBox::critical(nullptr, QStringLiteral("7-Zip"), detail);
             }
             finalize_exit(7);
             return;

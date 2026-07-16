@@ -218,9 +218,14 @@ namespace z7::app {
             }
             std::unique_lock<std::recursive_mutex> session_lock(
                 ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            ScopedFilenameCodePage filename_scope(session->filename_code_page());
             if (ArchiveOpenSessionNativeAccess::closed(*session)) {
                 return make_operation_failure<ArchiveCommentResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+            }
+            if (archive_session_state(*session).open_diagnostics.has_errors()) {
+                return make_operation_failure_from_open_diagnostics<ArchiveCommentResult>(
+                    archive_session_state(*session).open_diagnostics);
             }
             if (std::optional<OperationResult> materialize_error = ensure_archive_session_writable(
                     *session, hooks, &cancel_requested_, [this]() { return this->wait_while_paused(); });
@@ -262,8 +267,14 @@ namespace z7::app {
             target.archive_path,
             {},
             hooks,
+            OpenResultMessagePolicy::kOperationMessages,
             true,
+            {},
             [&](OpenArchiveReadState& open_state, UInt32 num_items) -> ArchiveCommentResult {
+                if (open_state.open_diagnostics.has_errors()) {
+                    return make_operation_failure_from_open_diagnostics<ArchiveCommentResult>(
+                        open_state.open_diagnostics);
+                }
                 ArchiveCommentResult result;
                 CArc const* arc = open_state.arc;
 
@@ -304,7 +315,10 @@ namespace z7::app {
                     &cancel_requested_,
                     [this]() { return this->wait_while_paused(); },
                     target.archive_path,
-                    NativeUpdateOperationCallback::Mode::kAdd);
+                    NativeUpdateOperationCallback::Mode::kAdd,
+                    OpenResultMessagePolicy::kOperationMessages,
+                    {},
+                    /*reject_open_errors=*/true);
                 update_callback->Callback = &update_operation_callback;
                 update_callback->UpdatePairs = &update_pairs;
                 update_callback->CommentIndex = static_cast<int>(target_arc_index);

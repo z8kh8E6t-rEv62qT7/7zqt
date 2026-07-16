@@ -469,16 +469,21 @@ namespace z7::app {
             return prior_item_result;
         }
 
-        std::string const raw_archive_entry_path = archive_get_prop_text(archive_, index, kpidPath);
-        std::string archive_entry_path = normalize_archive_item_path(raw_archive_entry_path);
+        ArchiveItemPath item_path;
+        HRESULT const path_result = resolve_archive_item_path(arc_, index, item_path);
+        if (path_result != S_OK) {
+            record_io_error("Cannot resolve archive entry path for item " + std::to_string(index));
+            return path_result;
+        }
+        std::string const& archive_entry_path = item_path.normalized;
         if (!archive_entry_path.empty() && !archive_virtual_path_is_safe_for_materialization(archive_entry_path)) {
             record_io_error("Unsafe archive entry path escapes destination: " + archive_entry_path);
             return E_FAIL;
         }
         std::string invalid_path_reason;
-        if (!validate_output_item_path(raw_archive_entry_path, invalid_path_reason)) {
+        if (!validate_output_item_path(item_path.resolved, invalid_path_reason)) {
             record_io_error(
-                "Unsafe archive entry path was rejected: " + raw_archive_entry_path + "; " + invalid_path_reason);
+                "Unsafe archive entry path was rejected: " + item_path.resolved + "; " + invalid_path_reason);
             return E_FAIL;
         }
 
@@ -491,14 +496,11 @@ namespace z7::app {
         ExtractItemAlternateStreamInfo alternate_stream_info;
         const HRESULT alternate_stream_result = read_item_alternate_stream_info(index, alternate_stream_info);
         if (alternate_stream_result != S_OK) {
-            record_io_error("Cannot read alternate-stream metadata: " + raw_archive_entry_path);
+            record_io_error("Cannot read alternate-stream metadata: " + archive_entry_path);
             return alternate_stream_result;
         }
-        std::string const display_path = archive_entry_path.empty() ? std::to_string(index) : archive_entry_path;
-        std::string output_item_path = archive_entry_path;
-        if (output_item_path.empty() && !is_dir) {
-            output_item_path = default_extracted_stream_name(archive_path_);
-        }
+        std::string const display_path = archive_entry_path;
+        std::string const output_item_path = archive_entry_path;
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -519,6 +521,24 @@ namespace z7::app {
 
         if (ask_extract_mode != NArchive::NExtract::NAskMode::kExtract) {
             return S_OK;
+        }
+
+        {
+            NWindows::NCOM::CPropVariant position;
+            HRESULT const position_result = archive_->GetProperty(index, kpidPosition, &position);
+            if (position_result != S_OK) {
+                record_io_error("Cannot read split archive entry position: " + display_path);
+                return position_result;
+            }
+            if (position.vt != VT_EMPTY) {
+                if (position.vt != VT_UI8) {
+                    record_io_error("Invalid split archive entry position: " + display_path);
+                    return E_FAIL;
+                }
+                remember_skipped_archive_item(index);
+                record_partial_warning("Split archive entry is unsupported and was skipped: " + display_path);
+                return S_OK;
+            }
         }
 
         // Several filesystem/container formats expose their logical root as an
@@ -674,8 +694,8 @@ namespace z7::app {
         }
 
         std::string const path_for_resolution =
-            path_mode_ == ExtractPathMode::kAbsolutePaths && is_absolute_item_path(raw_archive_entry_path)
-                ? raw_archive_entry_path
+            path_mode_ == ExtractPathMode::kAbsolutePaths && is_absolute_item_path(item_path.resolved)
+                ? item_path.resolved
                 : output_item_path;
         ResolvedPath const resolved_path = resolve_destination_path(path_for_resolution, is_dir);
         fs::path const destination_path = resolved_path.destination_path;

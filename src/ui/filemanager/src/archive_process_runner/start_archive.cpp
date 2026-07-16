@@ -332,7 +332,8 @@ namespace z7::ui::filemanager {
     bool ArchiveProcessRunner::start_open_from_path(
         QString const& archive_path,
         QString const& archive_type_hint,
-        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result) {
+        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result,
+        z7::app::FilenameCodePage filename_code_page) {
         if (archive_path.trimmed().isEmpty()) {
             return finish_immediately(z7::app::make_immediate_result(
                 7, z7::app::ArchiveErrorDomain::kInvalidArguments, to_utf8_string(z7::ui::runtime_support::L(3015))));
@@ -341,6 +342,7 @@ namespace z7::ui::filemanager {
         z7::app::OpenArchiveFromPathRequest request;
         request.archive_path = to_native_string(archive_path);
         request.archive_type_hint = to_native_string(archive_type_hint.trimmed());
+        request.filename_code_page = filename_code_page;
 
         return start_operation(QStringLiteral("OpenArchiveFromPath"),
                                QStringList{archive_path},
@@ -355,7 +357,8 @@ namespace z7::ui::filemanager {
         QString const& archive_type_hint,
         size_t size_budget,
         QString const& display_path_hint,
-        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result) {
+        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result,
+        z7::app::FilenameCodePage filename_code_page) {
         if (!parent.is_valid()) {
             return finish_immediately(z7::app::make_immediate_result(
                 7, z7::app::ArchiveErrorDomain::kInvalidArguments, to_utf8_string(z7::ui::runtime_support::L(3015))));
@@ -367,6 +370,7 @@ namespace z7::ui::filemanager {
         request.archive_type_hint = to_native_string(archive_type_hint.trimmed());
         request.size_budget = size_budget;
         request.display_path_hint = to_utf8_string(display_path_hint);
+        request.filename_code_page = filename_code_page;
 
         return start_operation(QStringLiteral("OpenArchiveFromParent"),
                                QStringList{display_path_hint},
@@ -381,7 +385,8 @@ namespace z7::ui::filemanager {
         QString const& archive_type_hint,
         size_t size_budget,
         QString const& display_path_hint,
-        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result) {
+        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result,
+        z7::app::FilenameCodePage filename_code_page) {
         if (!parent.is_valid() || entry_path.trimmed().isEmpty()) {
             return finish_immediately(z7::app::make_immediate_result(
                 7, z7::app::ArchiveErrorDomain::kInvalidArguments, to_utf8_string(z7::ui::runtime_support::L(3015))));
@@ -393,6 +398,7 @@ namespace z7::ui::filemanager {
         request.archive_type_hint = to_native_string(archive_type_hint.trimmed());
         request.size_budget = size_budget;
         request.display_path_hint = to_utf8_string(display_path_hint.isEmpty() ? entry_path : display_path_hint);
+        request.filename_code_page = filename_code_page;
 
         return start_operation(QStringLiteral("OpenArchiveFromParent"),
                                QStringList{display_path_hint.isEmpty() ? entry_path : display_path_hint},
@@ -412,6 +418,22 @@ namespace z7::ui::filemanager {
 
         return start_operation(
             QStringLiteral("CloseArchiveSession"), QStringList{}, z7::app::ArchiveRequest{std::move(request)});
+    }
+
+    bool ArchiveProcessRunner::start_set_session_filename_code_page(
+        z7::app::ArchiveSessionToken token,
+        z7::app::FilenameCodePage filename_code_page) {
+        if (!token.is_valid()) {
+            return finish_immediately(z7::app::make_immediate_result(
+                7, z7::app::ArchiveErrorDomain::kInvalidArguments, to_utf8_string(z7::ui::runtime_support::L(3015))));
+        }
+
+        z7::app::SetArchiveSessionFilenameCodePageRequest request;
+        request.token = token;
+        request.filename_code_page = filename_code_page;
+        return start_operation(QStringLiteral("SetArchiveSessionFilenameCodePage"),
+                               QStringList{},
+                               z7::app::ArchiveRequest{std::move(request)});
     }
 
     bool

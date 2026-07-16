@@ -51,21 +51,20 @@ namespace z7::app {
         return normalize_archive_virtual_directory(value);
     }
 
-    std::string archive_item_selection_path(IInArchive* archive, UInt32 index) {
-        if (archive == nullptr) {
-            return {};
+    HRESULT resolve_archive_item_path(CArc const* arc, UInt32 index, ArchiveItemPath& path) {
+        path = {};
+        if (arc == nullptr || arc->Archive == nullptr) {
+            return E_FAIL;
         }
 
-        std::string const item_path = normalize_archive_item_path(archive_get_prop_text(archive, index, kpidPath));
-        if (!item_path.empty()) {
-            return item_path;
+        UString resolved_path;
+        HRESULT const result = arc->GetItem_Path2(index, resolved_path);
+        if (result != S_OK) {
+            return result;
         }
-
-        bool is_dir = false;
-        if (archive_get_prop_bool(archive, index, kpidIsDir, is_dir) && is_dir) {
-            return {};
-        }
-        return std::to_string(index);
+        path.resolved = ustring_to_utf8(resolved_path);
+        path.normalized = normalize_archive_item_path(path.resolved);
+        return S_OK;
     }
 
     bool archive_path_matches_selection(std::string const& item_path,

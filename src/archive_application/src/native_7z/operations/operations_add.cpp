@@ -215,9 +215,14 @@ namespace z7::app {
             }
             std::unique_lock<std::recursive_mutex> session_lock(
                 ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            ScopedFilenameCodePage filename_scope(session->filename_code_page());
             if (ArchiveOpenSessionNativeAccess::closed(*session)) {
                 return make_operation_failure<AddResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+            }
+            if (archive_session_state(*session).open_diagnostics.has_errors()) {
+                return make_operation_failure_from_open_diagnostics<AddResult>(
+                    archive_session_state(*session).open_diagnostics);
             }
             if (!request.password.empty()) {
                 session->set_password(request.password);
@@ -291,7 +296,9 @@ namespace z7::app {
                     [this]() { return this->wait_while_paused(); },
                     request.archive_path,
                     NativeUpdateOperationCallback::Mode::kAdd,
-                    request.password);
+                    OpenResultMessagePolicy::kOperationMessages,
+                    request.password,
+                    /*reject_open_errors=*/true);
             },
             [&](CCodecs& codecs, CObjectVector<COpenType>& types, NWildcard::CCensor& censor, CUpdateOptions& options)
                 -> std::optional<OperationResult> {

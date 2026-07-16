@@ -62,6 +62,7 @@ add_library(z7_ui_runtime_support STATIC
   include/official_lang_catalog.h
   include/password_prompt_dialog.h
   include/task_progress_dialog_base.h
+  include/task_result_presentation.h
   src/archive_failure_messages.cpp
   src/delayed_progress_dialog_presenter.cpp
   src/extract_memory_settings.cpp
@@ -75,6 +76,7 @@ add_library(z7_ui_runtime_support STATIC
   src/task_progress_dialog_base_cancel.cpp
   src/task_progress_dialog_base_progress.cpp
   src/task_progress_dialog_base_state.cpp
+  src/task_result_presentation.cpp
   "${Z7_GENERATED_RESOURCE_QRC}"
 )
 
@@ -91,10 +93,9 @@ target_link_libraries(z7_ui_runtime_support
     z7::i18n
     z7_platform_qt
     z7_ui_archive_support
+    z7_app_logic
     Qt6::Core
-    Qt6::Widgets
-  PRIVATE
-    z7_app_logic)
+    Qt6::Widgets)
 
 z7_set_default_target_options(z7_ui_runtime_support)
 

@@ -12,6 +12,7 @@
 #include <string>
 
 #include "archive_session.h"
+#include "filename_code_page.h"
 
 class QWidget;
 
@@ -127,7 +128,8 @@ namespace z7::ui::filemanager {
         bool
         start_open_from_path(QString const& archive_path,
                              QString const& archive_type_hint = QString(),
-                             std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {});
+                             std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {},
+                             z7::app::FilenameCodePage filename_code_page = std::nullopt);
 
         // Open a nested archive at `entry_index` within the parent session. Tries
         // stream / memory / temp-file strategies in order.
@@ -137,7 +139,8 @@ namespace z7::ui::filemanager {
                           QString const& archive_type_hint = QString(),
                           size_t size_budget = 0,
                           QString const& display_path_hint = QString(),
-                          std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {});
+                          std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {},
+                          z7::app::FilenameCodePage filename_code_page = std::nullopt);
 
         // Path-based variant: resolves `entry_path` to an index in the parent
         // archive on the backend side. Prefer this from UI code, which already
@@ -148,11 +151,15 @@ namespace z7::ui::filemanager {
             QString const& archive_type_hint = QString(),
             size_t size_budget = 0,
             QString const& display_path_hint = QString(),
-            std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {});
+            std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {},
+            z7::app::FilenameCodePage filename_code_page = std::nullopt);
 
         // Release a session previously obtained via start_open_from_path /
         // start_open_nested.
         bool start_close_session(z7::app::ArchiveSessionToken token);
+
+        bool start_set_session_filename_code_page(z7::app::ArchiveSessionToken token,
+                                                  z7::app::FilenameCodePage filename_code_page);
 
         // List entries inside an already-opened session (no re-parse).
         bool start_list_in_session(z7::app::ArchiveSessionToken token,

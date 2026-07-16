@@ -69,6 +69,7 @@ set(Z7_UI_FILEMANAGER_MAIN_WINDOW_SOURCES
   src/main_window/state/state_window.cpp
   src/main_window/view/view_actions_setup.cpp
   src/main_window/view/view_actions_connections.cpp
+  src/main_window/view/view_encoding.cpp
   src/main_window/view/view_runtime.cpp
   src/main_window/view/view_state.cpp
   src/main_window/view/view_widgets.cpp

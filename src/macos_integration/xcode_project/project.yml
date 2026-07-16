@@ -44,7 +44,7 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: APPL
-        CFBundleShortVersionString: "1.0"
+        CFBundleShortVersionString: "1.1.0"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         NSHumanReadableCopyright: ""
@@ -190,7 +190,7 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: XPC!
-        CFBundleShortVersionString: "1.0"
+        CFBundleShortVersionString: "1.1.0"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         XPCService:

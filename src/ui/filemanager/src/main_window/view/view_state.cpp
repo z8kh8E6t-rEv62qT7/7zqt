@@ -50,6 +50,7 @@ namespace z7::ui::filemanager {
         sync_path_bar_from_current_dir();
         update_window_title();
         update_view_menu_checks();
+        update_encoding_menu_state();
         update_status();
     }
 

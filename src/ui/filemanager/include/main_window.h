@@ -15,6 +15,7 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "archive_process_runner.h"
 #include "display_settings.h"

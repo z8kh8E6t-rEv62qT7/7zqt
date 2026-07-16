@@ -139,6 +139,36 @@
     "view": {
       "crc_menu_title": "CRC",
       "time_utc": "UTC"
+    },
+    "encoding": {
+      "menu": "Encoding",
+      "auto": "Auto",
+      "charsets": "Character Sets",
+      "input_code_page": "Input Code Page…",
+      "input_title": "Archive Filename Encoding",
+      "input_prompt": "Code page (2–65535):",
+      "region": {
+        "arabic": "Arabic",
+        "baltic": "Baltic",
+        "celtic": "Celtic",
+        "cyrillic": "Cyrillic",
+        "central_european": "Central European",
+        "chinese": "Chinese",
+        "eastern_european": "Eastern European",
+        "greek": "Greek",
+        "hebrew": "Hebrew",
+        "japanese": "Japanese",
+        "korean": "Korean",
+        "north_western_european": "North/Western European",
+        "thai": "Thai",
+        "turkish": "Turkish",
+        "vietnamese": "Vietnamese"
+      },
+      "error": {
+        "active_descendant": "Close the child archive view before changing this archive layer's filename encoding.",
+        "unsupported": "This filename code page is not supported on the current platform.",
+        "reload_failed": "The archive could not be reloaded with the selected filename encoding. The previous view was kept."
+      }
     }
   }
 }

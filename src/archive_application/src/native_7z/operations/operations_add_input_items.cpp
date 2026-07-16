@@ -4,33 +4,6 @@
 #include "operations/operations_add_input_items.h"
 
 namespace z7::app {
-    namespace {
-
-        std::optional<OperationResult> make_io_failure(std::error_code const& ec, std::string const& context) {
-            std::string summary = context;
-            if (ec) {
-                if (!summary.empty()) {
-                    summary += ": ";
-                }
-                summary += ec.message();
-            }
-            return make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo, std::move(summary), 2);
-        }
-
-        std::optional<OperationResult> validate_input_item_source(fs::path const& source_path) {
-            std::error_code ec;
-            bool const source_exists = fs::exists(source_path, ec);
-            if (ec) {
-                return make_io_failure(ec, "Failed to inspect add input source: " + source_path.string());
-            }
-            if (!source_exists) {
-                return invalid_request("Add request input_items source does not exist: " + source_path.string());
-            }
-            return std::nullopt;
-        }
-
-    } // namespace
-
     std::optional<OperationResult> prepare_add_request_for_execution(AddRequest const& request,
                                                                      AddRequest* out_request) {
         if (out_request == nullptr) {
@@ -60,12 +33,6 @@ namespace z7::app {
             }
             if (!seen_entries.insert(normalized_entry).second) {
                 return invalid_request("Add request input_items contain duplicate archive_entry: " + normalized_entry);
-            }
-
-            if (std::optional<OperationResult> source_error =
-                    validate_input_item_source(fs::path(item.filesystem_path));
-                source_error.has_value()) {
-                return std::move(*source_error);
             }
 
             prepared.input_items.push_back(AddInputItem{item.filesystem_path, normalized_entry});

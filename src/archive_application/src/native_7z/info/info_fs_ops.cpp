@@ -376,6 +376,15 @@ namespace z7::app {
             });
     }
 
+    OperationResult NativeArchiveBackend::set_archive_session_filename_code_page(
+        SetArchiveSessionFilenameCodePageRequest const& request,
+        ArchiveBackendHooks const& hooks) {
+        return set_native_archive_session_filename_code_page(
+            ArchiveSessionRegistry::instance(), request, hooks, &cancel_requested_, [this]() {
+                return wait_while_paused();
+            });
+    }
+
     OperationResult NativeArchiveBackend::close_archive_session(CloseArchiveSessionRequest const& request,
                                                                 ArchiveBackendHooks const& hooks) {
         return close_native_archive_session(
@@ -390,7 +399,9 @@ namespace z7::app {
             request.archive_path,
             request.archive_type_hint,
             hooks,
+            OpenResultMessagePolicy::kOperationMessages,
             true,
+            {},
             [&](OpenArchiveReadState const&, UInt32) -> OpenArchiveResult {
                 OpenArchiveResult out = make_operation_success<OpenArchiveResult>("Success");
                 out.archive_path = request.archive_path;
@@ -412,8 +423,18 @@ namespace z7::app {
                 return make_operation_failure<ListResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
             }
-            std::unique_lock<std::recursive_mutex> session_lock(
-                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            std::vector<std::shared_ptr<ArchiveOpenSession>> lock_chain;
+            for (std::shared_ptr<ArchiveOpenSession> cursor = session; cursor != nullptr;
+                 cursor = ArchiveOpenSessionNativeAccess::parent(*cursor)) {
+                lock_chain.push_back(cursor);
+            }
+            std::reverse(lock_chain.begin(), lock_chain.end());
+            std::vector<std::unique_lock<std::recursive_mutex>> session_locks;
+            session_locks.reserve(lock_chain.size());
+            for (auto const& locked_session : lock_chain) {
+                session_locks.emplace_back(ArchiveOpenSessionNativeAccess::operation_mutex(*locked_session));
+            }
+            ScopedFilenameCodePage filename_scope(session->filename_code_page());
             if (ArchiveOpenSessionNativeAccess::closed(*session)) {
                 return make_operation_failure<ListResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
@@ -429,16 +450,19 @@ namespace z7::app {
                                                              batch_size,
                                                              batch_cb);
             if (hr != S_OK) {
-                return from_base_result<ListResult>(make_operation_failure_from_hresult<OperationResult>(hr));
+                static_cast<OperationResult&>(out) = make_operation_failure_from_hresult<OperationResult>(hr);
+            } else {
+                static_cast<OperationResult&>(out) =
+                    make_operation_success<OperationResult>(request.streaming_mode ? "batch-mode" : "Success");
             }
-            static_cast<OperationResult&>(out) =
-                make_operation_success<OperationResult>(request.streaming_mode ? "batch-mode" : "Success");
+            apply_open_archive_diagnostics(out, archive_session_state(*session).open_diagnostics);
             return out;
         }
 
-        return run_with_operation_codecs_hresult<ListResult>(
-            [&](CCodecs& codecs, ListResult& out) -> int {
-                return list_archive_entries_via_original_api(
+        return run_with_operation_codecs<ListResult>([&](CCodecs& codecs) -> ListResult {
+            ListResult out;
+            OpenArchiveDiagnostics diagnostics;
+            const HRESULT hr = list_archive_entries_via_original_api(
                     request.archive_path,
                     request.directory,
                     request.archive_type_hint,
@@ -450,9 +474,15 @@ namespace z7::app {
                     &codecs,
                     out.entries,
                     batch_size,
-                    batch_cb);
-            },
-            request.streaming_mode ? "batch-mode" : "Success");
+                    batch_cb,
+                    &diagnostics);
+            static_cast<OperationResult&>(out) = hr == S_OK
+                                                   ? make_operation_success<OperationResult>(
+                                                         request.streaming_mode ? "batch-mode" : "Success")
+                                                   : make_operation_failure_from_hresult<OperationResult>(hr);
+            apply_open_archive_diagnostics(out, diagnostics);
+            return out;
+        });
     }
 
     ArchivePropertiesResult NativeArchiveBackend::properties(ArchivePropertiesRequest const& request,
@@ -463,8 +493,18 @@ namespace z7::app {
                 return make_operation_failure<ArchivePropertiesResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
             }
-            std::unique_lock<std::recursive_mutex> session_lock(
-                ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+            std::vector<std::shared_ptr<ArchiveOpenSession>> lock_chain;
+            for (std::shared_ptr<ArchiveOpenSession> cursor = session; cursor != nullptr;
+                 cursor = ArchiveOpenSessionNativeAccess::parent(*cursor)) {
+                lock_chain.push_back(cursor);
+            }
+            std::reverse(lock_chain.begin(), lock_chain.end());
+            std::vector<std::unique_lock<std::recursive_mutex>> session_locks;
+            session_locks.reserve(lock_chain.size());
+            for (auto const& locked_session : lock_chain) {
+                session_locks.emplace_back(ArchiveOpenSessionNativeAccess::operation_mutex(*locked_session));
+            }
+            ScopedFilenameCodePage filename_scope(session->filename_code_page());
             if (ArchiveOpenSessionNativeAccess::closed(*session)) {
                 return make_operation_failure<ArchivePropertiesResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
@@ -477,47 +517,61 @@ namespace z7::app {
                                                                           archive_session_link(*session),
                                                                           &cancel_requested_,
                                                                           out.lines);
-            if (hr != S_OK) {
-                return from_base_result<ArchivePropertiesResult>(
-                    make_operation_failure_from_hresult<OperationResult>(hr));
-            }
+            if (hr == S_OK) {
+                uint32_t level_offset = static_cast<uint32_t>(archive_session_link(*session).Arcs.Size());
+                std::shared_ptr<ArchiveOpenSession> current = ArchiveOpenSessionNativeAccess::parent(*session);
+                std::string child_entry_path = ArchiveOpenSessionNativeAccess::entry_path_from_parent(*session);
+                while (current) {
+                    ScopedFilenameCodePage parent_filename_scope(current->filename_code_page());
+                    CArc const* parent_arc = archive_session_link(*current).GetArc();
+                    if (parent_arc == nullptr) {
+                        break;
+                    }
 
-            uint32_t level_offset = static_cast<uint32_t>(archive_session_link(*session).Arcs.Size());
-            std::shared_ptr<ArchiveOpenSession> current = ArchiveOpenSessionNativeAccess::parent(*session);
-            std::string child_entry_path = ArchiveOpenSessionNativeAccess::entry_path_from_parent(*session);
-            while (current) {
-                CArc const* parent_arc = archive_session_link(*current).GetArc();
-                if (parent_arc == nullptr) {
-                    break;
+                    info_properties_detail::append_archive_props2_for_parent_entry(
+                        *parent_arc,
+                        child_entry_path,
+                        level_offset == 0 ? std::optional<uint32_t>{} : std::optional<uint32_t>{level_offset},
+                        out.lines,
+                        &cancel_requested_);
+                    info_properties_detail::append_archive_link_properties_with_offset(
+                        archive_session_codecs(*current),
+                        archive_session_link(*current),
+                        level_offset,
+                        false,
+                        out.lines,
+                        &cancel_requested_);
+
+                    child_entry_path = ArchiveOpenSessionNativeAccess::entry_path_from_parent(*current);
+                    level_offset += static_cast<uint32_t>(archive_session_link(*current).Arcs.Size());
+                    current = ArchiveOpenSessionNativeAccess::parent(*current);
                 }
-
-                info_properties_detail::append_archive_props2_for_parent_entry(
-                    *parent_arc,
-                    child_entry_path,
-                    level_offset == 0 ? std::optional<uint32_t>{} : std::optional<uint32_t>{level_offset},
-                    out.lines,
-                    &cancel_requested_);
-                info_properties_detail::append_archive_link_properties_with_offset(archive_session_codecs(*current),
-                                                                                   archive_session_link(*current),
-                                                                                   level_offset,
-                                                                                   false,
-                                                                                   out.lines,
-                                                                                   &cancel_requested_);
-
-                child_entry_path = ArchiveOpenSessionNativeAccess::entry_path_from_parent(*current);
-                level_offset += static_cast<uint32_t>(archive_session_link(*current).Arcs.Size());
-                current = ArchiveOpenSessionNativeAccess::parent(*current);
             }
 
-            static_cast<OperationResult&>(out) = make_operation_success<OperationResult>("Success");
+            static_cast<OperationResult&>(out) = hr == S_OK
+                                                   ? make_operation_success<OperationResult>("Success")
+                                                   : make_operation_failure_from_hresult<OperationResult>(hr);
+            apply_open_archive_diagnostics(out, archive_session_state(*session).open_diagnostics);
             return out;
         }
 
-        return run_with_operation_codecs_hresult<ArchivePropertiesResult>(
-            [&](CCodecs& codecs, ArchivePropertiesResult& out) -> int {
-                return collect_archive_properties_via_original_api(
-                    request, hooks, &cancel_requested_, [this]() { return wait_while_paused(); }, &codecs, out.lines);
-            });
+        return run_with_operation_codecs<ArchivePropertiesResult>([&](CCodecs& codecs) -> ArchivePropertiesResult {
+            ArchivePropertiesResult out;
+            OpenArchiveDiagnostics diagnostics;
+            const HRESULT hr = collect_archive_properties_via_original_api(
+                request,
+                hooks,
+                &cancel_requested_,
+                [this]() { return wait_while_paused(); },
+                &codecs,
+                out.lines,
+                &diagnostics);
+            static_cast<OperationResult&>(out) = hr == S_OK
+                                                   ? make_operation_success<OperationResult>("Success")
+                                                   : make_operation_failure_from_hresult<OperationResult>(hr);
+            apply_open_archive_diagnostics(out, diagnostics);
+            return out;
+        });
     }
 
     NavigateResult NativeArchiveBackend::navigate(NavigateRequest const& request, ArchiveBackendHooks const&) {
@@ -562,9 +616,14 @@ namespace z7::app {
                 }
                 std::unique_lock<std::recursive_mutex> session_lock(
                     ArchiveOpenSessionNativeAccess::operation_mutex(*session));
+                ScopedFilenameCodePage filename_scope(session->filename_code_page());
                 if (ArchiveOpenSessionNativeAccess::closed(*session)) {
                     return make_operation_failure<RenameResult>(
                         ArchiveErrorDomain::kInvalidArguments, "Archive session is already closed", 7);
+                }
+                if (archive_session_state(*session).open_diagnostics.has_errors()) {
+                    return make_operation_failure_from_open_diagnostics<RenameResult>(
+                        archive_session_state(*session).open_diagnostics);
                 }
                 if (std::optional<OperationResult> materialize_error = ensure_archive_session_writable(
                         *session, hooks, &cancel_requested_, [this]() { return this->wait_while_paused(); });
@@ -603,8 +662,14 @@ namespace z7::app {
                 request.archive_path,
                 {},
                 hooks,
+                OpenResultMessagePolicy::kOperationMessages,
                 true,
+                {},
                 [&](OpenArchiveReadState& open_state, UInt32 num_items) -> RenameResult {
+                    if (open_state.open_diagnostics.has_errors()) {
+                        return make_operation_failure_from_open_diagnostics<RenameResult>(
+                            open_state.open_diagnostics);
+                    }
                     CArc const* arc = open_state.arc;
                     CMyComPtr<IOutArchive> out_archive;
                     const HRESULT query_out_res = arc->Archive->QueryInterface(IID_IOutArchive, (void**)&out_archive);
@@ -685,7 +750,10 @@ namespace z7::app {
                         &cancel_requested_,
                         [this]() { return this->wait_while_paused(); },
                         request.archive_path,
-                        NativeUpdateOperationCallback::Mode::kAdd);
+                        NativeUpdateOperationCallback::Mode::kAdd,
+                        OpenResultMessagePolicy::kOperationMessages,
+                        {},
+                        /*reject_open_errors=*/true);
                     update_callback->Callback = &update_operation_callback;
                     update_callback->UpdatePairs = &update_pairs;
                     update_callback->NewNames = &new_names;

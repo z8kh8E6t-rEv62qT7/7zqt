@@ -10,6 +10,8 @@
 
 namespace z7::app {
 
+    enum class OpenResultMessagePolicy;
+
     class NativeUpdateOperationCallback final : public IUpdateCallbackUI2,
                                                 public IOpenCallbackUI,
                                                 protected CallbackBase {
@@ -24,7 +26,9 @@ namespace z7::app {
                                       std::function<bool()> wait_while_paused,
                                       std::string archive_path,
                                       Mode mode,
-                                      std::string initial_password = {});
+                                      OpenResultMessagePolicy open_result_message_policy,
+                                      std::string initial_password = {},
+                                      bool reject_open_errors = false);
 
         bool totals_known() const;
         uint64_t total_bytes() const;
@@ -38,6 +42,8 @@ namespace z7::app {
         bool password_defined() const;
         bool password_requested() const;
         bool wrong_password() const;
+        uint64_t open_error_count() const;
+        std::string open_error_message() const;
 
         void set_total_files_hint(uint64_t total_files);
 
@@ -97,12 +103,14 @@ namespace z7::app {
         ProgressSnapshot snapshot_progress() const;
         void emit_progress_snapshot() const;
         void note_error(std::string const& message);
+        void note_system_error(FString const& path, DWORD system_error);
         HRESULT check_break() const;
         HRESULT provide_password(BSTR* password, bool password_required);
 
         ArchiveBackendHooks hooks_;
         std::string archive_path_;
         Mode mode_ = Mode::kAdd;
+        OpenResultMessagePolicy open_result_message_policy_;
 
         mutable std::mutex mutex_;
         bool totals_known_ = false;
@@ -120,6 +128,9 @@ namespace z7::app {
         bool password_defined_ = false;
         bool password_requested_ = false;
         bool wrong_password_ = false;
+        bool reject_open_errors_ = false;
+        uint64_t open_error_count_ = 0;
+        std::string open_error_message_;
     };
 
 } // namespace z7::app

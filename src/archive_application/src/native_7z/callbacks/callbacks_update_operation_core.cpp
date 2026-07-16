@@ -4,6 +4,7 @@
 #include "core/internal.h"
 #include "third_party_adapter/callbacks_update_operation.h"
 #include "third_party_adapter/third_party_adapter.h"
+#include "Windows/ErrorMsg.h"
 
 namespace z7::app {
 
@@ -12,13 +13,17 @@ namespace z7::app {
                                                                  std::function<bool()> wait_while_paused,
                                                                  std::string archive_path,
                                                                  Mode mode,
-                                                                 std::string initial_password) :
+                                                                 OpenResultMessagePolicy open_result_message_policy,
+                                                                 std::string initial_password,
+                                                                 bool reject_open_errors) :
         CallbackBase(cancel_requested, std::move(wait_while_paused)),
         hooks_(hooks),
         archive_path_(std::move(archive_path)),
         mode_(mode),
+        open_result_message_policy_(open_result_message_policy),
         password_(std::move(initial_password)),
-        password_defined_(!password_.empty()) {}
+        password_defined_(!password_.empty()),
+        reject_open_errors_(reject_open_errors) {}
 
     bool NativeUpdateOperationCallback::totals_known() const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -89,6 +94,16 @@ namespace z7::app {
         return wrong_password_;
     }
 
+    uint64_t NativeUpdateOperationCallback::open_error_count() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return open_error_count_;
+    }
+
+    std::string NativeUpdateOperationCallback::open_error_message() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return open_error_message_;
+    }
+
     void NativeUpdateOperationCallback::set_total_files_hint(uint64_t total_files) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -152,6 +167,15 @@ namespace z7::app {
         }
         emit_log_event(hooks_, OperationStage::kRunning, OutputChannel::kStdErr, message);
         emit_progress_snapshot();
+    }
+
+    void NativeUpdateOperationCallback::note_system_error(FString const& path, DWORD system_error) {
+        std::string message = ustring_to_utf8(fs2us(path));
+        message.push_back('\n');
+        message += system_error == 0
+                       ? std::string("Error")
+                       : ustring_to_utf8(NWindows::NError::MyFormatMessage(HRESULT_FROM_WIN32(system_error)));
+        note_error(message);
     }
 
     HRESULT NativeUpdateOperationCallback::check_break() const {

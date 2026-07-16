@@ -24,6 +24,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         QString archive_path;
         QString archive_type_hint;
         QStringList nested_archive_entries;
+        std::vector<std::optional<uint32_t>> filename_code_pages;
         QStringList entry_paths;
         QString hash_method;
     };
@@ -32,6 +33,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         QString archive_path;
         QString archive_type_hint;
         QStringList nested_archive_entries;
+        std::vector<std::optional<uint32_t>> filename_code_pages;
         QStringList entry_paths;
     };
 
@@ -39,6 +41,7 @@ namespace z7::ui::gui::gui_task_runner_shared {
         QString archive_path;
         QString archive_type_hint;
         QStringList nested_archive_entries;
+        std::vector<std::optional<uint32_t>> filename_code_pages;
         QStringList entry_paths;
         QString output_dir;
         z7::app::OverwriteMode overwrite_mode = z7::app::OverwriteMode::kAsk;

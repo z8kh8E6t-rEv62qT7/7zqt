@@ -117,6 +117,7 @@ namespace z7::app {
         ArchiveSessionToken token;
         Strategy used_strategy = Strategy::kTempFile;
         std::string archive_path;
+        std::optional<uint32_t> parent_entry_index;
     };
 
     struct ListResult : OperationResult {

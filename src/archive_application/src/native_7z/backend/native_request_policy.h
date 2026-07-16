@@ -35,6 +35,8 @@ namespace z7::app {
             return "open_archive_from_path";
         } else if constexpr (std::is_same_v<TRequest, OpenArchiveFromParentRequest>) {
             return "open_archive_from_parent";
+        } else if constexpr (std::is_same_v<TRequest, SetArchiveSessionFilenameCodePageRequest>) {
+            return "set_archive_session_filename_code_page";
         } else if constexpr (std::is_same_v<TRequest, CloseArchiveSessionRequest>) {
             return "close_archive_session";
         } else if constexpr (std::is_same_v<TRequest, ListRequest>) {
@@ -102,6 +104,7 @@ namespace z7::app {
                              || std::is_same_v<TRequest, OpenArchiveRequest>
                              || std::is_same_v<TRequest, OpenArchiveFromPathRequest>
                              || std::is_same_v<TRequest, OpenArchiveFromParentRequest>
+                             || std::is_same_v<TRequest, SetArchiveSessionFilenameCodePageRequest>
                              || std::is_same_v<TRequest, ListRequest>
                              || std::is_same_v<TRequest, ArchivePropertiesRequest>
                              || std::is_same_v<TRequest, ArchiveCommentRequest>
@@ -129,6 +132,7 @@ namespace z7::app {
                              || std::is_same_v<TRequest, OpenArchiveRequest>
                              || std::is_same_v<TRequest, OpenArchiveFromPathRequest>
                              || std::is_same_v<TRequest, OpenArchiveFromParentRequest>
+                             || std::is_same_v<TRequest, SetArchiveSessionFilenameCodePageRequest>
                              || std::is_same_v<TRequest, CloseArchiveSessionRequest>
                              || std::is_same_v<TRequest, CopyRequest>
                              || std::is_same_v<TRequest, MoveRequest>

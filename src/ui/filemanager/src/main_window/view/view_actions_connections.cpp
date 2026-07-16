@@ -18,6 +18,7 @@ namespace z7::ui::filemanager {
             update_view_menu_checks();
             refresh_action_states();
         });
+        connect(encoding_menu_, &QMenu::aboutToShow, this, &MainWindow::update_encoding_menu_state);
 
         connect(open_action_, &QAction::triggered, this, &MainWindow::on_open_requested);
         connect(open_inside_action_, &QAction::triggered, this, &MainWindow::on_open_inside_requested);

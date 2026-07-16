@@ -85,6 +85,7 @@ namespace z7::ui::gui {
         std::string root_archive_path;
         std::string root_archive_type;
         std::vector<std::string> nested_archive_entries;
+        std::vector<std::optional<uint32_t>> filename_code_pages;
         std::vector<std::string> archive_entry_paths;
         std::string output_dir;
         std::string overwrite_mode = "ask";
@@ -109,6 +110,7 @@ namespace z7::ui::gui {
         std::string archive_path;
         std::string archive_type;
         std::vector<std::string> nested_archive_entries;
+        std::vector<std::optional<uint32_t>> filename_code_pages;
         std::string hash_method;
         std::vector<std::string> archive_entry_paths;
     };
@@ -117,6 +119,7 @@ namespace z7::ui::gui {
         std::string archive_path;
         std::string archive_type;
         std::vector<std::string> nested_archive_entries;
+        std::vector<std::optional<uint32_t>> filename_code_pages;
         std::vector<std::string> archive_entry_paths;
     };
 
@@ -131,6 +134,7 @@ namespace z7::ui::gui {
         std::string archive_path;
         std::string archive_type;
         std::vector<std::string> nested_archive_entries;
+        std::vector<std::optional<uint32_t>> filename_code_pages;
         std::string entry_path;
     };
 

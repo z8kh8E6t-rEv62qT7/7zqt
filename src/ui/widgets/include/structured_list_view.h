@@ -56,8 +56,9 @@ namespace z7::ui::widgets {
     signals:
         // All indices are in this view's model space (typically the proxy).
 
-        // A completed left-click on the primary column without drag/modifier keys.
-        void primary_clicked(QModelIndex const& index);
+        // A completed left-click on the primary column without drag or selection
+        // modifiers. `modifiers` is captured from that mouse-release event.
+        void primary_clicked(QModelIndex const& index, Qt::KeyboardModifiers modifiers);
         // A double-click on the primary column.
         void primary_double_clicked(QModelIndex const& index);
         // Return/Enter pressed while the view has focus. `index` is the current

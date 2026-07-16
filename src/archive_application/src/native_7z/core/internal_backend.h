@@ -22,8 +22,13 @@ namespace z7::app {
         uint64_t total_unpacked_size = 0;
     };
 
+    struct ArchiveItemPath {
+        std::string resolved;
+        std::string normalized;
+    };
+
     std::string normalize_archive_item_path(std::string const& value);
-    std::string archive_item_selection_path(IInArchive* archive, UInt32 index);
+    HRESULT resolve_archive_item_path(CArc const* arc, UInt32 index, ArchiveItemPath& path);
     bool archive_path_matches_selection(std::string const& item_path,
                                         std::unordered_set<std::string> const& selected_entries);
     void accumulate_extract_item_stats(IInArchive* archive, UInt32 index, ExtractArchiveItemStats& stats);
@@ -44,7 +49,8 @@ namespace z7::app {
         CCodecs* preloaded_codecs,
         std::vector<ArchiveListEntry>& out_entries,
         size_t batch_size = 0,
-        std::function<bool(std::vector<ArchiveListEntry>&&)> const& batch_callback = {});
+        std::function<bool(std::vector<ArchiveListEntry>&&)> const& batch_callback = {},
+        OpenArchiveDiagnostics* out_diagnostics = nullptr);
     // Listing variant that reuses an already-opened CArc (from session registry),
     // skipping the open/codecs-load pipeline.
     int list_archive_entries_from_arc(CArc const* arc,
@@ -60,7 +66,8 @@ namespace z7::app {
                                                     std::atomic<bool>* cancel_requested,
                                                     std::function<bool()> wait_while_paused,
                                                     CCodecs* preloaded_codecs,
-                                                    std::vector<ArchivePropertyLine>& out_lines);
+                                                    std::vector<ArchivePropertyLine>& out_lines,
+                                                    OpenArchiveDiagnostics* out_diagnostics = nullptr);
     int collect_archive_properties_from_open_state(ArchivePropertiesRequest const& request,
                                                    CArc const& arc,
                                                    CCodecs& codecs,
@@ -76,11 +83,17 @@ namespace z7::app {
         UInt32 archive_index = static_cast<UInt32>(-1);
     };
 
+    struct HashScanError {
+        fs::path path;
+        std::error_code error;
+    };
+
     std::string path_leaf_name(fs::path const& path);
     void collect_hash_entries_for_path(fs::path const& selected_path,
                                        std::string const& display_name,
                                        bool recursive_dirs,
                                        std::vector<HashInputEntry>& entries,
+                                       std::vector<HashScanError>& scan_errors,
                                        uint64_t& total_files,
                                        uint64_t& total_bytes);
     HashSummary make_hash_summary(CHashBundle const& bundle);
@@ -135,6 +148,9 @@ namespace z7::app {
                                                         ArchiveBackendHooks const& hooks = {});
         OpenArchiveSessionResult open_archive_from_parent(OpenArchiveFromParentRequest const& request,
                                                           ArchiveBackendHooks const& hooks = {});
+        OperationResult set_archive_session_filename_code_page(
+            SetArchiveSessionFilenameCodePageRequest const& request,
+            ArchiveBackendHooks const& hooks = {});
         OperationResult close_archive_session(CloseArchiveSessionRequest const& request,
                                               ArchiveBackendHooks const& hooks = {});
         ListResult list(ListRequest const& request, ArchiveBackendHooks const& hooks = {});
@@ -242,7 +258,9 @@ namespace z7::app {
         TResult run_open_archive_read_pipeline(std::string const& archive_path,
                                                std::string const& archive_type_hint,
                                                ArchiveBackendHooks const& hooks,
-                                               bool enable_open_callback,
+                                               OpenResultMessagePolicy message_policy,
+                                               bool allow_password_prompt,
+                                               std::string const& initial_password,
                                                Handler&& handler) {
             return run_with_operation_codecs<TResult>([&](CCodecs& codecs) -> TResult {
                 return run_with_open_archive_read<TResult>(
@@ -251,7 +269,9 @@ namespace z7::app {
                     hooks,
                     &cancel_requested_,
                     [this]() { return this->wait_while_paused(); },
-                    enable_open_callback,
+                    message_policy,
+                    allow_password_prompt,
+                    initial_password,
                     &codecs,
                     std::forward<Handler>(handler));
             });
@@ -262,14 +282,16 @@ namespace z7::app {
         HashResult run_hash_entries(HashRequest const& request,
                                     ArchiveBackendHooks const& hooks,
                                     std::vector<HashInputEntry> const& entries,
-                                    std::string const& main_name = {});
+                                    std::string const& main_name = {},
+                                    uint64_t initial_error_count = 0);
         HashResult run_hash_archive_entries(HashRequest const& request,
                                             ArchiveBackendHooks const& hooks,
-                                            IInArchive* archive,
-                                            std::vector<HashInputEntry> const& entries,
-                                            std::string const& main_name,
-                                            std::string const& archive_display_path,
-                                            std::string const& password);
+                                            CArc const* arc,
+                                             std::vector<HashInputEntry> const& entries,
+                                             std::string const& main_name,
+                                             std::string const& archive_display_path,
+                                             std::string const& password,
+                                             OpenArchiveDiagnostics const* open_diagnostics = nullptr);
 
         std::atomic<bool> cancel_requested_{false};
         std::atomic<bool> hashing_active_{false};

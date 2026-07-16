@@ -25,6 +25,7 @@ namespace z7::app {
     std::optional<OperationResult> validate_request(OpenArchiveRequest const& request);
     std::optional<OperationResult> validate_request(OpenArchiveFromPathRequest const& request);
     std::optional<OperationResult> validate_request(OpenArchiveFromParentRequest const& request);
+    std::optional<OperationResult> validate_request(SetArchiveSessionFilenameCodePageRequest const& request);
     std::optional<OperationResult> validate_request(CloseArchiveSessionRequest const& request);
     std::optional<OperationResult> validate_request(ListRequest const& request);
     std::optional<OperationResult> validate_request(ArchivePropertiesRequest const& request);

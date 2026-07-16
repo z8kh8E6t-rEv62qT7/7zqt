@@ -122,6 +122,10 @@ namespace z7::app {
                 lifecycle.finish();
                 normalize_result(&result);
                 return result;
+            } catch (UString const& ex) {
+                lifecycle.finish();
+                return from_base_result<TResult>(
+                    make_exception_failure(options.operation_name, ustring_to_utf8(ex)));
             } catch (std::exception const& ex) {
                 lifecycle.finish();
                 return from_base_result<TResult>(make_exception_failure(options.operation_name, ex.what()));

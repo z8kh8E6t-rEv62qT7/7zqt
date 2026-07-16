@@ -44,6 +44,7 @@ namespace z7::app {
         std::unique_ptr<CObjectVector<COpenType>> types;
         std::unique_ptr<CIntVector> excluded_formats;
         std::unique_ptr<CArchiveLink> archive_link;
+        OpenArchiveDiagnostics open_diagnostics;
     };
 
     struct ArchiveOpenSessionNativeAccess {
@@ -89,9 +90,29 @@ namespace z7::app {
             return session.entry_path_from_parent_;
         }
 
+        static void set_parent_entry_index(ArchiveOpenSession& session, std::optional<uint32_t> value) {
+            session.parent_entry_index_ = value;
+        }
+
+        static std::optional<uint32_t> parent_entry_index(ArchiveOpenSession const& session) {
+            return session.parent_entry_index_;
+        }
+
+        static void set_archive_type_hint(ArchiveOpenSession& session, std::string value) {
+            session.archive_type_hint_ = std::move(value);
+        }
+
+        static std::string const& archive_type_hint(ArchiveOpenSession const& session) {
+            return session.archive_type_hint_;
+        }
+
         static void set_dirty(ArchiveOpenSession& session, bool dirty) { session.dirty_ = dirty; }
 
         static bool dirty(ArchiveOpenSession const& session) { return session.dirty_; }
+
+        static void set_filename_code_page(ArchiveOpenSession& session, FilenameCodePage value) {
+            session.filename_code_page_ = value;
+        }
 
         static uint64_t generation(ArchiveOpenSession const& session) { return session.generation_; }
 
@@ -157,11 +178,16 @@ namespace z7::app {
         state.types = std::make_unique<CObjectVector<COpenType>>();
         state.excluded_formats = std::make_unique<CIntVector>();
         state.codecs = std::make_unique<CCodecs>();
+        state.open_diagnostics = {};
     }
 
     ArchiveBackendHooks make_session_password_hooks(ArchiveOpenSession& session, ArchiveBackendHooks const& base_hooks);
 
     std::string archive_item_path_for_matching(CArc const& arc, UInt32 index);
+
+    std::optional<OperationResult> validate_archive_session_parent_item(ArchiveOpenSession const& session,
+                                                                        CArc const& parent_arc,
+                                                                        UInt32* out_index);
 
     OpenArchiveSessionResult open_native_archive_session_from_path(ArchiveSessionRegistry& registry,
                                                                    OpenArchiveFromPathRequest const& request,
@@ -174,6 +200,13 @@ namespace z7::app {
                                                                      ArchiveBackendHooks const& hooks,
                                                                      std::atomic<bool>* cancel_requested,
                                                                      std::function<bool()> wait_while_paused);
+
+    OperationResult set_native_archive_session_filename_code_page(
+        ArchiveSessionRegistry& registry,
+        SetArchiveSessionFilenameCodePageRequest const& request,
+        ArchiveBackendHooks const& hooks,
+        std::atomic<bool>* cancel_requested,
+        std::function<bool()> wait_while_paused);
 
     std::optional<OperationResult> ensure_archive_session_writable(ArchiveOpenSession& session,
                                                                    ArchiveBackendHooks const& hooks,

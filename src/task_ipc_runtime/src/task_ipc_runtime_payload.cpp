@@ -3,6 +3,7 @@
 #include <QIODevice>
 #include <QSharedMemory>
 #include <cstring>
+#include <limits>
 
 #include "task_ipc_runtime_internal.h"
 
@@ -58,7 +59,8 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
 
             quint32 count = 0;
             stream >> count;
-            if (stream.status() != QDataStream::Ok) {
+            if (stream.status() != QDataStream::Ok
+                || count > static_cast<quint32>(std::numeric_limits<int>::max())) {
                 return false;
             }
             out_remaps->reserve(static_cast<int>(count));
@@ -73,6 +75,40 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                 }
                 remap.match_kind = decode_extract_path_remap_match_kind(match_kind);
                 out_remaps->push_back(std::move(remap));
+            }
+            return true;
+        }
+
+        void write_filename_code_pages(QDataStream& stream,
+                                       QVector<TaskIpcFilenameCodePage> const& code_pages) {
+            stream << static_cast<quint32>(code_pages.size());
+            for (TaskIpcFilenameCodePage const& code_page : code_pages) {
+                stream << code_page.automatic;
+                stream << code_page.code_page;
+            }
+        }
+
+        bool read_filename_code_pages(QDataStream& stream,
+                                      QVector<TaskIpcFilenameCodePage>* out_code_pages) {
+            if (out_code_pages == nullptr) {
+                return false;
+            }
+            out_code_pages->clear();
+            quint32 count = 0;
+            stream >> count;
+            if (stream.status() != QDataStream::Ok
+                || count > static_cast<quint32>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+            out_code_pages->reserve(static_cast<int>(count));
+            for (quint32 index = 0; index < count; ++index) {
+                TaskIpcFilenameCodePage code_page;
+                stream >> code_page.automatic;
+                stream >> code_page.code_page;
+                if (stream.status() != QDataStream::Ok) {
+                    return false;
+                }
+                out_code_pages->push_back(code_page);
             }
             return true;
         }
@@ -246,6 +282,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             stream << payload->root_archive_path;
             stream << payload->root_archive_type;
             stream << payload->nested_archive_entries;
+            write_filename_code_pages(stream, payload->filename_code_pages);
             stream << payload->archive_entry_paths;
             stream << payload->output_dir;
             stream << payload->overwrite_mode;
@@ -273,6 +310,9 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             stream >> payload.root_archive_path;
             stream >> payload.root_archive_type;
             stream >> payload.nested_archive_entries;
+            if (!read_filename_code_pages(stream, &payload.filename_code_pages)) {
+                return false;
+            }
             stream >> payload.archive_entry_paths;
             stream >> payload.output_dir;
             stream >> payload.overwrite_mode;
@@ -394,6 +434,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             stream << payload->archive_path;
             stream << payload->archive_type;
             stream << payload->nested_archive_entries;
+            write_filename_code_pages(stream, payload->filename_code_pages);
             stream << payload->entry_path;
         }
 
@@ -413,6 +454,9 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             stream >> payload.archive_path;
             stream >> payload.archive_type;
             stream >> payload.nested_archive_entries;
+            if (!read_filename_code_pages(stream, &payload.filename_code_pages)) {
+                return false;
+            }
             stream >> payload.entry_path;
             if (stream.status() != QDataStream::Ok) {
                 return false;

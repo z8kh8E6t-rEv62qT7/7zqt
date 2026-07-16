@@ -21,6 +21,7 @@ namespace z7::app {
         // reads from the stream instead of opening `filePath` from disk.
         HRESULT prepare_open_options(std::string const& display_path,
                                      std::string const& archive_type_hint,
+                                     FilenameCodePage filename_code_page,
                                      bool recursive_autodetect,
                                      CCodecs& codecs,
                                      CObjectVector<COpenType>& types,
@@ -47,6 +48,9 @@ namespace z7::app {
             open_options.excludedFormats = &excluded_formats;
             open_options.filePath = utf8_to_ustring(display_path);
             open_options.stream = in_stream;
+            uint32_t const scoped_code_page = GetThreadArchiveFilenameCodePage();
+            open_options.filenameCodePageDefined = filename_code_page.has_value() || scoped_code_page != 0;
+            open_options.filenameCodePage = filename_code_page.value_or(scoped_code_page);
             return S_OK;
         }
 
@@ -57,7 +61,9 @@ namespace z7::app {
                             ArchiveBackendHooks const& hooks,
                             std::atomic<bool>* cancel_requested,
                             std::function<bool()> wait_while_paused,
-                            bool enable_open_callback,
+                            OpenResultMessagePolicy message_policy,
+                            bool allow_password_prompt,
+                            std::string const& initial_password,
                             bool codecs_already_loaded,
                             CCodecs& codecs,
                             CObjectVector<COpenType>& types,
@@ -66,8 +72,14 @@ namespace z7::app {
                             CArc const*& arc,
                             bool* out_password_requested,
                             bool* out_wrong_password,
-                            std::string* out_password) {
+                            std::string* out_password,
+                            OpenArchiveDiagnostics* out_diagnostics,
+                            FilenameCodePage filename_code_page) {
+        ScopedFilenameCodePage filename_scope(filename_code_page);
         arc = nullptr;
+        if (out_diagnostics != nullptr) {
+            *out_diagnostics = {};
+        }
         if (out_password_requested != nullptr) {
             *out_password_requested = false;
         }
@@ -90,7 +102,15 @@ namespace z7::app {
 
         COpenOptions open_options;
         const HRESULT prep_res = prepare_open_options(
-            archive_path, archive_type_hint, true, codecs, types, excluded_formats, nullptr, open_options);
+            archive_path,
+            archive_type_hint,
+            filename_code_page,
+            true,
+            codecs,
+            types,
+            excluded_formats,
+            nullptr,
+            open_options);
         if (prep_res != S_OK) {
             return prep_res;
         }
@@ -98,17 +118,19 @@ namespace z7::app {
         bool const capture_password_state =
             out_password_requested != nullptr || out_wrong_password != nullptr || out_password != nullptr;
         std::unique_ptr<NativeUpdateOperationCallback> open_callback;
-        if (enable_open_callback || capture_password_state) {
+        if (message_policy == OpenResultMessagePolicy::kOperationMessages || capture_password_state
+            || allow_password_prompt) {
             ArchiveBackendHooks callback_hooks = hooks;
-            if (!enable_open_callback) {
-                callback_hooks.on_event = {};
+            if (!allow_password_prompt) {
                 callback_hooks.ask_password = {};
             }
             open_callback = std::make_unique<NativeUpdateOperationCallback>(callback_hooks,
                                                                             cancel_requested,
                                                                             std::move(wait_while_paused),
                                                                             archive_path,
-                                                                            NativeUpdateOperationCallback::Mode::kAdd);
+                                                                            NativeUpdateOperationCallback::Mode::kAdd,
+                                                                            message_policy,
+                                                                            initial_password);
         }
 
         IOpenCallbackUI* callback_ui = open_callback ? open_callback.get() : nullptr;
@@ -117,6 +139,18 @@ namespace z7::app {
         // HFS/APFS) and operate on the deepest supported archive.  Stream-based
         // parent-session opens below intentionally remain one explicit layer.
         const HRESULT open_res = archive_link.Open_Strict(open_options, callback_ui);
+        UString const archive_name = utf8_to_ustring(archive_path);
+        if (out_diagnostics != nullptr && open_res != E_ABORT) {
+            *out_diagnostics =
+                collect_open_archive_diagnostics(&codecs, archive_link, archive_name.Ptr(), open_res);
+        }
+        if (open_callback && open_res != E_ABORT) {
+            HRESULT const report_res =
+                open_callback->OpenResult(&codecs, archive_link, archive_name.Ptr(), open_res);
+            if (report_res != S_OK) {
+                return report_res;
+            }
+        }
         if (open_callback) {
             if (out_password_requested != nullptr) {
                 *out_password_requested = open_callback->password_requested();
@@ -149,7 +183,9 @@ namespace z7::app {
                                         ArchiveBackendHooks const& hooks,
                                         std::atomic<bool>* cancel_requested,
                                         std::function<bool()> wait_while_paused,
-                                        bool enable_open_callback,
+                                        OpenResultMessagePolicy message_policy,
+                                        bool allow_password_prompt,
+                                        std::string const& initial_password,
                                         bool codecs_already_loaded,
                                         CCodecs& codecs,
                                         CObjectVector<COpenType>& types,
@@ -158,8 +194,14 @@ namespace z7::app {
                                         CArc const*& arc,
                                         bool* out_password_requested,
                                         bool* out_wrong_password,
-                                        std::string* out_password) {
+                                        std::string* out_password,
+                                        OpenArchiveDiagnostics* out_diagnostics,
+                                        FilenameCodePage filename_code_page) {
+        ScopedFilenameCodePage filename_scope(filename_code_page);
         arc = nullptr;
+        if (out_diagnostics != nullptr) {
+            *out_diagnostics = {};
+        }
         if (out_password_requested != nullptr) {
             *out_password_requested = false;
         }
@@ -185,7 +227,15 @@ namespace z7::app {
 
         COpenOptions open_options;
         const HRESULT prep_res = prepare_open_options(
-            display_path, archive_type_hint, false, codecs, types, excluded_formats, in_stream, open_options);
+            display_path,
+            archive_type_hint,
+            filename_code_page,
+            false,
+            codecs,
+            types,
+            excluded_formats,
+            in_stream,
+            open_options);
         if (prep_res != S_OK) {
             return prep_res;
         }
@@ -193,21 +243,35 @@ namespace z7::app {
         bool const capture_password_state =
             out_password_requested != nullptr || out_wrong_password != nullptr || out_password != nullptr;
         std::unique_ptr<NativeUpdateOperationCallback> open_callback;
-        if (enable_open_callback || capture_password_state) {
+        if (message_policy == OpenResultMessagePolicy::kOperationMessages || capture_password_state
+            || allow_password_prompt) {
             ArchiveBackendHooks callback_hooks = hooks;
-            if (!enable_open_callback) {
-                callback_hooks.on_event = {};
+            if (!allow_password_prompt) {
                 callback_hooks.ask_password = {};
             }
             open_callback = std::make_unique<NativeUpdateOperationCallback>(callback_hooks,
                                                                             cancel_requested,
                                                                             std::move(wait_while_paused),
                                                                             display_path,
-                                                                            NativeUpdateOperationCallback::Mode::kAdd);
+                                                                            NativeUpdateOperationCallback::Mode::kAdd,
+                                                                            message_policy,
+                                                                            initial_password);
         }
 
         IOpenCallbackUI* callback_ui = open_callback ? open_callback.get() : nullptr;
         const HRESULT open_res = archive_link.Open2(open_options, callback_ui);
+        UString const archive_name = utf8_to_ustring(display_path);
+        if (out_diagnostics != nullptr && open_res != E_ABORT) {
+            *out_diagnostics =
+                collect_open_archive_diagnostics(&codecs, archive_link, archive_name.Ptr(), open_res);
+        }
+        if (open_callback && open_res != E_ABORT) {
+            HRESULT const report_res =
+                open_callback->OpenResult(&codecs, archive_link, archive_name.Ptr(), open_res);
+            if (report_res != S_OK) {
+                return report_res;
+            }
+        }
         if (open_callback) {
             if (out_password_requested != nullptr) {
                 *out_password_requested = open_callback->password_requested();
@@ -232,43 +296,6 @@ namespace z7::app {
             return E_FAIL;
         }
         return S_OK;
-    }
-
-    std::optional<ArchiveError> complete_operation_open_error(CArchiveLink const& archive_link) {
-        std::string diagnostic;
-        for (unsigned level = 0; level < archive_link.Arcs.Size(); ++level) {
-            CArc const& arc = archive_link.Arcs[level];
-            CArcErrorInfo const& error_info = arc.ErrorInfo;
-            UInt32 const error_flags = error_info.GetErrorFlags();
-            std::string const error_message =
-                z7::common::trim_ascii_space_copy(ustring_to_utf8(error_info.ErrorMessage));
-            if (error_flags == 0 && error_message.empty()) {
-                continue;
-            }
-
-            if (!diagnostic.empty()) {
-                diagnostic += "; ";
-            }
-            if (level != 0 && !arc.Path.IsEmpty()) {
-                diagnostic += ustring_to_utf8(arc.Path);
-                diagnostic += ": ";
-            }
-            if (!error_message.empty()) {
-                diagnostic += error_message;
-            } else {
-                diagnostic += "Archive open error";
-            }
-            if (error_flags != 0) {
-                diagnostic += " (error flags ";
-                diagnostic += std::to_string(error_flags);
-                diagnostic += ')';
-            }
-        }
-
-        if (diagnostic.empty()) {
-            return std::nullopt;
-        }
-        return make_archive_error(ArchiveErrorDomain::kIo, std::move(diagnostic), 2);
     }
 
 } // namespace z7::app

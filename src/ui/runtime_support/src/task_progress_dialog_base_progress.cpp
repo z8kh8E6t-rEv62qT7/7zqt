@@ -22,6 +22,28 @@ namespace z7::ui::runtime_support {
             return view->fontMetrics().lineSpacing() + 8;
         }
 
+        void append_result_message_rows(QTableWidget* view, int message_number, QString const& message) {
+            if (view == nullptr) {
+                return;
+            }
+
+            QStringList const lines = message.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
+            for (int line_index = 0; line_index < lines.size(); ++line_index) {
+                int const row = view->rowCount();
+                view->insertRow(row);
+
+                auto* number_item =
+                    new QTableWidgetItem(line_index == 0 ? QString::number(message_number) : QString());
+                number_item->setTextAlignment(Qt::AlignRight | Qt::AlignTop);
+                view->setItem(row, 0, number_item);
+
+                auto* message_item = new QTableWidgetItem(lines.at(line_index));
+                message_item->setTextAlignment(Qt::AlignLeft | Qt::AlignTop);
+                view->setItem(row, 1, message_item);
+                view->setRowHeight(row, result_message_row_height(view));
+            }
+        }
+
     } // namespace
 
     void TaskProgressDialogBase::append_log(QString const& line) {
@@ -37,42 +59,12 @@ namespace z7::ui::runtime_support {
             return;
         }
 
-        QStringList lines = message.split(QLatin1Char('\n'));
-        while (!lines.isEmpty() && lines.front().trimmed().isEmpty()) {
-            lines.removeFirst();
-        }
-        while (!lines.isEmpty() && lines.back().trimmed().isEmpty()) {
-            lines.removeLast();
-        }
-        if (lines.isEmpty()) {
-            return;
-        }
-
         ++failure_result_message_count_;
-        bool first_line = true;
-        for (QString const& raw_line : lines) {
-            QString const line = raw_line.trimmed();
-            if (line.isEmpty()) {
-                continue;
-            }
-
-            int const row = result_messages_view_->rowCount();
-            result_messages_view_->insertRow(row);
-
-            auto* number_item =
-                new QTableWidgetItem(first_line ? QString::number(failure_result_message_count_) : QString());
-            number_item->setTextAlignment(Qt::AlignRight | Qt::AlignTop);
-            result_messages_view_->setItem(row, 0, number_item);
-
-            auto* message_item = new QTableWidgetItem(line);
-            message_item->setTextAlignment(Qt::AlignLeft | Qt::AlignTop);
-            result_messages_view_->setItem(row, 1, message_item);
-            result_messages_view_->setRowHeight(row, result_message_row_height(result_messages_view_));
-            first_line = false;
-        }
+        append_result_message_rows(result_messages_view_, failure_result_message_count_, message);
 
         result_messages_view_->setVisible(result_messages_view_->rowCount() > 0);
         result_messages_view_->scrollToBottom();
+        refresh_metrics();
     }
 
     void TaskProgressDialogBase::set_failure_result_messages(QStringList const& messages) {
@@ -85,8 +77,14 @@ namespace z7::ui::runtime_support {
         failure_result_message_count_ = 0;
 
         for (QString const& message : messages) {
-            append_failure_result_message(message);
+            ++failure_result_message_count_;
+            append_result_message_rows(result_messages_view_, failure_result_message_count_, message);
         }
+        result_messages_view_->setVisible(result_messages_view_->rowCount() > 0);
+        if (result_messages_view_->rowCount() > 0) {
+            result_messages_view_->scrollToBottom();
+        }
+        refresh_metrics();
     }
 
     void TaskProgressDialogBase::set_percent(int value) {
@@ -190,13 +188,16 @@ namespace z7::ui::runtime_support {
             }
         }
 
-        bool const has_errors = error_count_ != 0;
+        quint64 const displayed_error_count = failure_result_message_count_ > 0
+                                                  ? static_cast<quint64>(failure_result_message_count_)
+                                                  : error_count_;
+        bool const has_errors = displayed_error_count != 0;
         if (errors_label_ != nullptr) {
             errors_label_->setVisible(has_errors);
         }
         if (errors_value_ != nullptr) {
             errors_value_->setVisible(has_errors);
-            errors_value_->setText(QString::number(error_count_));
+            errors_value_->setText(QString::number(displayed_error_count));
         }
 
         if (total_size_value_ != nullptr) {

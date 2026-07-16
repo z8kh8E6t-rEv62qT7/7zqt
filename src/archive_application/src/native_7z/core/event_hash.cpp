@@ -8,15 +8,12 @@ namespace z7::app {
 
         inline constexpr size_t kHashDigestStringSize = k_HashCalc_DigestSize_Max * 2 + k_HashCalc_ExtraSize * 2 + 16;
 
-        bool safe_is_directory(fs::path const& path) {
-            std::error_code ec;
-            return fs::is_directory(path, ec);
-        }
-
-        uint64_t safe_file_size(fs::path const& path) {
-            std::error_code ec;
-            uint64_t const size = fs::file_size(path, ec);
-            return ec ? 0 : size;
+        void append_scan_error(std::vector<HashScanError>& scan_errors,
+                               fs::path const& path,
+                               std::error_code const& error) {
+            if (error) {
+                scan_errors.push_back({path, error});
+            }
         }
 
     } // namespace
@@ -33,43 +30,112 @@ namespace z7::app {
                                        std::string const& display_name,
                                        bool recursive_dirs,
                                        std::vector<HashInputEntry>& entries,
+                                       std::vector<HashScanError>& scan_errors,
                                        uint64_t& total_files,
                                        uint64_t& total_bytes) {
-        bool const selected_is_dir = safe_is_directory(selected_path);
+        std::error_code status_error;
+        fs::file_status const selected_link_status = fs::symlink_status(selected_path, status_error);
+        if (status_error) {
+            append_scan_error(scan_errors, selected_path, status_error);
+            return;
+        }
+        fs::file_status const selected_status = fs::status(selected_path, status_error);
+        if (status_error) {
+            append_scan_error(scan_errors, selected_path, status_error);
+            return;
+        }
+
+        bool const selected_is_dir = fs::is_directory(selected_status);
         if (selected_is_dir) {
             entries.push_back({selected_path, display_name, true, 0});
-            if (!recursive_dirs) {
+            if (!recursive_dirs || fs::is_symlink(selected_link_status)) {
                 return;
             }
 
-            std::error_code it_ec;
-            fs::recursive_directory_iterator it(selected_path, fs::directory_options::skip_permission_denied, it_ec);
-            fs::recursive_directory_iterator end;
+            struct DirectoryFrame {
+                fs::path path;
+                fs::directory_iterator current;
+                fs::directory_iterator end;
+            };
 
-            while (!it_ec && it != end) {
-                fs::path const child = it->path();
+            auto open_directory = [&](fs::path const& path) -> std::optional<DirectoryFrame> {
+                std::error_code iterator_error;
+                fs::directory_iterator current(path, fs::directory_options::none, iterator_error);
+                if (iterator_error) {
+                    append_scan_error(scan_errors, path, iterator_error);
+                    return std::nullopt;
+                }
+                return DirectoryFrame{path, std::move(current), fs::directory_iterator()};
+            };
+
+            std::vector<DirectoryFrame> stack;
+            if (std::optional<DirectoryFrame> root = open_directory(selected_path); root.has_value()) {
+                stack.push_back(std::move(*root));
+            }
+
+            while (!stack.empty()) {
+                DirectoryFrame& frame = stack.back();
+                if (frame.current == frame.end) {
+                    stack.pop_back();
+                    continue;
+                }
+
+                fs::directory_entry const child_entry = *frame.current;
+                fs::path const child = child_entry.path();
+                std::error_code increment_error;
+                frame.current.increment(increment_error);
+                if (increment_error) {
+                    append_scan_error(scan_errors, frame.path, increment_error);
+                    frame.current = frame.end;
+                }
+
                 std::error_code rel_ec;
                 fs::path const rel = fs::relative(child, selected_path, rel_ec);
                 std::string const rel_text = rel_ec ? child.filename().generic_string() : rel.generic_string();
                 std::string const item_name = display_name + "/" + rel_text;
 
-                if (it->is_directory(it_ec)) {
+                std::error_code link_status_error;
+                fs::file_status const link_status = child_entry.symlink_status(link_status_error);
+                if (link_status_error) {
+                    append_scan_error(scan_errors, child, link_status_error);
+                    continue;
+                }
+
+                std::error_code child_status_error;
+                fs::file_status const child_status = child_entry.status(child_status_error);
+                if (child_status_error) {
+                    append_scan_error(scan_errors, child, child_status_error);
+                    continue;
+                }
+
+                if (fs::is_directory(child_status)) {
                     entries.push_back({child, item_name, true, 0});
-                } else if (it->is_regular_file(it_ec)) {
-                    uint64_t const size = safe_file_size(child);
+                    if (!fs::is_symlink(link_status)) {
+                        if (std::optional<DirectoryFrame> nested = open_directory(child); nested.has_value()) {
+                            stack.push_back(std::move(*nested));
+                        }
+                    }
+                } else if (fs::is_regular_file(child_status)) {
+                    std::error_code size_error;
+                    uint64_t const size = fs::file_size(child, size_error);
+                    if (size_error) {
+                        append_scan_error(scan_errors, child, size_error);
+                        continue;
+                    }
                     entries.push_back({child, item_name, false, size});
                     ++total_files;
                     total_bytes += size;
                 }
-
-                std::error_code inc_ec;
-                it.increment(inc_ec);
-                it_ec = inc_ec;
             }
             return;
         }
 
-        uint64_t const size = safe_file_size(selected_path);
+        std::error_code size_error;
+        uint64_t const size = fs::file_size(selected_path, size_error);
+        if (size_error) {
+            append_scan_error(scan_errors, selected_path, size_error);
+            return;
+        }
         entries.push_back({selected_path, display_name, false, size});
         ++total_files;
         total_bytes += size;

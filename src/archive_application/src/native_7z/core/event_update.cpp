@@ -54,6 +54,8 @@ namespace z7::app {
         status.ratio_info = callback.ratio_info();
         status.password_requested = callback.password_requested();
         status.wrong_password = callback.wrong_password();
+        status.open_diagnostics.error_count = callback.open_error_count();
+        status.open_diagnostics.error_message = callback.open_error_message();
         status.diagnostic = update_error_message_to_utf8(error_info);
         if (status.diagnostic.empty()
             && status.hresult == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)

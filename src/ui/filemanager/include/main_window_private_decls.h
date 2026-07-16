@@ -46,7 +46,7 @@ void remember_folder_history(QString const& path);
 bool has_folder_history() const;
 bool open_folder_prefix_for_panel(int panel_index, QString const& path);
 QVector<z7::app::ArchiveSessionToken> run_shutdown_cleanup_once();
-static void dispatch_detached_archive_session_close(QVector<z7::app::ArchiveSessionToken> tokens);
+static void close_archive_sessions_for_shutdown(QVector<z7::app::ArchiveSessionToken> tokens);
 void load_runtime_settings();
 void apply_runtime_settings();
 void apply_model_display_settings_to_panel(int panel_index);
@@ -209,9 +209,11 @@ struct ArchiveWritebackFrame {
     // and names the archive entry selected in the parent archive to enter this
     // frame.
     QString archive_entry_from_parent;
+    std::optional<uint32_t> parent_entry_index;
     QString virtual_display_source;
     QString virtual_dir;
     QString type_hint;
+    z7::app::FilenameCodePage filename_code_page;
 };
 
 struct ArchiveWritebackPlan {
@@ -224,6 +226,7 @@ struct ArchiveWritebackPlan {
     // Nested archive entry path from one frame to the next, suitable for
     // feeding backend add/delete/update/open-outside requests.
     QStringList nested_archive_entries;
+    std::vector<z7::app::FilenameCodePage> filename_code_pages;
 
     bool is_valid() const;
     QString root_display_source() const;
@@ -373,10 +376,12 @@ struct PanelController {
         struct ParentContext {
             QString archive_path;
             QString archive_entry_from_parent;
+            std::optional<uint32_t> parent_entry_index;
             QString virtual_display_source;
             QString virtual_dir;
             QString origin_dir;
             QString type_hint;
+            z7::app::FilenameCodePage filename_code_page;
             QSharedPointer<ArchiveTempSession> temp_session;
             // Registry token for the archive session this frame represents. Used
             // by on_open_parent_requested to close the current token and restore
@@ -390,9 +395,11 @@ struct PanelController {
         // Empty for the top-level archive. Non-empty when the currently visible
         // archive view was entered from a parent archive entry.
         QString archive_entry_from_parent;
+        std::optional<uint32_t> parent_entry_index;
         QString virtual_display_source;
         QString origin_dir;
         QString type_hint;
+        z7::app::FilenameCodePage filename_code_page;
         QVector<ParentContext> parent_stack;
         QSharedPointer<ArchiveTempSession> temp_session;
         // Registry token for the currently active archive session (top of the
@@ -403,8 +410,10 @@ struct PanelController {
     struct ParentArchiveReturnTransition {
         ArchiveState::ParentContext parent;
         QString leaving_archive_entry_from_parent;
+        std::optional<uint32_t> leaving_parent_entry_index;
         QSharedPointer<ArchiveTempSession> leaving_temp_session;
         z7::app::ArchiveSessionToken leaving_token;
+        z7::app::FilenameCodePage leaving_filename_code_page;
     };
 
     struct ArchiveFilesystemExitTransition {
@@ -499,9 +508,11 @@ struct CrossPanelArchiveBindTarget {
     QString type_hint;
     QString virtual_display_source;
     QString archive_entry_from_parent;
+    std::optional<uint32_t> parent_entry_index;
     QVector<PanelController::ArchiveState::ParentContext> parent_stack;
     QSharedPointer<ArchiveTempSession> temp_session;
     z7::app::ArchiveSessionToken session_token;
+    z7::app::FilenameCodePage filename_code_page;
 };
 
 struct CrossPanelBindTarget {
@@ -544,6 +555,11 @@ void refresh_all_details_column_visibility();
 void apply_view_mode_to_panel(int panel_index, int view_mode);
 void apply_sort_mode_to_panel(int panel_index, int sort_mode, bool toggle_if_same);
 void update_view_menu_checks();
+void setup_encoding_menu();
+void retranslate_encoding_menu();
+void update_encoding_menu_state();
+void on_filename_code_page_requested(z7::app::FilenameCodePage code_page);
+void on_custom_filename_code_page_requested();
 void update_time_menu();
 void rebuild_favorites_menu();
 void on_view_mode_action_triggered(int view_mode);
@@ -736,6 +752,8 @@ z7::app::BackendCapabilities backend_capabilities_{};
 QMenu *file_menu_ = nullptr, *edit_menu_ = nullptr, *view_menu_ = nullptr, *favorites_menu_ = nullptr,
       *tools_menu_ = nullptr, *help_menu_ = nullptr, *crc_menu_ = nullptr, *toolbars_submenu_ = nullptr,
       *time_submenu_ = nullptr, *add_to_favorites_menu_ = nullptr, *file_menu_seven_zip_menu_ = nullptr;
+QMenu* encoding_menu_ = nullptr;
+QMenu* encoding_charsets_menu_ = nullptr;
 QAction* file_menu_seven_zip_separator_action_ = nullptr;
 QToolBar* archive_toolbar_ = nullptr;
 QToolBar* standard_toolbar_ = nullptr;
@@ -761,6 +779,12 @@ QAction *large_icons_action_ = nullptr, *small_icons_action_ = nullptr, *list_mo
         *time_min_action_ = nullptr, *time_sec_action_ = nullptr, *time_ntfs_action_ = nullptr,
         *time_ns_action_ = nullptr, *time_utc_action_ = nullptr;
 QActionGroup *view_mode_action_group_ = nullptr, *sort_action_group_ = nullptr, *time_action_group_ = nullptr;
+QActionGroup* encoding_action_group_ = nullptr;
+QAction* encoding_auto_action_ = nullptr;
+QAction* encoding_utf8_action_ = nullptr;
+QAction* encoding_custom_action_ = nullptr;
+QHash<uint32_t, QAction*> encoding_code_page_actions_;
+QVector<QMenu*> encoding_region_menus_;
 QAction *options_action_ = nullptr, *benchmark_action_ = nullptr, *benchmark2_action_ = nullptr,
         *temp_files_action_ = nullptr, *contents_action_ = nullptr, *about_action_ = nullptr;
 QVector<std::shared_ptr<RunningTaskContext>> active_runner_tasks_;

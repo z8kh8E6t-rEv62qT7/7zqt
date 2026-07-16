@@ -20,6 +20,7 @@ namespace z7::app {
         bool password_requested = false;
         bool wrong_password = false;
         std::string diagnostic;
+        OpenArchiveDiagnostics open_diagnostics;
     };
 
     UpdateOperationStatus run_update_archive_shared(CCodecs* codecs,
@@ -95,6 +96,13 @@ namespace z7::app {
     }
 
     template <typename TResult>
+    TResult make_operation_warning_success(std::string message = "Operation completed with warnings") {
+        TResult result = make_operation_success<TResult>(message);
+        result.error = make_archive_error(ArchiveErrorDomain::kPartialSuccess, std::move(message), 0);
+        return result;
+    }
+
+    template <typename TResult>
     void attach_error_message(TResult* result, std::string message) {
         if (result == nullptr || message.empty()) {
             return;
@@ -126,35 +134,33 @@ namespace z7::app {
                             {},
                             status.ratio_info);
 
+        TResult result;
         if (cancel_requested.load()) {
-            return make_operation_canceled<TResult>();
-        }
-
-        if (status.password_requested || status.wrong_password) {
-            return make_operation_failure<TResult>(ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
-        }
-
-        if (status.hresult != S_OK) {
+            result = make_operation_canceled<TResult>();
+        } else if (status.password_requested || status.wrong_password) {
+            result = make_operation_failure<TResult>(ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
+        } else if (status.hresult != S_OK) {
             if (status.hresult == S_FALSE && status.error_count != 0) {
                 if (status.diagnostic.empty()) {
-                    return make_operation_partial_success<TResult>();
+                    result = make_operation_partial_success<TResult>();
+                } else {
+                    result = make_operation_partial_success<TResult>(status.diagnostic);
                 }
-                return make_operation_partial_success<TResult>(status.diagnostic);
+            } else {
+                result = make_operation_failure_from_hresult<TResult>(status.hresult);
+                attach_error_message(&result, status.diagnostic);
             }
-
-            TResult failure = make_operation_failure_from_hresult<TResult>(status.hresult);
-            attach_error_message(&failure, status.diagnostic);
-            return failure;
-        }
-
-        if (status.error_count != 0) {
+        } else if (status.error_count != 0) {
             if (status.diagnostic.empty()) {
-                return make_operation_partial_success<TResult>();
+                result = make_operation_partial_success<TResult>();
+            } else {
+                result = make_operation_partial_success<TResult>(status.diagnostic);
             }
-            return make_operation_partial_success<TResult>(status.diagnostic);
+        } else {
+            result = make_operation_success<TResult>(std::move(success_summary));
         }
-
-        return make_operation_success<TResult>(std::move(success_summary));
+        apply_open_archive_diagnostics(result, status.open_diagnostics);
+        return result;
     }
 
     template <typename TResult, typename OnFailure, typename OnSuccess>
@@ -212,7 +218,45 @@ namespace z7::app {
         bool budget_triggered = false;
         std::string budget_trigger_reason;
         BudgetExceededAction budget_policy = BudgetExceededAction::kFailAndRollback;
+        bool memory_skip_handled = false;
     };
+
+    struct ExtractMemoryRequest {
+        UInt32 flags = 0;
+        UInt64 required_size = 0;
+        UInt64 allowed_size = 0;
+        UInt32 answer_flags = 0;
+        uint64_t configured_limit_bytes = 0;
+        bool configured_limit_defined = false;
+        bool test_mode = false;
+        std::string archive_path;
+        std::string file_path;
+    };
+
+    struct ExtractMemoryResolution {
+        HRESULT hresult = S_OK;
+        UInt64 allowed_size = 0;
+        UInt32 answer_flags = 0;
+        bool handled_skip = false;
+        bool report_error = false;
+        std::string error_message;
+    };
+
+    struct ExtractMemoryCallbackState {
+        std::atomic<bool>& skip_handled;
+        std::atomic<bool>& error_reported;
+        std::atomic<bool>& archive_path_reported;
+        std::mutex& mutex;
+        std::string& diagnostic_message;
+        uint64_t& error_count;
+        std::function<void()> emit_progress;
+    };
+
+    ExtractMemoryResolution resolve_extract_memory_request(ExtractMemoryRequest const& request,
+                                                            ArchiveBackendHooks const& hooks);
+    ExtractMemoryResolution handle_extract_memory_request(ExtractMemoryRequest const& request,
+                                                           ArchiveBackendHooks const& hooks,
+                                                           ExtractMemoryCallbackState state);
 
     template <typename CallbackT, typename = void>
     struct HasExtractIoErrorMethods : std::false_type {};
@@ -236,6 +280,14 @@ namespace z7::app {
 
     template <typename CallbackT>
     struct HasBudgetTriggered<CallbackT, std::void_t<decltype(std::declval<CallbackT*>()->budget_triggered())>>
+        : std::true_type {};
+
+    template <typename CallbackT, typename = void>
+    struct HasMemorySkipHandled : std::false_type {};
+
+    template <typename CallbackT>
+    struct HasMemorySkipHandled<CallbackT,
+                                std::void_t<decltype(std::declval<CallbackT*>()->memory_skip_handled())>>
         : std::true_type {};
 
     template <typename CallbackT, typename = void>
@@ -311,6 +363,12 @@ namespace z7::app {
                 status.budget_policy = callback->budget_policy();
             }
         }
+        if constexpr (HasMemorySkipHandled<CallbackT>::value) {
+            status.memory_skip_handled = callback->memory_skip_handled();
+            if (status.memory_skip_handled && status.hresult == E_OUTOFMEMORY) {
+                status.hresult = S_OK;
+            }
+        }
         callback->Release();
         return status;
     }
@@ -322,10 +380,15 @@ namespace z7::app {
                                               ExtractInvocationStatus const& status,
                                               OnPartial&& on_partial,
                                               OnSuccess&& on_success,
-                                              std::string password_error_summary = "Password required or incorrect") {
+                                              std::string password_error_summary = "Password required or incorrect",
+                                              OpenArchiveDiagnostics const* open_diagnostics = nullptr) {
+        bool const has_open_errors = open_diagnostics != nullptr && open_diagnostics->has_errors();
+        uint64_t const effective_error_count = status.error_count
+                                             + (has_open_errors ? open_diagnostics->error_count : 0);
         bool const successful_completion = !cancel_requested.load()
                                         && status.hresult == S_OK
                                         && status.error_count == 0
+                                        && !has_open_errors
                                         && !status.budget_triggered
                                         && !status.password_requested
                                         && !status.wrong_password;
@@ -337,33 +400,35 @@ namespace z7::app {
                             status.completed_bytes,
                             total_files,
                             status.completed_files,
-                            status.error_count,
+                            effective_error_count,
                             status.current_path,
                             {},
                             status.ratio_info);
 
+        TResult result;
         if (cancel_requested.load()) {
-            return make_operation_canceled<TResult>();
-        }
-
-        if (status.password_requested || status.wrong_password) {
-            return make_operation_failure<TResult>(ArchiveErrorDomain::kPassword, std::move(password_error_summary), 2);
-        }
-
-        if (status.hresult != S_OK) {
+            result = make_operation_canceled<TResult>();
+        } else if (status.password_requested || status.wrong_password) {
+            result = make_operation_failure<TResult>(
+                ArchiveErrorDomain::kPassword, std::move(password_error_summary), 2);
+        } else if (status.hresult != S_OK) {
             if (status.has_io_error) {
-                return make_operation_failure<TResult>(ArchiveErrorDomain::kIo,
-                                                       status.io_error_message.empty() ? std::string("I/O error")
-                                                                                       : status.io_error_message,
-                                                       2);
+                result = make_operation_failure<TResult>(ArchiveErrorDomain::kIo,
+                                                          status.io_error_message.empty() ? std::string("I/O error")
+                                                                                          : status.io_error_message,
+                                                          2);
+            } else {
+                result = make_operation_failure_from_hresult<TResult>(status.hresult);
             }
-            return make_operation_failure_from_hresult<TResult>(status.hresult);
+        } else if (status.error_count != 0) {
+            result = on_partial(status);
+        } else {
+            result = on_success(status);
         }
-
-        if (status.error_count != 0) {
-            return on_partial(status);
+        if (open_diagnostics != nullptr) {
+            apply_open_archive_diagnostics(result, *open_diagnostics);
         }
-        return on_success(status);
+        return result;
     }
 
     template <typename TResult, typename Paths, typename ActionFn, typename OnSuccess>
@@ -442,5 +507,10 @@ namespace z7::app {
     void fill_proxy_dir_stats(CProxyDir const& dir, ArchiveListEntry& entry);
     void fill_proxy_dir2_stats(CProxyDir2 const& dir, ArchiveListEntry& entry);
     std::string test_operation_result_message(Int32 op_res);
+    std::string format_operation_result_message(Int32 op_res, bool encrypted, std::string const& path);
+    void emit_archive_scoped_error(ArchiveBackendHooks const& hooks,
+                                   std::string const& archive_path,
+                                   std::atomic<bool>& archive_path_reported,
+                                   std::string const& message);
 
 } // namespace z7::app

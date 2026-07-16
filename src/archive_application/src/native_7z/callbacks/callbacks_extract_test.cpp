@@ -63,7 +63,7 @@ namespace z7::app {
         NativeTestExtractCallback* owner_ = nullptr;
     };
 
-    NativeTestExtractCallback::NativeTestExtractCallback(IInArchive* archive,
+    NativeTestExtractCallback::NativeTestExtractCallback(CArc const* arc,
                                                          ArchiveBackendHooks const& hooks,
                                                          std::atomic<bool>* cancel_requested,
                                                          std::function<bool()> wait_while_paused,
@@ -73,7 +73,8 @@ namespace z7::app {
                                                          bool configured_memory_limit_defined,
                                                          std::string initial_password) :
         CallbackBase(cancel_requested, std::move(wait_while_paused)),
-        archive_(archive),
+        arc_(arc),
+        archive_(arc != nullptr ? arc->Archive : nullptr),
         hooks_(hooks),
         archive_path_(std::move(archive_path)),
         configured_memory_limit_bytes_(configured_memory_limit_bytes),
@@ -149,6 +150,10 @@ namespace z7::app {
     std::string NativeTestExtractCallback::diagnostic_message() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return diagnostic_message_;
+    }
+
+    bool NativeTestExtractCallback::memory_skip_handled() const {
+        return memory_skip_handled_.load();
     }
 
     STDMETHODIMP NativeTestExtractCallback::QueryInterface(REFIID iid, void** out_object) throw() {
@@ -230,14 +235,19 @@ namespace z7::app {
         }
         *out_stream = nullptr;
 
-        std::string path = archive_get_prop_text(archive_, index, kpidPath);
-        if (path.empty()) {
-            path = std::to_string(index);
+        ArchiveItemPath item_path;
+        HRESULT const path_result = resolve_archive_item_path(arc_, index, item_path);
+        if (path_result != S_OK) {
+            return path_result;
         }
+        std::string const& path = item_path.normalized;
+        bool encrypted = false;
+        (void)archive_get_prop_bool(archive_, index, kpidEncrypted, encrypted);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
             current_path_ = path;
+            current_item_encrypted_ = encrypted;
             if (hash_bundle_ != nullptr) {
                 bool is_dir = false;
                 (void)archive_get_prop_bool(archive_, index, kpidIsDir, is_dir);
@@ -298,6 +308,7 @@ namespace z7::app {
 
     STDMETHODIMP NativeTestExtractCallback::SetOperationResult(Int32 op_res) throw() {
         std::string path;
+        bool encrypted = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             bool const hash_mode = hash_bundle_ != nullptr;
@@ -311,13 +322,20 @@ namespace z7::app {
                 if (hash_mode && hash_bundle_ != nullptr) {
                     ++hash_bundle_->NumErrors;
                 }
-                if (op_res == NArchive::NExtract::NOperationResult::kWrongPassword) {
+                if (op_res == NArchive::NExtract::NOperationResult::kWrongPassword
+                    || (current_item_encrypted_
+                        && (op_res == NArchive::NExtract::NOperationResult::kDataError
+                            || op_res == NArchive::NExtract::NOperationResult::kCRCError
+                            || op_res == NArchive::NExtract::NOperationResult::kHeadersError))) {
+                    password_retry_required_ = true;
                     wrong_password_ = true;
                 }
             } else if (hash_mode && hash_bundle_ != nullptr && hash_active) {
                 hash_bundle_->Final(hash_is_dir, false, utf8_to_ustring(hash_current_path_));
             }
             path = current_path_;
+            encrypted = current_item_encrypted_;
+            current_item_encrypted_ = false;
             if (hash_mode) {
                 hash_current_active_ = false;
                 hash_current_path_.clear();
@@ -327,10 +345,7 @@ namespace z7::app {
         }
 
         if (op_res != NArchive::NExtract::NOperationResult::kOK) {
-            std::string message = test_operation_result_message(op_res);
-            if (!path.empty()) {
-                message = path + " : " + message;
-            }
+            std::string message = format_operation_result_message(op_res, encrypted, path);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!diagnostic_message_.empty()) {
@@ -338,7 +353,7 @@ namespace z7::app {
                 }
                 diagnostic_message_ += message;
             }
-            emit_log_event(hooks_, OperationStage::kRunning, OutputChannel::kStdErr, message);
+            emit_archive_scoped_error(hooks_, archive_path_, archive_error_path_reported_, message);
         }
 
         emit_progress_snapshot();
@@ -353,21 +368,21 @@ namespace z7::app {
 
         std::string password_value;
         bool password_defined = false;
-        bool wrong_password = false;
+        bool password_retry_required = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             password_value = password_;
             password_defined = password_defined_;
-            wrong_password = wrong_password_;
+            password_retry_required = password_retry_required_;
         }
 
-        if (!password_defined || wrong_password) {
+        if (!password_defined || password_retry_required) {
             if (hooks_.ask_password) {
                 PasswordPrompt prompt;
                 prompt.archive_path = archive_path_;
-                prompt.reason_kind =
-                    wrong_password ? PasswordPromptReason::kWrongPassword : PasswordPromptReason::kPasswordRequired;
-                prompt.reason = wrong_password ? "wrong_password" : "password_required";
+                prompt.reason_kind = password_retry_required ? PasswordPromptReason::kWrongPassword
+                                                             : PasswordPromptReason::kPasswordRequired;
+                prompt.reason = password_retry_required ? "wrong_password" : "password_required";
                 PasswordReply reply;
                 try {
                     reply = hooks_.ask_password(prompt);
@@ -382,7 +397,7 @@ namespace z7::app {
                     std::lock_guard<std::mutex> lock(mutex_);
                     password_ = password_value;
                     password_defined_ = true;
-                    wrong_password_ = false;
+                    password_retry_required_ = false;
                 } else {
                     std::lock_guard<std::mutex> lock(mutex_);
                     password_requested_ = true;
@@ -391,6 +406,7 @@ namespace z7::app {
             } else {
                 std::lock_guard<std::mutex> lock(mutex_);
                 password_requested_ = true;
+                password_retry_required_ = true;
                 wrong_password_ = true;
                 return E_ABORT;
             }
@@ -421,92 +437,30 @@ namespace z7::app {
             return E_INVALIDARG;
         }
 
-        if ((flags & NRequestMemoryUseFlags::k_IsReport) == 0) {
-            if (configured_memory_limit_defined_) {
-                *allowed_size = configured_memory_limit_bytes_;
-            }
-        }
+        ExtractMemoryRequest request;
+        request.flags = flags;
+        request.required_size = required_size;
+        request.allowed_size = *allowed_size;
+        request.answer_flags = *answer_flags;
+        request.configured_limit_bytes = configured_memory_limit_bytes_;
+        request.configured_limit_defined = configured_memory_limit_defined_;
+        request.test_mode = true;
+        request.archive_path = archive_path_;
+        request.file_path = path == nullptr ? std::string() : ustring_to_utf8(UString(path));
+        ExtractMemoryResolution const resolution = handle_extract_memory_request(
+            request,
+            hooks_,
+            ExtractMemoryCallbackState{memory_skip_handled_,
+                                       memory_error_reported_,
+                                       archive_error_path_reported_,
+                                       mutex_,
+                                       diagnostic_message_,
+                                       error_count_,
+                                       [this]() { emit_progress_snapshot(); }});
 
-        UInt64 current_limit = *allowed_size;
-        if ((flags & NRequestMemoryUseFlags::k_IsReport) == 0) {
-            if (required_size <= current_limit) {
-                *answer_flags = NRequestMemoryAnswerFlags::k_Allow;
-                return S_OK;
-            }
-            *answer_flags = NRequestMemoryAnswerFlags::k_Limit_Exceeded;
-            if (flags & NRequestMemoryUseFlags::k_SkipArc_IsExpected) {
-                *answer_flags |= NRequestMemoryAnswerFlags::k_SkipArc;
-            }
-        }
-
-        if ((flags & NRequestMemoryUseFlags::k_IsReport) == 0 && hooks_.ask_memory_limit) {
-            MemoryLimitPrompt prompt;
-            prompt.required_usage_bytes = required_size;
-            prompt.current_limit_bytes = current_limit;
-            prompt.current_limit_defined = current_limit != 0;
-            prompt.archive_path = archive_path_;
-            if (path != nullptr) {
-                prompt.file_path = ustring_to_utf8(UString(path));
-            }
-            prompt.test_mode = true;
-            prompt.skip_archive_supported = (flags & NRequestMemoryUseFlags::k_SkipArc_IsExpected) != 0;
-            prompt.report_only = (flags & NRequestMemoryUseFlags::k_IsReport) != 0;
-
-            MemoryLimitReply reply;
-            try {
-                reply = hooks_.ask_memory_limit(prompt);
-            } catch (...) {
-                return E_FAIL;
-            }
-            switch (reply.action) {
-                case MemoryLimitAction::kAllowOnce:
-                    *answer_flags = NRequestMemoryAnswerFlags::k_Allow;
-                    return S_OK;
-                case MemoryLimitAction::kUpdateLimitAndContinue:
-                    if (reply.updated_limit_bytes != 0) {
-                        *allowed_size = reply.updated_limit_bytes;
-                        if (required_size <= reply.updated_limit_bytes) {
-                            *answer_flags = NRequestMemoryAnswerFlags::k_Allow;
-                            return S_OK;
-                        }
-                    }
-                    break;
-                case MemoryLimitAction::kSkipOperation:
-                    if (flags & NRequestMemoryUseFlags::k_SkipArc_IsExpected) {
-                        *answer_flags =
-                            NRequestMemoryAnswerFlags::k_SkipArc | NRequestMemoryAnswerFlags::k_Limit_Exceeded;
-                        return S_OK;
-                    }
-                    *answer_flags = NRequestMemoryAnswerFlags::k_Stop;
-                    return E_ABORT;
-                case MemoryLimitAction::kCancelOperation:
-                    *answer_flags = NRequestMemoryAnswerFlags::k_Stop;
-                    return E_ABORT;
-            }
-        }
-
-        if ((flags & NRequestMemoryUseFlags::k_NoErrorMessage) == 0) {
-            uint64_t const required_mb = required_size >> 20;
-            uint64_t const allowed_mb = current_limit >> 20;
-            std::string message = "Memory usage limit exceeded";
-            message +=
-                " (required " + std::to_string(required_mb) + " MB, allowed " + std::to_string(allowed_mb) + " MB)";
-            if (!archive_path_.empty()) {
-                message += " for " + archive_path_;
-            }
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (!diagnostic_message_.empty()) {
-                    diagnostic_message_ += '\n';
-                }
-                diagnostic_message_ += message;
-                ++error_count_;
-            }
-            emit_log_event(hooks_, OperationStage::kRunning, OutputChannel::kStdErr, message);
-            emit_progress_snapshot();
-        }
-
-        return S_OK;
+        *allowed_size = resolution.allowed_size;
+        *answer_flags = resolution.answer_flags;
+        return resolution.hresult;
     }
 
     NativeTestExtractCallback::ProgressSnapshot NativeTestExtractCallback::snapshot_progress() const {

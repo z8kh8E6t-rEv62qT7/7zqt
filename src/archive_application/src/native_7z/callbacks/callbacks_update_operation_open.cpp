@@ -7,19 +7,34 @@
 
 namespace z7::app {
 
-    HRESULT NativeUpdateOperationCallback::OpenResult(CCodecs const*,
-                                                      CArchiveLink const&,
+    HRESULT NativeUpdateOperationCallback::OpenResult(CCodecs const* codecs,
+                                                      CArchiveLink const& archive_link,
                                                       wchar_t const* name,
                                                       HRESULT result) {
-        if (result != S_OK) {
-            std::string const path = update_wide_name_to_utf8(name);
-            std::string message = "Open archive failed";
-            if (!path.empty()) {
-                message += ": " + path;
-            }
-            emit_log_event(hooks_, OperationStage::kRunning, OutputChannel::kStdErr, message);
+        OpenArchiveDiagnostics const diagnostics =
+            collect_open_archive_diagnostics(codecs, archive_link, name, result);
+        if (open_result_message_policy_ == OpenResultMessagePolicy::kOperationMessages
+            && !diagnostics.operation_message.empty()) {
+            emit_log_event(
+                hooks_, OperationStage::kRunning, OutputChannel::kStdErr, diagnostics.operation_message);
         }
-        return S_OK;
+        if (!diagnostics.has_errors()) {
+            return S_OK;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            error_count_ += diagnostics.error_count;
+            open_error_count_ += diagnostics.error_count;
+            if (open_error_message_.empty()) {
+                open_error_message_ = diagnostics.error_message;
+            } else if (!diagnostics.error_message.empty()
+                       && open_error_message_.find(diagnostics.error_message) == std::string::npos) {
+                open_error_message_ += '\n';
+                open_error_message_ += diagnostics.error_message;
+            }
+        }
+        emit_progress_snapshot();
+        return reject_open_errors_ ? E_FAIL : S_OK;
     }
 
     HRESULT NativeUpdateOperationCallback::StartScanning() {
@@ -52,10 +67,9 @@ namespace z7::app {
         return check_break();
     }
 
-    HRESULT NativeUpdateOperationCallback::ScanError(FString const& path, DWORD) {
-        std::string const value = ustring_to_utf8(fs2us(path));
-        note_error(value.empty() ? "Scan error" : ("Scan error: " + value));
-        return S_FALSE;
+    HRESULT NativeUpdateOperationCallback::ScanError(FString const& path, DWORD system_error) {
+        note_system_error(path, system_error);
+        return S_OK;
     }
 
     HRESULT NativeUpdateOperationCallback::ScanProgress(CDirItemsStat const& st, FString const& path, bool) {

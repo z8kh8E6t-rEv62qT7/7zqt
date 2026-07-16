@@ -21,7 +21,7 @@ namespace z7::app {
                                         public IArchiveRequestMemoryUseCallback,
                                         protected CallbackBase {
     public:
-        NativeExtractCallback(IInArchive* archive,
+        NativeExtractCallback(CArc const* arc,
                               fs::path output_dir,
                               ArchiveBackendHooks const& hooks,
                               std::atomic<bool>* cancel_requested,
@@ -60,6 +60,7 @@ namespace z7::app {
         bool has_io_error() const;
         std::string io_error_message() const;
         std::string diagnostic_message() const;
+        bool memory_skip_handled() const;
 
         // Move out the list of materialized entries; safe to call once after the
         // 7z Extract() invocation completes (and before Release()).
@@ -322,6 +323,7 @@ namespace z7::app {
         bool request_selects_single_logical_root() const;
 
         std::atomic<ULONG> ref_count_{1};
+        CArc const* arc_ = nullptr;
         IInArchive* archive_ = nullptr;
         fs::path output_dir_;
         ArchiveBackendHooks const& hooks_;
@@ -352,6 +354,9 @@ namespace z7::app {
         uint64_t ratio_output_size_ = 0;
         bool password_requested_ = false;
         bool password_defined_ = false;
+        // Transient prompt state; cleared when the caller supplies a replacement password.
+        bool password_retry_required_ = false;
+        // Cumulative operation outcome; never cleared after an encrypted item fails.
         bool wrong_password_ = false;
         bool io_error_ = false;
         bool ask_mode_notice_emitted_ = false;
@@ -359,6 +364,9 @@ namespace z7::app {
         bool ask_no_to_all_ = false;
         bool security_notice_emitted_ = false;
         bool current_item_encrypted_ = false;
+        std::atomic<bool> archive_error_path_reported_{false};
+        std::atomic<bool> memory_skip_handled_{false};
+        std::atomic<bool> memory_error_reported_{false};
         std::string io_error_message_;
         std::string diagnostic_message_;
 

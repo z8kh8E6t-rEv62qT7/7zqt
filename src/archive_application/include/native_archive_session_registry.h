@@ -9,11 +9,13 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
 #include "archive_types.h"
 #include "archive_types_base.h"
+#include "filename_code_page.h"
 
 namespace z7::app {
 
@@ -57,6 +59,10 @@ namespace z7::app {
 
         bool dirty() const { return dirty_; }
 
+        FilenameCodePage filename_code_page() const { return filename_code_page_; }
+
+        std::optional<uint32_t> parent_entry_index() const { return parent_entry_index_; }
+
         size_t depth() const;
         void set_password(std::string value);
         void clear_password();
@@ -76,7 +82,10 @@ namespace z7::app {
         bool password_defined_ = false;
         std::string source_archive_path_;
         std::string entry_path_from_parent_;
+        std::optional<uint32_t> parent_entry_index_;
+        std::string archive_type_hint_;
         bool dirty_ = false;
+        FilenameCodePage filename_code_page_;
         uint64_t generation_ = 0;
         uint64_t parent_generation_at_open_ = 0;
         OpenArchiveSessionResult::Strategy strategy_ = OpenArchiveSessionResult::Strategy::kTempFile;
@@ -113,6 +122,8 @@ namespace z7::app {
 
         // For tests / cleanup.
         size_t session_count() const;
+
+        bool has_descendant(ArchiveSessionToken token) const;
 
     private:
         friend struct ArchiveSessionRegistryNativeAccess;

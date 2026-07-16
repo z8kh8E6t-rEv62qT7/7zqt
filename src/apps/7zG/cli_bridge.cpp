@@ -564,9 +564,6 @@ namespace z7::apps::gui {
             CliWorkerResult result;
             result.exit_code = exit_code;
             result.summary = summary.trimmed();
-            if (exit_code != 0 && !summary.trimmed().isEmpty()) {
-                result.error_dialog_shown = show_cli_error_dialog(summary.trimmed(), false);
-            }
             return result;
         }
 

@@ -123,26 +123,11 @@ namespace z7::ui::runtime_support {
         if (refresh_timer_ != nullptr) {
             refresh_timer_->stop();
         }
-        percent_ = 100;
-        stage_text_.clear();
         if (metrics_widget_ != nullptr) {
             metrics_widget_->setVisible(true);
         }
-        if (status_label_ != nullptr) {
-            QString const display = display_stage_text();
-            status_label_->setText(display);
-            status_label_->setVisible(!display.isEmpty());
-        }
-        if (current_path_label_ != nullptr) {
-            current_path_label_->setVisible(false);
-        }
-        if (current_file_label_ != nullptr) {
-            current_file_label_->setVisible(false);
-        }
         if (progress_bar_ != nullptr) {
             progress_bar_->setVisible(true);
-            progress_bar_->setRange(0, 100);
-            progress_bar_->setValue(100);
         }
         if (log_view_ != nullptr) {
             log_view_->setVisible(false);

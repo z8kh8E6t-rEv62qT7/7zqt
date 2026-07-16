@@ -367,15 +367,19 @@ namespace z7::app {
                                           CCodecs* preloaded_codecs,
                                           std::vector<ArchiveListEntry>& out_entries,
                                           size_t batch_size,
-                                          std::function<bool(std::vector<ArchiveListEntry>&&)> const& batch_callback) {
+                                          std::function<bool(std::vector<ArchiveListEntry>&&)> const& batch_callback,
+                                          OpenArchiveDiagnostics* out_diagnostics) {
         out_entries.clear();
         return run_with_open_archive_read_hresult(archive_path,
                                                   archive_type_hint,
                                                   hooks,
                                                   cancel_requested,
                                                   std::move(wait_while_paused),
-                                                  true,
+                                                  OpenResultMessagePolicy::kSilentBrowse,
+                                                  /*allow_password_prompt=*/true,
+                                                  /*initial_password=*/{},
                                                   preloaded_codecs,
+                                                  out_diagnostics,
                                                   [&](OpenArchiveReadState const& open_state, UInt32) -> int {
                                                       return list_archive_entries_from_arc(open_state.arc,
                                                                                            directory,
