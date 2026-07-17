@@ -79,6 +79,7 @@ namespace z7::ui::filemanager {
 
     public:
         using OverwritePromptHandler = std::function<z7::app::OverwriteDecision(z7::app::OverwritePrompt const&)>;
+        using ChoicePromptHandler = std::function<z7::app::ChoiceReply(z7::app::ChoicePrompt const&)>;
         using PromptParentProvider = std::function<QWidget*()>;
 
         explicit ArchiveProcessRunner(QObject* parent = nullptr);
@@ -139,8 +140,10 @@ namespace z7::ui::filemanager {
                           QString const& archive_type_hint = QString(),
                           size_t size_budget = 0,
                           QString const& display_path_hint = QString(),
-                          std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {},
-                          z7::app::FilenameCodePage filename_code_page = std::nullopt);
+                          std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>> out_session_result = {},
+                          z7::app::FilenameCodePage filename_code_page = std::nullopt,
+                          z7::app::UnsupportedNestedOpenMode unsupported_mode =
+                              z7::app::UnsupportedNestedOpenMode::kFail);
 
         // Path-based variant: resolves `entry_path` to an index in the parent
         // archive on the backend side. Prefer this from UI code, which already
@@ -151,12 +154,16 @@ namespace z7::ui::filemanager {
             QString const& archive_type_hint = QString(),
             size_t size_budget = 0,
             QString const& display_path_hint = QString(),
-            std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {},
-            z7::app::FilenameCodePage filename_code_page = std::nullopt);
+            std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>> out_session_result = {},
+            z7::app::FilenameCodePage filename_code_page = std::nullopt,
+            z7::app::UnsupportedNestedOpenMode unsupported_mode =
+                z7::app::UnsupportedNestedOpenMode::kFail);
 
         // Release a session previously obtained via start_open_from_path /
         // start_open_nested.
-        bool start_close_session(z7::app::ArchiveSessionToken token);
+        bool start_close_session(
+            z7::app::ArchiveSessionToken token,
+            z7::app::NestedDirtyClosePolicy nested_dirty_policy = z7::app::NestedDirtyClosePolicy::kCommit);
 
         bool start_set_session_filename_code_page(z7::app::ArchiveSessionToken token,
                                                   z7::app::FilenameCodePage filename_code_page);
@@ -238,6 +245,7 @@ namespace z7::ui::filemanager {
         z7::app::OperationOutcome const& last_outcome() const;
         QString last_operation() const;
         void set_overwrite_prompt_handler(OverwritePromptHandler handler);
+        void set_choice_prompt_handler(ChoicePromptHandler handler);
         void set_prompt_parent_provider(PromptParentProvider provider);
         void on_task_finished(z7::app::OperationOutcome const& outcome);
 
@@ -272,7 +280,9 @@ namespace z7::ui::filemanager {
                              QStringList const& targets,
                              z7::app::ArchiveRequest request,
                              std::shared_ptr<std::optional<z7::app::ListResult>> out_list_result = {},
-                             std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {});
+                             std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result = {},
+                             std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>>
+                                 out_parent_session_result = {});
         bool start_active_request_attempt();
         void finalize_outcome(z7::app::OperationOutcome const& outcome);
         bool finish_immediately(z7::app::OperationResult const& result);
@@ -286,10 +296,12 @@ namespace z7::ui::filemanager {
         QString last_operation_;
         QStringList active_targets_;
         OverwritePromptHandler overwrite_prompt_handler_;
+        ChoicePromptHandler choice_prompt_handler_;
         PromptParentProvider prompt_parent_provider_;
         std::shared_ptr<z7::app::IArchiveDelegate> active_delegate_;
         std::shared_ptr<std::optional<z7::app::ListResult>> pending_list_result_;
         std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> pending_session_result_;
+        std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>> pending_parent_session_result_;
         std::optional<z7::app::ArchiveRequest> active_request_;
         std::optional<std::string> retry_next_password_;
         bool password_prompt_canceled_ = false;

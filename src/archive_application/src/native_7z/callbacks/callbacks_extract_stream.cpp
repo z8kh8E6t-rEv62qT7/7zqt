@@ -3,7 +3,10 @@
 
 #include "third_party_adapter/callbacks_extract_stream.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <new>
 
 #if defined(__APPLE__)
 #include <fcntl.h>
@@ -28,6 +31,36 @@ namespace z7::app {
             std::error_code const ec(errno, std::generic_category());
 #endif
             return std::string(action) + ": " + path.generic_string() + (ec ? std::string("; ") + ec.message() : "");
+        }
+
+        fs::path make_nested_spill_directory() {
+            std::error_code ec;
+            fs::path base = fs::temp_directory_path(ec);
+            if (ec || base.empty()) {
+                return {};
+            }
+            auto const ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+            for (uint64_t attempt = 0; attempt < 64; ++attempt) {
+                fs::path const candidate =
+                    base / ("z7-nested-" + std::to_string(static_cast<unsigned long long>(ticks) + attempt));
+                std::error_code dir_ec;
+                if (create_private_directory(candidate, dir_ec)) {
+                    return candidate;
+                }
+            }
+            return {};
+        }
+
+        std::string nested_spill_file_name(std::string const& hint) {
+            std::string const extension = fs::path(hint).extension().string();
+            bool const safe_extension = extension.size() <= 32
+                                     && std::all_of(extension.begin(), extension.end(), [](unsigned char value) {
+                                            return value == '.' || value == '-' || value == '_'
+                                                || (value >= '0' && value <= '9')
+                                                || (value >= 'A' && value <= 'Z')
+                                                || (value >= 'a' && value <= 'z');
+                                        });
+            return safe_extension ? "nested-item" + extension : "nested-item";
         }
 
     } // namespace
@@ -377,6 +410,216 @@ namespace z7::app {
         }
         auto const* bytes = static_cast<uint8_t const*>(data);
         sink_.insert(sink_.end(), bytes, bytes + size);
+        if (processed_size != nullptr) {
+            *processed_size = size;
+        }
+        return S_OK;
+    }
+
+    NativeSpillableOutStream::NativeSpillableOutStream(size_t memory_limit,
+                                                       std::string file_name_hint,
+                                                       bool prefer_file) :
+        memory_limit_(memory_limit), file_name_hint_(std::move(file_name_hint)), prefer_file_(prefer_file) {
+        if (!prefer_file_) {
+            buffer_.reserve(std::min<size_t>(memory_limit_, 1u << 16));
+        }
+    }
+
+    NativeSpillableOutStream::~NativeSpillableOutStream() {
+        if (file_stream_ != nullptr) {
+            if (!finished_) {
+                (void)file_stream_->Close();
+            }
+            file_stream_->Release();
+            file_stream_ = nullptr;
+        }
+        cleanup_owned_temp();
+    }
+
+    HRESULT NativeSpillableOutStream::spill_to_file() {
+        if (file_stream_ != nullptr) {
+            return S_OK;
+        }
+        temp_directory_ = make_nested_spill_directory();
+        if (temp_directory_.empty()) {
+            failure_message_ = "Failed to create private temp directory for nested archive";
+            return E_FAIL;
+        }
+        temp_file_ = temp_directory_ / nested_spill_file_name(file_name_hint_);
+        auto* stream = new NativeFileOutStream(temp_file_, nullptr);
+        HRESULT const open_result = stream->open();
+        if (open_result != S_OK) {
+            failure_message_ = stream->failure_message();
+            stream->Release();
+            cleanup_owned_temp();
+            return open_result;
+        }
+
+        size_t offset = 0;
+        while (offset < buffer_.size()) {
+            UInt32 const chunk = static_cast<UInt32>(
+                std::min<size_t>(buffer_.size() - offset, std::numeric_limits<UInt32>::max()));
+            UInt32 processed = 0;
+            HRESULT const write_result = stream->Write(buffer_.data() + offset, chunk, &processed);
+            if (write_result != S_OK || processed != chunk) {
+                failure_message_ = stream->failure_message();
+                if (failure_message_.empty()) {
+                    failure_message_ = "Failed to spill nested archive buffer to disk";
+                }
+                (void)stream->Close();
+                stream->Release();
+                cleanup_owned_temp();
+                return write_result == S_OK ? E_FAIL : write_result;
+            }
+            offset += processed;
+        }
+        buffer_.clear();
+        buffer_.shrink_to_fit();
+        file_stream_ = stream;
+        return S_OK;
+    }
+
+    HRESULT NativeSpillableOutStream::finish() {
+        if (finished_) {
+            return failure_message_.empty() ? S_OK : E_FAIL;
+        }
+        if (prefer_file_ && file_stream_ == nullptr) {
+            HRESULT const spill_result = spill_to_file();
+            if (spill_result != S_OK) {
+                finished_ = true;
+                return spill_result;
+            }
+        }
+        HRESULT result = S_OK;
+        if (file_stream_ != nullptr) {
+            result = file_stream_->Close();
+            if (result != S_OK && failure_message_.empty()) {
+                failure_message_ = file_stream_->failure_message();
+            }
+        }
+        finished_ = true;
+        return result;
+    }
+
+    HRESULT NativeSpillableOutStream::materialize_to_file() {
+        if (file_stream_ == nullptr) {
+            HRESULT const spill_result = spill_to_file();
+            if (spill_result != S_OK) {
+                return spill_result;
+            }
+        }
+        if (!finished_) {
+            return finish();
+        }
+        HRESULT const close_result = file_stream_->Close();
+        if (close_result != S_OK && failure_message_.empty()) {
+            failure_message_ = file_stream_->failure_message();
+        }
+        return close_result;
+    }
+
+    bool NativeSpillableOutStream::spilled_to_file() const {
+        return file_stream_ != nullptr;
+    }
+
+    uint8_t const* NativeSpillableOutStream::memory_data() const {
+        return buffer_.data();
+    }
+
+    size_t NativeSpillableOutStream::memory_size() const {
+        return buffer_.size();
+    }
+
+    std::vector<uint8_t> NativeSpillableOutStream::take_buffer() {
+        return std::move(buffer_);
+    }
+
+    std::filesystem::path const& NativeSpillableOutStream::temp_directory() const {
+        return temp_directory_;
+    }
+
+    std::filesystem::path const& NativeSpillableOutStream::temp_file() const {
+        return temp_file_;
+    }
+
+    std::string NativeSpillableOutStream::failure_message() const {
+        return failure_message_;
+    }
+
+    void NativeSpillableOutStream::release_temp_ownership() {
+        owns_temp_ = false;
+    }
+
+    void NativeSpillableOutStream::cleanup_owned_temp() {
+        if (!owns_temp_ || temp_directory_.empty()) {
+            return;
+        }
+        std::error_code ec;
+        fs::remove_all(temp_directory_, ec);
+        temp_directory_.clear();
+        temp_file_.clear();
+    }
+
+    STDMETHODIMP NativeSpillableOutStream::QueryInterface(REFIID iid, void** out_object) throw() {
+        if (out_object == nullptr) {
+            return E_INVALIDARG;
+        }
+        *out_object = nullptr;
+        if (iid == IID_IUnknown || iid == IID_ISequentialOutStream) {
+            *out_object = static_cast<ISequentialOutStream*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP_(ULONG) NativeSpillableOutStream::AddRef() throw() {
+        return ++ref_count_;
+    }
+
+    STDMETHODIMP_(ULONG) NativeSpillableOutStream::Release() throw() {
+        ULONG const next = --ref_count_;
+        if (next == 0) {
+            delete this;
+        }
+        return next;
+    }
+
+    STDMETHODIMP NativeSpillableOutStream::Write(void const* data,
+                                                  UInt32 size,
+                                                  UInt32* processed_size) throw() {
+        if (processed_size != nullptr) {
+            *processed_size = 0;
+        }
+        if (size == 0) {
+            return S_OK;
+        }
+        if (data == nullptr || finished_) {
+            return E_INVALIDARG;
+        }
+
+        if (prefer_file_ || file_stream_ != nullptr || buffer_.size() > memory_limit_
+            || static_cast<size_t>(size) > memory_limit_ - buffer_.size()) {
+            HRESULT const spill_result = spill_to_file();
+            if (spill_result != S_OK) {
+                return spill_result;
+            }
+            return file_stream_->Write(data, size, processed_size);
+        }
+
+        auto const* bytes = static_cast<uint8_t const*>(data);
+        try {
+            buffer_.insert(buffer_.end(), bytes, bytes + size);
+        } catch (std::bad_alloc const&) {
+            HRESULT const spill_result = spill_to_file();
+            if (spill_result != S_OK) {
+                return spill_result;
+            }
+            return file_stream_->Write(data, size, processed_size);
+        } catch (...) {
+            failure_message_ = "Failed to buffer nested archive output";
+            return E_FAIL;
+        }
         if (processed_size != nullptr) {
             *processed_size = size;
         }

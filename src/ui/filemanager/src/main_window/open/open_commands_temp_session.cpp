@@ -210,15 +210,18 @@ namespace z7::ui::filemanager {
     }
 
     void MainWindow::retain_archive_temp_session(QSharedPointer<ArchiveTempSession> const& session) {
-        if (session == nullptr || session->temp_dir == nullptr || !session->temp_dir->isValid()) {
+        auto const has_storage = [](QSharedPointer<ArchiveTempSession> const& item) {
+            return item != nullptr
+                && ((item->temp_dir != nullptr && item->temp_dir->isValid())
+                    || (item->external_file_lease.has_value() && item->external_file_lease->valid()));
+        };
+        if (!has_storage(session)) {
             return;
         }
         archive_temp_sessions_.erase(std::remove_if(archive_temp_sessions_.begin(),
                                                     archive_temp_sessions_.end(),
-                                                    [](QSharedPointer<ArchiveTempSession> const& item) {
-                                                        return item == nullptr
-                                                            || item->temp_dir == nullptr
-                                                            || !item->temp_dir->isValid();
+                                                    [&has_storage](QSharedPointer<ArchiveTempSession> const& item) {
+                                                        return !has_storage(item);
                                                     }),
                                      archive_temp_sessions_.end());
         archive_temp_sessions_.push_back(session);

@@ -14,6 +14,8 @@
 
 namespace z7::app {
 
+    struct ArchiveExternalFileLeaseAccess;
+
     struct ProgressRatioInfo {
         bool input_size_known = false;
         uint64_t input_size = 0;
@@ -119,6 +121,38 @@ namespace z7::app {
         Strategy used_strategy = Strategy::kTempFile;
         std::string archive_path;
         std::optional<uint32_t> parent_entry_index;
+    };
+
+    // Copyable lease for an external-open fallback artifact. The private
+    // temporary directory is deleted when the final lease copy is released.
+    class ArchiveExternalFileLease {
+    public:
+        ArchiveExternalFileLease();
+        ~ArchiveExternalFileLease();
+        ArchiveExternalFileLease(ArchiveExternalFileLease const&);
+        ArchiveExternalFileLease& operator=(ArchiveExternalFileLease const&);
+        ArchiveExternalFileLease(ArchiveExternalFileLease&&) noexcept;
+        ArchiveExternalFileLease& operator=(ArchiveExternalFileLease&&) noexcept;
+
+        bool valid() const;
+        std::string file_path() const;
+
+    private:
+        struct State;
+        explicit ArchiveExternalFileLease(std::shared_ptr<State> state);
+
+        friend struct ArchiveExternalFileLeaseAccess;
+        std::shared_ptr<State> state_;
+    };
+
+    struct OpenArchiveFromParentResult : OpenArchiveSessionResult {
+        enum class Disposition {
+            kArchiveSession,
+            kExternalFile
+        };
+
+        Disposition disposition = Disposition::kArchiveSession;
+        ArchiveExternalFileLease external_file;
     };
 
     struct ListResult : OperationResult {

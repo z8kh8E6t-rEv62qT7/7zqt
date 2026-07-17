@@ -9,7 +9,8 @@ namespace z7::ui::filemanager {
     void MainWindow::open_archive_file_inside_for_panel(int panel_index,
                                                         QString const& entry_path,
                                                         QString const& archive_type_hint,
-                                                        std::optional<uint32_t> archive_index) {
+                                                        std::optional<uint32_t> archive_index,
+                                                        bool allow_external_fallback) {
         PanelController& panel = panel_controller(panel_index);
         if (!in_archive_view_for_panel(panel_index)
             || panel.archive.source_archive.isEmpty()
@@ -32,7 +33,7 @@ namespace z7::ui::filemanager {
         }
         nested_display += QLatin1Char('/');
         nested_display += QDir::toNativeSeparators(normalized_entry);
-        auto out_session_result = std::make_shared<std::optional<z7::app::OpenArchiveSessionResult>>();
+        auto out_session_result = std::make_shared<std::optional<z7::app::OpenArchiveFromParentResult>>();
 
         start_task_with_runner(
             QStringLiteral("%1: %2").arg(z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)),
@@ -43,16 +44,35 @@ namespace z7::ui::filemanager {
              effective_hint,
              archive_index,
              nested_display,
-             out_session_result](ArchiveProcessRunner* runner) {
+             out_session_result,
+             allow_external_fallback](ArchiveProcessRunner* runner) {
                 if (runner == nullptr) {
                     return false;
                 }
                 if (archive_index.has_value()) {
                     return runner->start_open_nested(
-                        parent_token, *archive_index, effective_hint, 0, nested_display, out_session_result);
+                        parent_token,
+                        *archive_index,
+                        effective_hint,
+                        0,
+                        nested_display,
+                        out_session_result,
+                        std::nullopt,
+                        allow_external_fallback
+                            ? z7::app::UnsupportedNestedOpenMode::kMaterializeForExternalOpen
+                            : z7::app::UnsupportedNestedOpenMode::kFail);
                 }
                 return runner->start_open_nested_by_path(
-                    parent_token, normalized_entry, effective_hint, 0, nested_display, out_session_result);
+                    parent_token,
+                    normalized_entry,
+                    effective_hint,
+                    0,
+                    nested_display,
+                    out_session_result,
+                    std::nullopt,
+                    allow_external_fallback
+                        ? z7::app::UnsupportedNestedOpenMode::kMaterializeForExternalOpen
+                        : z7::app::UnsupportedNestedOpenMode::kFail);
             },
             [this,
              panel_index,
@@ -66,17 +86,34 @@ namespace z7::ui::filemanager {
                     return;
                 }
                 if (out_session_result == nullptr
-                    || !out_session_result->has_value()
-                    || !out_session_result->value().token.is_valid()) {
+                    || !out_session_result->has_value()) {
+                    return;
+                }
+                z7::app::OpenArchiveFromParentResult const& open_result = out_session_result->value();
+                if (open_result.disposition == z7::app::OpenArchiveFromParentResult::Disposition::kExternalFile) {
+                    if (!open_result.external_file.valid()) {
+                        return;
+                    }
+                    QString const file_path = QString::fromStdString(open_result.external_file.file_path());
+                    QSharedPointer<ArchiveTempSession> session(new ArchiveTempSession);
+                    session->purpose = ArchiveTempSessionPurpose::kOpenOutside;
+                    session->external_file_lease = open_result.external_file;
+                    session->command_caption =
+                        z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(540));
+                    launch_archive_temp_session_outside(
+                        session, QStringList{file_path}, QFileInfo(file_path).absolutePath());
+                    return;
+                }
+                if (!open_result.token.is_valid()) {
                     return;
                 }
 
                 PanelController& current_panel = panel_controller(panel_index);
                 current_panel.push_current_archive_to_parent_stack();
 
-                z7::app::ArchiveSessionToken const child_token = out_session_result->value().token;
+                z7::app::ArchiveSessionToken const child_token = open_result.token;
                 std::optional<uint32_t> const parent_entry_index =
-                    out_session_result->value().parent_entry_index;
+                    open_result.parent_entry_index;
                 auto nested_open_finished = std::make_shared<bool>(false);
                 auto const rollback_nested_open = [this, panel_index, child_token, nested_open_finished]() {
                     if (*nested_open_finished) {

@@ -571,17 +571,25 @@ namespace z7::ui::filemanager {
         settings.sync();
     }
 
-    QVector<z7::app::ArchiveSessionToken> MainWindow::run_shutdown_cleanup_once() {
-        if (shutdown_cleanup_started_) {
-            return {};
+    void MainWindow::save_shutdown_state_once() {
+        if (shutdown_state_saved_) {
+            return;
         }
-        shutdown_cleanup_started_ = true;
-
+        shutdown_state_saved_ = true;
         save_panel_ui_state();
         save_panel_paths();
         save_folder_history();
         save_main_window_geometry();
         save_details_column_state();
+    }
+
+    QVector<z7::app::ArchiveSessionToken> MainWindow::run_shutdown_cleanup_once() {
+        if (shutdown_cleanup_started_) {
+            return {};
+        }
+        shutdown_cleanup_started_ = true;
+        save_shutdown_state_once();
+
         QVector<QSharedPointer<ArchiveTempSession>> const sessions = archive_temp_sessions_;
         for (QSharedPointer<ArchiveTempSession> const& session : sessions) {
             finalize_archive_temp_session(session);
@@ -608,8 +616,54 @@ namespace z7::ui::filemanager {
     }
 
     void MainWindow::closeEvent(QCloseEvent* event) {
-        close_archive_sessions_for_shutdown(run_shutdown_cleanup_once());
-        QMainWindow::closeEvent(event);
+        if (shutdown_close_approved_) {
+            close_archive_sessions_for_shutdown(run_shutdown_cleanup_once());
+            QMainWindow::closeEvent(event);
+            return;
+        }
+        if (shutdown_close_in_progress_) {
+            event->ignore();
+            return;
+        }
+
+        auto panel_indexes = std::make_shared<QVector<int>>();
+        int const panel_order[2] = {active_panel_index_, 1 - active_panel_index_};
+        for (int const panel_index : panel_order) {
+            if (panel_index >= 0 && panel_index < 2 && in_archive_view_for_panel(panel_index)
+                && !panel_indexes->contains(panel_index)) {
+                panel_indexes->push_back(panel_index);
+            }
+        }
+        if (panel_indexes->isEmpty()) {
+            shutdown_close_approved_ = true;
+            close_archive_sessions_for_shutdown(run_shutdown_cleanup_once());
+            QMainWindow::closeEvent(event);
+            return;
+        }
+
+        event->ignore();
+        shutdown_close_in_progress_ = true;
+        save_shutdown_state_once();
+        auto close_next = std::make_shared<std::function<void()>>();
+        *close_next = [this, panel_indexes, close_next]() {
+            if (panel_indexes->isEmpty()) {
+                shutdown_close_in_progress_ = false;
+                shutdown_close_approved_ = true;
+                QTimer::singleShot(0, this, [this]() { close(); });
+                return;
+            }
+            int const panel_index = panel_indexes->front();
+            panel_indexes->removeFirst();
+            close_archive_view_for_panel(panel_index, [this, close_next](bool ok) {
+                if (!ok) {
+                    shutdown_close_in_progress_ = false;
+                    shutdown_state_saved_ = false;
+                    return;
+                }
+                (*close_next)();
+            });
+        };
+        (*close_next)();
     }
 
     MainWindow::PanelController& MainWindow::panel_controller(int panel_index) {

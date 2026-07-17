@@ -72,6 +72,7 @@ namespace z7::app {
         friend struct ArchiveOpenSessionNativeAccess;
         friend OperationResult close_native_archive_session(ArchiveSessionRegistry& registry,
                                                             ArchiveSessionToken token,
+                                                            NestedDirtyClosePolicy nested_dirty_policy,
                                                             ArchiveBackendHooks const& hooks,
                                                             std::atomic<bool>* cancel_requested,
                                                             std::function<bool()> wait_while_paused);
@@ -129,6 +130,7 @@ namespace z7::app {
         friend struct ArchiveSessionRegistryNativeAccess;
         friend OperationResult close_native_archive_session(ArchiveSessionRegistry& registry,
                                                             ArchiveSessionToken token,
+                                                            NestedDirtyClosePolicy nested_dirty_policy,
                                                             ArchiveBackendHooks const& hooks,
                                                             std::atomic<bool>* cancel_requested,
                                                             std::function<bool()> wait_while_paused);

@@ -66,7 +66,7 @@ namespace z7::app {
                         return invoke_typed_backend<Request, OpenArchiveSessionResult>(
                             *this, callbacks, typed_request, &NativeArchiveBackend::open_archive_from_path);
                     } else if constexpr (std::is_same_v<Request, OpenArchiveFromParentRequest>) {
-                        return invoke_typed_backend<Request, OpenArchiveSessionResult>(
+                        return invoke_typed_backend<Request, OpenArchiveFromParentResult>(
                             *this, callbacks, typed_request, &NativeArchiveBackend::open_archive_from_parent);
                     } else if constexpr (std::is_same_v<Request, SetArchiveSessionFilenameCodePageRequest>) {
                         NativeInvokeResult out;

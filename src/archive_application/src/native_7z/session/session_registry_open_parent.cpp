@@ -2,8 +2,8 @@
 // Role: Parent-session nested archive open flow and fallback strategies.
 
 #include <algorithm>
-#include <chrono>
 #include <filesystem>
+#include <limits>
 #include <utility>
 
 #include "core/internal.h"
@@ -15,21 +15,39 @@ namespace z7::app {
 
     namespace {
 
-        constexpr size_t kMinStrategy2Budget = 4u * 1024u * 1024u;
+        constexpr size_t kUnknownRamNestedBudget = 4u * 1024u * 1024u;
+        constexpr size_t kNestedMemoryAllowance = 1u << 16;
 
         size_t compute_nested_open_budget(size_t depth) {
             size_t ram_size = static_cast<size_t>(sizeof(size_t)) << 29;
             if (!NWindows::NSystem::GetRamSize(ram_size) || ram_size == 0) {
-                return kMinStrategy2Budget;
+                return kUnknownRamNestedBudget;
             }
 
             size_t const shift = std::max<size_t>(depth + 1, 8u);
             size_t const total_bits = sizeof(size_t) * 8u;
-            size_t budget = 0;
-            if (shift < total_bits) {
-                budget = ram_size >> shift;
+            return shift < total_bits ? ram_size >> shift : 0;
+        }
+
+        std::optional<uint64_t> declared_entry_size(CArc const& arc, UInt32 index) {
+            NWindows::NCOM::CPropVariant value;
+            if (arc.Archive->GetProperty(index, kpidSize, &value) != S_OK) {
+                return std::nullopt;
             }
-            return std::max<size_t>(budget, kMinStrategy2Budget);
+            UInt64 converted = 0;
+            if (!ConvertPropVariantToUInt64(value, converted)) {
+                return std::nullopt;
+            }
+            return static_cast<uint64_t>(converted);
+        }
+
+        size_t nested_memory_cap(std::optional<uint64_t> declared_size, size_t file_limit) {
+            uint64_t const base = declared_size.value_or(static_cast<uint64_t>(file_limit));
+            uint64_t const size_max = static_cast<uint64_t>(std::numeric_limits<size_t>::max());
+            if (base >= size_max || base > size_max - kNestedMemoryAllowance) {
+                return std::numeric_limits<size_t>::max();
+            }
+            return static_cast<size_t>(base + kNestedMemoryAllowance);
         }
 
         // Holds a COM CBufInStream alive for the session. We instantiate via
@@ -46,41 +64,10 @@ namespace z7::app {
             CMyComPtr<IInStream> seekable;
         };
 
-        // Best-effort unique temp directory under the system temp root.
-        std::filesystem::path make_temp_session_dir() {
-            namespace fs = std::filesystem;
-            std::error_code ec;
-            fs::path base = fs::temp_directory_path(ec);
-            if (ec || base.empty()) {
-                base = fs::path(".");
-            }
-            auto const ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-            fs::path candidate = base / (std::string("z7-session-") + std::to_string(static_cast<long long>(ticks)));
-            for (int i = 0; i < 32; ++i) {
-                std::error_code dir_ec;
-                if (create_private_directory(candidate, dir_ec)) {
-                    return candidate;
-                }
-                candidate = base / (std::string("z7-session-") + std::to_string(static_cast<long long>(ticks + i + 1)));
-            }
-            return {};
-        }
-
-        void remove_path_tree(std::filesystem::path const& path) {
-            if (path.empty()) {
-                return;
-            }
-            std::error_code ec;
-            std::filesystem::remove_all(path, ec);
-        }
-
-        // Extract a single entry of the parent archive into `sink` using the
-        // standard extract callback wired with a buffer sink.
-        ExtractInvocationStatus extract_entry_to_buffer(ArchiveOpenSession& parent,
+        ExtractInvocationStatus extract_entry_to_stream(ArchiveOpenSession& parent,
                                                         UInt32 entry_index,
                                                         std::string const& password,
-                                                        size_t size_budget,
-                                                        std::vector<uint8_t>& sink,
+                                                        ISequentialOutStream* output_stream,
                                                         ArchiveBackendHooks const& hooks,
                                                         std::atomic<bool>* cancel_requested,
                                                         std::function<bool()> wait_while_paused) {
@@ -91,9 +78,6 @@ namespace z7::app {
                 status.hresult = E_FAIL;
                 return status;
             }
-
-            sink.clear();
-            sink.reserve(std::min<size_t>(size_budget, 1u << 16));
 
             ArchiveBackendHooks const parent_hooks = make_session_password_hooks(parent, hooks);
             auto* callback = new NativeExtractCallback(arc,
@@ -111,7 +95,7 @@ namespace z7::app {
                                                        ExtractZoneIdMode::kNone,
                                                        false,
                                                        1);
-            callback->set_buffer_sink(&sink, size_budget);
+            callback->set_single_item_output_stream(output_stream);
 
             UInt32 const indices[1] = {entry_index};
             return invoke_archive_extract_with_callback(arc->Archive, indices, 1, /*test_mode=*/false, callback);
@@ -163,12 +147,48 @@ namespace z7::app {
 
     } // namespace
 
-    OpenArchiveSessionResult open_native_archive_session_from_parent(ArchiveSessionRegistry& registry,
-                                                                     OpenArchiveFromParentRequest const& request,
-                                                                     ArchiveBackendHooks const& hooks,
-                                                                     std::atomic<bool>* cancel_requested,
-                                                                     std::function<bool()> wait_while_paused) {
-        OpenArchiveSessionResult result;
+    struct ArchiveExternalFileLease::State {
+        std::filesystem::path directory;
+        std::filesystem::path file;
+
+        ~State() {
+            std::error_code ec;
+            std::filesystem::remove_all(directory, ec);
+        }
+    };
+
+    ArchiveExternalFileLease::ArchiveExternalFileLease() = default;
+    ArchiveExternalFileLease::~ArchiveExternalFileLease() = default;
+    ArchiveExternalFileLease::ArchiveExternalFileLease(ArchiveExternalFileLease const&) = default;
+    ArchiveExternalFileLease& ArchiveExternalFileLease::operator=(ArchiveExternalFileLease const&) = default;
+    ArchiveExternalFileLease::ArchiveExternalFileLease(ArchiveExternalFileLease&&) noexcept = default;
+    ArchiveExternalFileLease& ArchiveExternalFileLease::operator=(ArchiveExternalFileLease&&) noexcept = default;
+
+    ArchiveExternalFileLease::ArchiveExternalFileLease(std::shared_ptr<State> state) : state_(std::move(state)) {}
+
+    bool ArchiveExternalFileLease::valid() const {
+        return state_ != nullptr && !state_->file.empty();
+    }
+
+    std::string ArchiveExternalFileLease::file_path() const {
+        return valid() ? state_->file.generic_string() : std::string{};
+    }
+
+    struct ArchiveExternalFileLeaseAccess {
+        static ArchiveExternalFileLease create(std::filesystem::path directory, std::filesystem::path file) {
+            auto state = std::make_shared<ArchiveExternalFileLease::State>();
+            state->directory = std::move(directory);
+            state->file = std::move(file);
+            return ArchiveExternalFileLease(std::move(state));
+        }
+    };
+
+    OpenArchiveFromParentResult open_native_archive_session_from_parent(ArchiveSessionRegistry& registry,
+                                                                        OpenArchiveFromParentRequest const& request,
+                                                                        ArchiveBackendHooks const& hooks,
+                                                                        std::atomic<bool>* cancel_requested,
+                                                                        std::function<bool()> wait_while_paused) {
+        OpenArchiveFromParentResult result;
 
         auto parent = registry.find(request.parent);
         if (!parent) {
@@ -277,18 +297,26 @@ namespace z7::app {
             result.used_strategy = used;
             result.archive_path = child->display_path();
             result.parent_entry_index = resolved_index;
+            result.disposition = OpenArchiveFromParentResult::Disposition::kArchiveSession;
+        };
+
+        auto return_unsupported = [&]() -> OpenArchiveFromParentResult {
+            OperationResult failure = make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kUnsupportedFormat,
+                "Nested entry is not a supported archive",
+                2);
+            apply_open_archive_diagnostics(failure, child_state.open_diagnostics);
+            static_cast<OperationResult&>(result) = std::move(failure);
+            return result;
         };
 
         // Strategy 1: parent IInArchiveGetStream -> seekable IInStream.
+        bool try_as_archive_after_extract = true;
         {
             ParentStreamRefHolder holder;
             const HRESULT acquire = acquire_parent_sub_stream(*parent, resolved_index, holder);
             if (acquire == E_ABORT) {
                 static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
-                return result;
-            }
-            if (acquire != S_OK && acquire != S_FALSE) {
-                static_cast<OperationResult&>(result) = make_operation_failure_from_hresult<OperationResult>(acquire);
                 return result;
             }
             if (acquire == S_OK) {
@@ -341,232 +369,181 @@ namespace z7::app {
                     static_cast<OperationResult&>(result) = std::move(failure);
                     return result;
                 }
-                // Rebuild a fresh CArchiveLink / types / codecs; the previous attempt
-                // may have partially consumed internal state.
+                if (request.unsupported_mode == UnsupportedNestedOpenMode::kFail) {
+                    return return_unsupported();
+                }
+                // Normal Open needs the entry materialized for the external
+                // program, but must not try the archive again after S_FALSE.
+                try_as_archive_after_extract = false;
                 reset_archive_session_open_state(*child);
-                // fall through to strategy 2
             }
+            // As in 26.02, failure to obtain a usable seekable substream is not
+            // fatal by itself; the single extraction path below remains available.
         }
 
-        // Strategy 2: extract to in-memory buffer.
-        size_t const effective_budget = request.size_budget != 0
-                                          ? std::max<size_t>(request.size_budget, kMinStrategy2Budget)
-                                          : compute_nested_open_budget(child->depth());
-        {
-            std::vector<uint8_t> buffer;
-            ExtractInvocationStatus const extract_status = extract_entry_to_buffer(*parent,
-                                                                                   resolved_index,
-                                                                                   parent_extraction_password,
-                                                                                   effective_budget,
-                                                                                   buffer,
-                                                                                   hooks,
-                                                                                   cancel_requested,
-                                                                                   wait_while_paused);
-            if (extract_status.password_requested || extract_status.wrong_password) {
-                static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
-                    ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
-                return result;
-            }
-            if (extract_status.hresult == E_ABORT) {
-                static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
-                return result;
-            }
-            if (extract_status.hresult != S_OK && extract_status.hresult != E_OUTOFMEMORY) {
+        size_t const file_limit = request.size_budget != 0
+                                    ? request.size_budget
+                                    : compute_nested_open_budget(child->depth());
+        std::optional<uint64_t> const declared_size = declared_entry_size(*parent_arc, resolved_index);
+        bool const prefer_file = declared_size.has_value()
+                              && *declared_size > static_cast<uint64_t>(file_limit);
+        size_t const memory_cap = nested_memory_cap(declared_size, file_limit);
+
+        CMyComPtr<NativeSpillableOutStream> output;
+        output.Attach(new NativeSpillableOutStream(memory_cap, resolved_entry_path, prefer_file));
+        ExtractInvocationStatus const extract_status = extract_entry_to_stream(*parent,
+                                                                               resolved_index,
+                                                                               parent_extraction_password,
+                                                                               output.Interface(),
+                                                                               hooks,
+                                                                               cancel_requested,
+                                                                               wait_while_paused);
+        if (extract_status.password_requested || extract_status.wrong_password) {
+            static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
+            return result;
+        }
+        if (extract_status.hresult == E_ABORT) {
+            static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
+            return result;
+        }
+        if (extract_status.hresult != S_OK || extract_status.error_count != 0) {
+            if (extract_status.error_count != 0 && !extract_status.diagnostic.empty()) {
+                static_cast<OperationResult&>(result) =
+                    make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo, extract_status.diagnostic, 2);
+            } else {
                 static_cast<OperationResult&>(result) =
                     make_operation_failure_from_hresult<OperationResult>(extract_status.hresult);
-                return result;
             }
-            if (extract_status.hresult == S_OK && extract_status.error_count != 0) {
-                static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
-                    ArchiveErrorDomain::kIo,
-                    extract_status.diagnostic.empty() ? "Failed to extract embedded archive entry"
-                                                      : extract_status.diagnostic,
-                    2);
-                return result;
-            }
-            if (extract_status.hresult == S_OK && !buffer.empty()) {
-                child_state.memory_buffer = std::move(buffer);
-
-                auto holder = std::make_shared<StreamRefHolder>();
-                CMyComPtr2_Create<IInStream, CBufInStream> buf_stream;
-                buf_stream->Init(child_state.memory_buffer.data(),
-                                 child_state.memory_buffer.size(),
-                                 /*ref=*/nullptr);
-                holder->stream = buf_stream;
-
-                CArc const* arc = nullptr;
-                bool password_requested = false;
-                bool wrong_password = false;
-                std::string password;
-                const HRESULT open_hr = open_archive_shared_from_stream(holder->stream,
-                                                                        display_path,
-                                                                        request.archive_type_hint,
-                                                                        hooks,
-                                                                        cancel_requested,
-                                                                        wait_while_paused,
-                                                                        OpenResultMessagePolicy::kSilentBrowse,
-                                                                        /*allow_password_prompt=*/true,
-                                                                        /*initial_password=*/{},
-                                                                        /*codecs_already_loaded=*/false,
-                                                                        *child_state.codecs,
-                                                                        *child_state.types,
-                                                                        *child_state.excluded_formats,
-                                                                        *child_state.archive_link,
-                                                                        arc,
-                                                                        &password_requested,
-                                                                        &wrong_password,
-                                                                        &password,
-                                                                        &child_state.open_diagnostics,
-                                                                        request.filename_code_page);
-                if (open_hr == S_OK) {
-                    if (!password.empty()) {
-                        child->set_password(std::move(password));
-                    }
-                    child_state.stream_ref_holder = std::static_pointer_cast<void>(holder);
-                    finalize_success(OpenArchiveSessionResult::Strategy::kMemory);
-                    return result;
-                }
-                if (password_requested || wrong_password) {
-                    static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
-                        ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
-                    return result;
-                }
-                if (open_hr == E_ABORT) {
-                    static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
-                    return result;
-                }
-                if (open_hr != S_FALSE) {
-                    OperationResult failure = make_operation_failure_from_hresult<OperationResult>(open_hr);
-                    apply_open_archive_diagnostics(failure, child_state.open_diagnostics);
-                    static_cast<OperationResult&>(result) = std::move(failure);
-                    return result;
-                }
-                // Reset per-attempt state and fall through.
-                child_state.memory_buffer.clear();
-                child_state.memory_buffer.shrink_to_fit();
-                reset_archive_session_open_state(*child);
-            }
+            return result;
+        }
+        HRESULT const finish_result = output->finish();
+        if (finish_result != S_OK) {
+            static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kIo,
+                output->failure_message().empty() ? "Failed to finalize nested archive extraction"
+                                                  : output->failure_message(),
+                2);
+            return result;
         }
 
-        // Strategy 3: extract to temp file, open as path.
-        {
-            namespace fs = std::filesystem;
-            fs::path dir = make_temp_session_dir();
-            if (dir.empty()) {
-                static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
-                    ArchiveErrorDomain::kIo, "Failed to create temp dir for nested archive", 2);
-                return result;
-            }
-
-            CArchiveLink& parent_link = archive_session_link(*parent);
-            CArc const* parent_arc = parent_link.GetArc();
-            if (parent_arc == nullptr || parent_arc->Archive == nullptr) {
-                remove_path_tree(dir);
-                static_cast<OperationResult&>(result) =
-                    make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo, "Parent archive not available", 2);
-                return result;
-            }
-
-            ArchiveBackendHooks const parent_hooks = make_session_password_hooks(*parent, hooks);
-            auto* callback = new NativeExtractCallback(parent_arc,
-                                                       dir,
-                                                       parent_hooks,
-                                                       cancel_requested,
-                                                       wait_while_paused,
-                                                       parent->display_path(),
-                                                       {},
-                                                       OverwriteMode::kOverwrite,
-                                                       ExtractPathMode::kNoPaths,
-                                                       std::string{},
-                                                       {},
-                                                       parent_extraction_password,
-                                                       ExtractZoneIdMode::kNone,
-                                                       false,
-                                                       1);
-            UInt32 const indices[1] = {resolved_index};
-            ExtractInvocationStatus const extract_status =
-                invoke_archive_extract_with_callback(parent_arc->Archive, indices, 1, /*test_mode=*/false, callback);
-            if (extract_status.password_requested || extract_status.wrong_password) {
-                remove_path_tree(dir);
-                static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
-                    ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
-                return result;
-            }
-            if (extract_status.hresult != S_OK || extract_status.error_count != 0) {
-                remove_path_tree(dir);
-                if (extract_status.hresult == E_ABORT) {
-                    static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
-                } else if (extract_status.error_count != 0 && !extract_status.diagnostic.empty()) {
-                    static_cast<OperationResult&>(result) =
-                        make_operation_failure<OperationResult>(ArchiveErrorDomain::kIo, extract_status.diagnostic, 2);
-                } else {
-                    static_cast<OperationResult&>(result) =
-                        make_operation_failure_from_hresult<OperationResult>(extract_status.hresult);
-                }
-                return result;
-            }
-
-            // Find the single extracted file under `dir`. NoPaths mode flattens so
-            // the output sits directly under the directory.
-            fs::path extracted;
-            std::error_code it_ec;
-            for (auto const& entry : fs::directory_iterator(dir, it_ec)) {
-                if (entry.is_regular_file()) {
-                    extracted = entry.path();
-                    break;
-                }
-            }
-            if (extracted.empty()) {
-                remove_path_tree(dir);
-                static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
-                    ArchiveErrorDomain::kIo, "Extracted temp file not found", 2);
-                return result;
-            }
-
-            child_state.temp_dir = dir;
-            child_state.temp_file = std::make_unique<fs::path>(extracted);
-
-            CArc const* arc = nullptr;
-            bool password_requested = false;
-            bool wrong_password = false;
-            std::string password;
-            const HRESULT open_hr = open_archive_shared(extracted.generic_string(),
-                                                        request.archive_type_hint,
-                                                        hooks,
-                                                        cancel_requested,
-                                                        std::move(wait_while_paused),
-                                                        OpenResultMessagePolicy::kSilentBrowse,
-                                                        /*allow_password_prompt=*/true,
-                                                        /*initial_password=*/{},
-                                                        /*codecs_already_loaded=*/false,
-                                                        *child_state.codecs,
-                                                        *child_state.types,
-                                                        *child_state.excluded_formats,
-                                                        *child_state.archive_link,
-                                                        arc,
-                                                        &password_requested,
-                                                        &wrong_password,
-                                                        &password,
-                                                        &child_state.open_diagnostics,
-                                                        request.filename_code_page);
-            if (open_hr != S_OK) {
-                if (password_requested || wrong_password) {
+        auto finalize_external_file = [&]() -> OpenArchiveFromParentResult {
+            if (!output->spilled_to_file()) {
+                HRESULT const materialize_result = output->materialize_to_file();
+                if (materialize_result != S_OK) {
                     static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
-                        ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
-                } else {
-                    static_cast<OperationResult&>(result) =
-                        (open_hr == E_ABORT) ? make_operation_canceled<OperationResult>()
-                                             : make_operation_failure_from_hresult<OperationResult>(open_hr);
+                        ArchiveErrorDomain::kIo,
+                        output->failure_message().empty() ? "Failed to materialize external-open fallback"
+                                                          : output->failure_message(),
+                        2);
+                    return result;
                 }
-                return result;
             }
+            ArchiveExternalFileLease lease = ArchiveExternalFileLeaseAccess::create(
+                output->temp_directory(), output->temp_file());
+            output->release_temp_ownership();
+            static_cast<OperationResult&>(result) =
+                make_operation_success<OperationResult>("Nested entry materialized for external open");
+            result.disposition = OpenArchiveFromParentResult::Disposition::kExternalFile;
+            result.external_file = std::move(lease);
+            result.archive_path = display_path;
+            result.parent_entry_index = resolved_index;
+            return result;
+        };
 
+        if (!try_as_archive_after_extract) {
+            return finalize_external_file();
+        }
+
+        bool password_requested = false;
+        bool wrong_password = false;
+        std::string password;
+        HRESULT open_hr = E_FAIL;
+        std::shared_ptr<StreamRefHolder> memory_holder;
+        if (output->spilled_to_file()) {
+            CArc const* arc = nullptr;
+            open_hr = open_archive_shared(output->temp_file().generic_string(),
+                                          request.archive_type_hint,
+                                          hooks,
+                                          cancel_requested,
+                                          wait_while_paused,
+                                          OpenResultMessagePolicy::kSilentBrowse,
+                                          /*allow_password_prompt=*/true,
+                                          /*initial_password=*/{},
+                                          /*codecs_already_loaded=*/false,
+                                          *child_state.codecs,
+                                          *child_state.types,
+                                          *child_state.excluded_formats,
+                                          *child_state.archive_link,
+                                          arc,
+                                          &password_requested,
+                                          &wrong_password,
+                                          &password,
+                                          &child_state.open_diagnostics,
+                                          request.filename_code_page);
+        } else {
+            memory_holder = std::make_shared<StreamRefHolder>();
+            CMyComPtr2_Create<IInStream, CBufInStream> buffer_stream;
+            buffer_stream->Init(output->memory_data(), output->memory_size(), /*ref=*/nullptr);
+            memory_holder->stream = buffer_stream;
+            CArc const* arc = nullptr;
+            open_hr = open_archive_shared_from_stream(memory_holder->stream,
+                                                      display_path,
+                                                      request.archive_type_hint,
+                                                      hooks,
+                                                      cancel_requested,
+                                                      wait_while_paused,
+                                                      OpenResultMessagePolicy::kSilentBrowse,
+                                                      /*allow_password_prompt=*/true,
+                                                      /*initial_password=*/{},
+                                                      /*codecs_already_loaded=*/false,
+                                                      *child_state.codecs,
+                                                      *child_state.types,
+                                                      *child_state.excluded_formats,
+                                                      *child_state.archive_link,
+                                                      arc,
+                                                      &password_requested,
+                                                      &wrong_password,
+                                                      &password,
+                                                      &child_state.open_diagnostics,
+                                                      request.filename_code_page);
+        }
+
+        if (open_hr == S_OK) {
             if (!password.empty()) {
                 child->set_password(std::move(password));
             }
-            finalize_success(OpenArchiveSessionResult::Strategy::kTempFile);
+            if (output->spilled_to_file()) {
+                child_state.temp_dir = output->temp_directory();
+                child_state.temp_file = std::make_unique<std::filesystem::path>(output->temp_file());
+                output->release_temp_ownership();
+                finalize_success(OpenArchiveSessionResult::Strategy::kTempFile);
+            } else {
+                child_state.memory_buffer = output->take_buffer();
+                child_state.stream_ref_holder = std::static_pointer_cast<void>(memory_holder);
+                finalize_success(OpenArchiveSessionResult::Strategy::kMemory);
+            }
             return result;
         }
+        if (password_requested || wrong_password) {
+            static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
+                ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);
+            return result;
+        }
+        if (open_hr == E_ABORT) {
+            static_cast<OperationResult&>(result) = make_operation_canceled<OperationResult>();
+            return result;
+        }
+        if (open_hr != S_FALSE) {
+            OperationResult failure = make_operation_failure_from_hresult<OperationResult>(open_hr);
+            apply_open_archive_diagnostics(failure, child_state.open_diagnostics);
+            static_cast<OperationResult&>(result) = std::move(failure);
+            return result;
+        }
+        if (request.unsupported_mode == UnsupportedNestedOpenMode::kMaterializeForExternalOpen) {
+            return finalize_external_file();
+        }
+        return return_unsupported();
     }
 
     OperationResult set_native_archive_session_filename_code_page(

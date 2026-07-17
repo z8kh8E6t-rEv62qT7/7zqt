@@ -146,8 +146,8 @@ namespace z7::app {
         OpenArchiveResult open_archive(OpenArchiveRequest const& request, ArchiveBackendHooks const& hooks = {});
         OpenArchiveSessionResult open_archive_from_path(OpenArchiveFromPathRequest const& request,
                                                         ArchiveBackendHooks const& hooks = {});
-        OpenArchiveSessionResult open_archive_from_parent(OpenArchiveFromParentRequest const& request,
-                                                          ArchiveBackendHooks const& hooks = {});
+        OpenArchiveFromParentResult open_archive_from_parent(OpenArchiveFromParentRequest const& request,
+                                                             ArchiveBackendHooks const& hooks = {});
         OperationResult set_archive_session_filename_code_page(
             SetArchiveSessionFilenameCodePageRequest const& request,
             ArchiveBackendHooks const& hooks = {});

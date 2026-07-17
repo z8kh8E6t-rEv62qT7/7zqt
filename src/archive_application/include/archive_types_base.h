@@ -188,6 +188,11 @@ namespace z7::app {
         std::optional<uint32_t> filename_code_page;
     };
 
+    enum class UnsupportedNestedOpenMode {
+        kFail,
+        kMaterializeForExternalOpen
+    };
+
     struct OpenArchiveFromParentRequest {
         ArchiveSessionToken parent;
         // Explicit entry selector for nested opens. Callers must set exactly one of
@@ -203,6 +208,7 @@ namespace z7::app {
         // Applies only to the child layer. Parent decoding remains bound to the
         // parent session's independently selected code page.
         std::optional<uint32_t> filename_code_page;
+        UnsupportedNestedOpenMode unsupported_mode = UnsupportedNestedOpenMode::kFail;
     };
 
     struct SetArchiveSessionFilenameCodePageRequest {
@@ -211,8 +217,15 @@ namespace z7::app {
         std::optional<uint32_t> filename_code_page;
     };
 
+    enum class NestedDirtyClosePolicy {
+        kCommit,
+        kDiscard,
+        kPrompt
+    };
+
     struct CloseArchiveSessionRequest {
         ArchiveSessionToken token;
+        NestedDirtyClosePolicy nested_dirty_policy = NestedDirtyClosePolicy::kCommit;
     };
 
     struct ListRequest {

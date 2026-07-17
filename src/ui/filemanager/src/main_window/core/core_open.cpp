@@ -227,7 +227,7 @@ namespace z7::ui::filemanager {
         }
 
         open_archive_file_inside_for_panel(
-            active_panel_index_, selection.single_entry_path, QString(), selection.single_entry_archive_index);
+            active_panel_index_, selection.single_entry_path, QString(), selection.single_entry_archive_index, true);
     }
 
     void MainWindow::open_selected_filesystem_paths_including_parent_link(bool try_internal) {

@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "archive_failure_messages.h"
+#include "archive_process_runner/core_prompts.h"
 #include "archive_session_helpers.h"
 #include "dialogs/temp_files/temp_files_dialog.h"
 #include "main_window/deps.h"
@@ -347,6 +348,27 @@ namespace z7::ui::filemanager {
         };
 
         created_runner->set_prompt_parent_provider([this]() -> QWidget* { return this; });
+        if (question_box_) {
+            created_runner->set_choice_prompt_handler([this](z7::app::ChoicePrompt const& prompt) {
+                if (prompt.kind != z7::app::ChoicePromptKind::kUpdateModifiedNestedArchive) {
+                    return show_default_choice_prompt(prompt);
+                }
+                QString const subject = QString::fromUtf8(prompt.subject_path.data(),
+                                                          static_cast<int>(prompt.subject_path.size()));
+                QString message = z7::ui::runtime_support::LF(3009, {subject});
+                QMessageBox::StandardButton const answer = question_box_(
+                    QStringLiteral("7-Zip"),
+                    message,
+                    QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+                    QMessageBox::Yes);
+                z7::app::ChoiceReply reply;
+                if (answer == QMessageBox::Yes || answer == QMessageBox::No) {
+                    reply.kind = z7::app::ChoiceReplyKind::kSelect;
+                    reply.selected_index = answer == QMessageBox::Yes ? 0 : 1;
+                }
+                return reply;
+            });
+        }
 
         connect(created_runner,
                 &ArchiveProcessRunner::failure_message,

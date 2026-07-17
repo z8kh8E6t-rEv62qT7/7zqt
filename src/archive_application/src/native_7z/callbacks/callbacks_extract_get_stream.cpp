@@ -572,7 +572,7 @@ namespace z7::app {
 
 #if defined(__APPLE__)
         if (alternate_stream_info.is_alternate_stream) {
-            if (buffer_sink_ != nullptr) {
+            if (single_item_output_stream_) {
                 return S_OK;
             }
             MaterializedOutputTarget parent_target;
@@ -684,12 +684,12 @@ namespace z7::app {
         }
 #endif
 
-        if (buffer_sink_ != nullptr) {
+        if (single_item_output_stream_) {
             if (is_dir) {
                 return S_OK;
             }
-            auto* stream = new NativeBufferOutStream(*buffer_sink_, buffer_sink_max_size_);
-            *out_stream = stream;
+            single_item_output_stream_->AddRef();
+            *out_stream = single_item_output_stream_;
             return S_OK;
         }
 

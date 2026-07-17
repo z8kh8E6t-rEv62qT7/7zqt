@@ -146,9 +146,8 @@ namespace z7::app {
         pending_deferred_hard_link_output_.reset();
     }
 
-    void NativeExtractCallback::set_buffer_sink(std::vector<uint8_t>* buffer_sink, size_t max_size) {
-        buffer_sink_ = buffer_sink;
-        buffer_sink_max_size_ = max_size;
+    void NativeExtractCallback::set_single_item_output_stream(ISequentialOutStream* output_stream) {
+        single_item_output_stream_ = output_stream;
     }
 
     uint64_t NativeExtractCallback::completed_files() const {

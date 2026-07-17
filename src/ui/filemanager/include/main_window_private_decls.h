@@ -45,6 +45,7 @@ void save_panel_paths() const;
 void remember_folder_history(QString const& path);
 bool has_folder_history() const;
 bool open_folder_prefix_for_panel(int panel_index, QString const& path);
+void save_shutdown_state_once();
 QVector<z7::app::ArchiveSessionToken> run_shutdown_cleanup_once();
 static void close_archive_sessions_for_shutdown(QVector<z7::app::ArchiveSessionToken> tokens);
 void load_runtime_settings();
@@ -120,7 +121,8 @@ void open_archive_entries_outside_for_panel(int panel_index, QStringList const& 
 void open_archive_file_inside_for_panel(int panel_index,
                                         QString const& entry_path,
                                         QString const& archive_type_hint,
-                                        std::optional<uint32_t> archive_index = std::nullopt);
+                                        std::optional<uint32_t> archive_index = std::nullopt,
+                                        bool allow_external_fallback = false);
 
 enum class OpenFailureFallbackPolicy {
     kAnyFailure,
@@ -263,6 +265,7 @@ private:
 struct ArchiveTempSession {
     ArchiveTempSessionPurpose purpose = ArchiveTempSessionPurpose::kViewEdit;
     QSharedPointer<QTemporaryDir> temp_dir;
+    std::optional<z7::app::ArchiveExternalFileLease> external_file_lease;
     QString archive_path;
     QString archive_display_source;
     QString archive_type_hint;
@@ -314,6 +317,9 @@ void restore_archive_writeback_plan_for_panel(int panel_index,
                                               std::function<void(bool)> const& finished_cb = {});
 void retain_archive_temp_session(QSharedPointer<ArchiveTempSession> const& session);
 void release_archive_temp_session(QSharedPointer<ArchiveTempSession> const& session);
+void launch_archive_temp_session_outside(QSharedPointer<ArchiveTempSession> const& session,
+                                         QStringList const& paths,
+                                         QString const& working_dir);
 void reload_matching_archive_writeback_panels(QString const& archive_path,
                                               QString const& archive_display_source,
                                               z7::app::ArchiveSessionToken session_token);
@@ -754,6 +760,9 @@ int active_panel_index_ = -1;
 DisplaySettings display_settings_{};
 bool two_panels_visible_ = false;
 bool shutdown_cleanup_started_ = false;
+bool shutdown_state_saved_ = false;
+bool shutdown_close_in_progress_ = false;
+bool shutdown_close_approved_ = false;
 z7::app::BackendCapabilities backend_capabilities_{};
 QMenu *file_menu_ = nullptr, *edit_menu_ = nullptr, *view_menu_ = nullptr, *favorites_menu_ = nullptr,
       *tools_menu_ = nullptr, *help_menu_ = nullptr, *crc_menu_ = nullptr, *toolbars_submenu_ = nullptr,

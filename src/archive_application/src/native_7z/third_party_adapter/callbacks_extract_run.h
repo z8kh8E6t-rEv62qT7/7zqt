@@ -45,10 +45,9 @@ namespace z7::app {
                               bool archive_context_already_reported = false);
         ~NativeExtractCallback();
 
-        // When configured, extracted bytes are written into the caller-owned buffer
-        // instead of a filesystem path. Used by the in-memory nested-archive
-        // strategy. The buffer must outlive the extract call.
-        void set_buffer_sink(std::vector<uint8_t>* buffer_sink, size_t max_size);
+        // When configured, the selected non-directory item is written directly
+        // to this caller-owned stream and normal filesystem bookkeeping is skipped.
+        void set_single_item_output_stream(ISequentialOutStream* output_stream);
 
         uint64_t completed_files() const;
         uint64_t error_count() const;
@@ -417,10 +416,7 @@ namespace z7::app {
         // Budget enforcement (optional). Set by constructor when request.budget is present.
         std::shared_ptr<ExtractBudgetTracker> budget_tracker_;
 
-        // In-memory sink (optional). When non-null, GetStream skips all filesystem
-        // bookkeeping and writes into this buffer up to buffer_sink_max_size_.
-        std::vector<uint8_t>* buffer_sink_ = nullptr;
-        size_t buffer_sink_max_size_ = 0;
+        CMyComPtr<ISequentialOutStream> single_item_output_stream_;
     };
 
 } // namespace z7::app

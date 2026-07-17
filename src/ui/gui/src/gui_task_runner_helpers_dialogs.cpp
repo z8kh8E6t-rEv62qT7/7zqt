@@ -218,6 +218,27 @@ namespace z7::ui::gui {
 
     z7::app::ChoiceReply show_choice_prompt_dialog(QWidget* parent, z7::app::ChoicePrompt const& prompt) {
         z7::app::ChoiceReply reply;
+        if (prompt.kind == z7::app::ChoicePromptKind::kUpdateModifiedNestedArchive) {
+            QString const subject = QString::fromUtf8(prompt.subject_path.data(),
+                                                      static_cast<int>(prompt.subject_path.size()));
+            QString message = z7::ui::runtime_support::LF(3009, {subject});
+            if (message.trimmed().isEmpty()) {
+                message = QStringLiteral("The nested archive was modified. Update it?");
+            }
+            QMessageBox::StandardButton const answer = QMessageBox::question(
+                parent,
+                QStringLiteral("7-Zip"),
+                message,
+                QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+                QMessageBox::Yes);
+            if (answer == QMessageBox::Yes || answer == QMessageBox::No) {
+                reply.kind = z7::app::ChoiceReplyKind::kSelect;
+                reply.selected_index = answer == QMessageBox::Yes ? 0 : 1;
+            } else {
+                reply.kind = z7::app::ChoiceReplyKind::kCancel;
+            }
+            return reply;
+        }
         if (prompt.choices.empty()) {
             reply.kind = z7::app::ChoiceReplyKind::kCancel;
             return reply;

@@ -370,7 +370,8 @@ namespace z7::ui::filemanager {
                             QStringLiteral("Close archive session"),
                             z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)),
                             [token = transition.leaving_token](ArchiveProcessRunner* runner) {
-                                return runner != nullptr && runner->start_close_session(token);
+                                return runner != nullptr
+                                    && runner->start_close_session(token, z7::app::NestedDirtyClosePolicy::kPrompt);
                             },
                             [this, start_parent_load, panel_index, transition](
                                 bool ok, int, int, QString const&, z7::app::OperationOutcome const&) {

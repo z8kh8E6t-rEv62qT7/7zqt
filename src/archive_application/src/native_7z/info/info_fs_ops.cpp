@@ -368,8 +368,9 @@ namespace z7::app {
             });
     }
 
-    OpenArchiveSessionResult NativeArchiveBackend::open_archive_from_parent(OpenArchiveFromParentRequest const& request,
-                                                                            ArchiveBackendHooks const& hooks) {
+    OpenArchiveFromParentResult NativeArchiveBackend::open_archive_from_parent(
+        OpenArchiveFromParentRequest const& request,
+        ArchiveBackendHooks const& hooks) {
         return open_native_archive_session_from_parent(
             ArchiveSessionRegistry::instance(), request, hooks, &cancel_requested_, [this]() {
                 return wait_while_paused();
@@ -388,7 +389,12 @@ namespace z7::app {
     OperationResult NativeArchiveBackend::close_archive_session(CloseArchiveSessionRequest const& request,
                                                                 ArchiveBackendHooks const& hooks) {
         return close_native_archive_session(
-            ArchiveSessionRegistry::instance(), request.token, hooks, &cancel_requested_, [this]() {
+            ArchiveSessionRegistry::instance(),
+            request.token,
+            request.nested_dirty_policy,
+            hooks,
+            &cancel_requested_,
+            [this]() {
                 return wait_while_paused();
             });
     }

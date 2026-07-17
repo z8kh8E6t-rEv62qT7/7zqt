@@ -284,6 +284,7 @@ namespace z7::app {
         ArchiveErrorDomain const existing_domain = result.error.domain;
         if (existing_domain == ArchiveErrorDomain::kCanceled
             || existing_domain == ArchiveErrorDomain::kPassword
+            || existing_domain == ArchiveErrorDomain::kUnsupportedFormat
             || existing_domain == ArchiveErrorDomain::kBudgetExceeded) {
             result.error.message = std::move(message);
             result.summary = describe_archive_error(result.error);

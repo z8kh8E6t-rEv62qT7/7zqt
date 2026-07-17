@@ -357,8 +357,9 @@ namespace z7::ui::filemanager {
         QString const& archive_type_hint,
         size_t size_budget,
         QString const& display_path_hint,
-        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result,
-        z7::app::FilenameCodePage filename_code_page) {
+        std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>> out_session_result,
+        z7::app::FilenameCodePage filename_code_page,
+        z7::app::UnsupportedNestedOpenMode unsupported_mode) {
         if (!parent.is_valid()) {
             return finish_immediately(z7::app::make_immediate_result(
                 7, z7::app::ArchiveErrorDomain::kInvalidArguments, to_utf8_string(z7::ui::runtime_support::L(3015))));
@@ -371,11 +372,13 @@ namespace z7::ui::filemanager {
         request.size_budget = size_budget;
         request.display_path_hint = to_utf8_string(display_path_hint);
         request.filename_code_page = filename_code_page;
+        request.unsupported_mode = unsupported_mode;
 
         return start_operation(QStringLiteral("OpenArchiveFromParent"),
                                QStringList{display_path_hint},
                                z7::app::ArchiveRequest{std::move(request)},
                                /*out_list_result=*/{},
+                               /*out_session_result=*/{},
                                std::move(out_session_result));
     }
 
@@ -385,8 +388,9 @@ namespace z7::ui::filemanager {
         QString const& archive_type_hint,
         size_t size_budget,
         QString const& display_path_hint,
-        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result,
-        z7::app::FilenameCodePage filename_code_page) {
+        std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>> out_session_result,
+        z7::app::FilenameCodePage filename_code_page,
+        z7::app::UnsupportedNestedOpenMode unsupported_mode) {
         if (!parent.is_valid() || entry_path.trimmed().isEmpty()) {
             return finish_immediately(z7::app::make_immediate_result(
                 7, z7::app::ArchiveErrorDomain::kInvalidArguments, to_utf8_string(z7::ui::runtime_support::L(3015))));
@@ -399,15 +403,18 @@ namespace z7::ui::filemanager {
         request.size_budget = size_budget;
         request.display_path_hint = to_utf8_string(display_path_hint.isEmpty() ? entry_path : display_path_hint);
         request.filename_code_page = filename_code_page;
+        request.unsupported_mode = unsupported_mode;
 
         return start_operation(QStringLiteral("OpenArchiveFromParent"),
                                QStringList{display_path_hint.isEmpty() ? entry_path : display_path_hint},
                                z7::app::ArchiveRequest{std::move(request)},
                                /*out_list_result=*/{},
+                               /*out_session_result=*/{},
                                std::move(out_session_result));
     }
 
-    bool ArchiveProcessRunner::start_close_session(z7::app::ArchiveSessionToken token) {
+    bool ArchiveProcessRunner::start_close_session(z7::app::ArchiveSessionToken token,
+                                                   z7::app::NestedDirtyClosePolicy nested_dirty_policy) {
         if (!token.is_valid()) {
             return finish_immediately(z7::app::make_immediate_result(
                 7, z7::app::ArchiveErrorDomain::kInvalidArguments, to_utf8_string(z7::ui::runtime_support::L(3015))));
@@ -415,6 +422,7 @@ namespace z7::ui::filemanager {
 
         z7::app::CloseArchiveSessionRequest request;
         request.token = token;
+        request.nested_dirty_policy = nested_dirty_policy;
 
         return start_operation(
             QStringLiteral("CloseArchiveSession"), QStringList{}, z7::app::ArchiveRequest{std::move(request)});

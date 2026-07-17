@@ -77,7 +77,14 @@ namespace z7::app {
         std::string password;
     };
 
+    enum class ChoicePromptKind {
+        kGeneric,
+        kUpdateModifiedNestedArchive
+    };
+
     struct ChoicePrompt {
+        ChoicePromptKind kind = ChoicePromptKind::kGeneric;
+        std::string subject_path;
         std::string title;
         std::string message;
         std::vector<std::string> choices;
@@ -163,6 +170,7 @@ namespace z7::app {
                                           DeleteResult,
                                           OpenArchiveResult,
                                           OpenArchiveSessionResult,
+                                          OpenArchiveFromParentResult,
                                           ListResult,
                                           ArchivePropertiesResult,
                                           NavigateResult,

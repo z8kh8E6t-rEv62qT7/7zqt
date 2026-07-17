@@ -195,11 +195,11 @@ namespace z7::app {
                                                                    std::atomic<bool>* cancel_requested,
                                                                    std::function<bool()> wait_while_paused);
 
-    OpenArchiveSessionResult open_native_archive_session_from_parent(ArchiveSessionRegistry& registry,
-                                                                     OpenArchiveFromParentRequest const& request,
-                                                                     ArchiveBackendHooks const& hooks,
-                                                                     std::atomic<bool>* cancel_requested,
-                                                                     std::function<bool()> wait_while_paused);
+    OpenArchiveFromParentResult open_native_archive_session_from_parent(ArchiveSessionRegistry& registry,
+                                                                        OpenArchiveFromParentRequest const& request,
+                                                                        ArchiveBackendHooks const& hooks,
+                                                                        std::atomic<bool>* cancel_requested,
+                                                                        std::function<bool()> wait_while_paused);
 
     OperationResult set_native_archive_session_filename_code_page(
         ArchiveSessionRegistry& registry,
@@ -237,6 +237,7 @@ namespace z7::app {
 
     OperationResult close_native_archive_session(ArchiveSessionRegistry& registry,
                                                  ArchiveSessionToken token,
+                                                 NestedDirtyClosePolicy nested_dirty_policy,
                                                  ArchiveBackendHooks const& hooks,
                                                  std::atomic<bool>* cancel_requested,
                                                  std::function<bool()> wait_while_paused);

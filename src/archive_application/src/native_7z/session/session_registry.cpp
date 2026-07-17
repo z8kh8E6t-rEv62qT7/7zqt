@@ -751,7 +751,8 @@ namespace z7::app {
     }
 
     bool ArchiveSessionRegistry::close(ArchiveSessionToken token) {
-        OperationResult const result = close_native_archive_session(*this, token, {}, nullptr, [] { return true; });
+        OperationResult const result = close_native_archive_session(
+            *this, token, NestedDirtyClosePolicy::kCommit, {}, nullptr, [] { return true; });
         return result.ok;
     }
 
@@ -942,11 +943,10 @@ namespace z7::app {
 
     OperationResult close_native_archive_session(ArchiveSessionRegistry& registry,
                                                  ArchiveSessionToken token,
+                                                 NestedDirtyClosePolicy nested_dirty_policy,
                                                  ArchiveBackendHooks const& hooks,
                                                  std::atomic<bool>* cancel_requested,
                                                  std::function<bool()> wait_while_paused) {
-        (void)cancel_requested;
-        (void)wait_while_paused;
         if (!token.is_valid()) {
             return make_operation_failure<OperationResult>(
                 ArchiveErrorDomain::kInvalidArguments, "Unknown archive session token", 7);
@@ -970,34 +970,50 @@ namespace z7::app {
             session_locks.emplace_back(ArchiveOpenSessionNativeAccess::operation_mutex(*locked_session));
         }
 
-        std::optional<OperationResult> deferred_close_error;
         if (ArchiveOpenSessionNativeAccess::dirty(*session)) {
             if (ArchiveOpenSessionNativeAccess::parent(*session) != nullptr) {
                 auto const& parent = ArchiveOpenSessionNativeAccess::parent(*session);
-                if (ArchiveOpenSessionNativeAccess::parent_generation_at_open(*session)
-                    != ArchiveOpenSessionNativeAccess::generation(*parent)) {
-                    deferred_close_error = make_operation_failure<OperationResult>(
-                        ArchiveErrorDomain::kIo,
-                        "Nested archive changed after this session was opened; stale changes were discarded",
-                        2);
+                if (nested_dirty_policy == NestedDirtyClosePolicy::kPrompt) {
+                    ChoicePrompt prompt;
+                    prompt.kind = ChoicePromptKind::kUpdateModifiedNestedArchive;
+                    prompt.subject_path = ArchiveOpenSessionNativeAccess::entry_path_from_parent(*session);
+                    prompt.title = "7-Zip";
+                    prompt.message = "Update modified nested archive?";
+                    prompt.choices = {"commit", "discard", "cancel"};
+                    prompt.default_index = 0;
+                    ChoiceReply const reply = hooks.ask_choice ? hooks.ask_choice(prompt) : ChoiceReply{};
+                    if (reply.kind != ChoiceReplyKind::kSelect || reply.selected_index == 2) {
+                        return make_operation_canceled<OperationResult>();
+                    }
+                    if (reply.selected_index == 1) {
+                        nested_dirty_policy = NestedDirtyClosePolicy::kDiscard;
+                    } else if (reply.selected_index == 0) {
+                        nested_dirty_policy = NestedDirtyClosePolicy::kCommit;
+                    } else {
+                        return make_operation_canceled<OperationResult>();
+                    }
+                }
+                if (nested_dirty_policy == NestedDirtyClosePolicy::kDiscard) {
                     ArchiveOpenSessionNativeAccess::set_dirty(*session, false);
+                } else if (ArchiveOpenSessionNativeAccess::parent_generation_at_open(*session)
+                           != ArchiveOpenSessionNativeAccess::generation(*parent)) {
+                    return make_operation_failure<OperationResult>(
+                        ArchiveErrorDomain::kIo,
+                        "Nested archive changed after this session was opened; stale changes were preserved",
+                        2);
                 } else if (std::optional<OperationResult> commit_error =
                                commit_archive_session_to_parent(*session, hooks, cancel_requested, wait_while_paused);
                            commit_error.has_value()) {
                     return std::move(*commit_error);
                 }
             } else {
-                if (std::optional<OperationResult> commit_error = commit_archive_session_to_root(*session);
-                    commit_error.has_value()) {
-                    if (commit_error->summary.find("stale") == std::string::npos) {
+                if (nested_dirty_policy == NestedDirtyClosePolicy::kDiscard) {
+                    ArchiveOpenSessionNativeAccess::set_dirty(*session, false);
+                } else {
+                    if (std::optional<OperationResult> commit_error = commit_archive_session_to_root(*session);
+                        commit_error.has_value()) {
                         return std::move(*commit_error);
                     }
-                    deferred_close_error = std::move(*commit_error);
-                    ArchiveOpenSessionNativeAccess::set_dirty(*session, false);
-                    ArchiveOpenSessionState& state = archive_session_state(*session);
-                    state.temp_file.reset();
-                    remove_path_tree(state.temp_dir);
-                    state.temp_dir.clear();
                 }
             }
         }
@@ -1015,9 +1031,6 @@ namespace z7::app {
             registry.sessions_.erase(it);
         }
         dropped.reset();
-        if (deferred_close_error.has_value()) {
-            return std::move(*deferred_close_error);
-        }
         return make_operation_success<OperationResult>("Session closed");
     }
 

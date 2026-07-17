@@ -728,7 +728,7 @@ namespace z7::ui::gui {
                             [index, open_nested](ArchiveTaskAsyncSequencer* sequence,
                                                  z7::app::OperationOutcome const& outcome) {
                                 auto const child_payload =
-                                    z7::app::outcome_payload_as<z7::app::OpenArchiveSessionResult>(outcome);
+                                    z7::app::outcome_payload_as<z7::app::OpenArchiveFromParentResult>(outcome);
                                 if (!child_payload.has_value()
                                     || !child_payload->ok
                                     || !child_payload->token.is_valid()) {

@@ -472,7 +472,7 @@ namespace z7::ui::filemanager {
                     return;
                 }
 
-                auto out_session_result = std::make_shared<std::optional<z7::app::OpenArchiveSessionResult>>();
+                auto out_session_result = std::make_shared<std::optional<z7::app::OpenArchiveFromParentResult>>();
                 QString const child_display_source = plan.reopen_frames[index + 1].virtual_display_source;
                 bool const started = owner->start_task_with_runner(
                     QStringLiteral("%1: %2").arg(

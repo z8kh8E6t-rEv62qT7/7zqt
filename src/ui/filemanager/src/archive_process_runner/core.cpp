@@ -328,6 +328,10 @@ namespace z7::ui::filemanager {
         overwrite_prompt_handler_ = std::move(handler);
     }
 
+    void ArchiveProcessRunner::set_choice_prompt_handler(ChoicePromptHandler handler) {
+        choice_prompt_handler_ = std::move(handler);
+    }
+
     void ArchiveProcessRunner::set_prompt_parent_provider(PromptParentProvider provider) {
         prompt_parent_provider_ = std::move(provider);
     }
@@ -390,6 +394,14 @@ namespace z7::ui::filemanager {
                 pending_session_result_->reset();
             }
         }
+        if (pending_parent_session_result_) {
+            if (auto const session_result =
+                    z7::app::outcome_payload_as<z7::app::OpenArchiveFromParentResult>(outcome)) {
+                *pending_parent_session_result_ = *session_result;
+            } else {
+                pending_parent_session_result_->reset();
+            }
+        }
 
         bool const canceled =
             outcome.status == z7::app::OperationStatus::kCanceled || z7::app::is_operation_canceled(last_result_.error);
@@ -403,6 +415,7 @@ namespace z7::ui::filemanager {
         active_task_ = z7::app::ArchiveSession();
         pending_list_result_.reset();
         pending_session_result_.reset();
+        pending_parent_session_result_.reset();
         active_request_.reset();
         active_targets_.clear();
         retry_next_password_.reset();
@@ -417,7 +430,8 @@ namespace z7::ui::filemanager {
         QStringList const& targets,
         z7::app::ArchiveRequest request,
         std::shared_ptr<std::optional<z7::app::ListResult>> out_list_result,
-        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result) {
+        std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result,
+        std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>> out_parent_session_result) {
         if (running_) {
             return false;
         }
@@ -430,6 +444,7 @@ namespace z7::ui::filemanager {
         active_request_ = std::move(request);
         pending_list_result_ = std::move(out_list_result);
         pending_session_result_ = std::move(out_session_result);
+        pending_parent_session_result_ = std::move(out_parent_session_result);
         z7::ui::runtime_support::apply_configured_large_pages_mode();
 
         return start_active_request_attempt();
@@ -476,7 +491,10 @@ namespace z7::ui::filemanager {
         };
         auto choice_prompt = [this](z7::app::ChoicePrompt const& prompt) -> std::optional<z7::app::ChoiceReply> {
             return z7::ui::archive_support::call_on_target_blocking<z7::app::ChoiceReply>(
-                this, prompt, z7::app::ChoiceReply{}, [](z7::app::ChoicePrompt const& prompt_value) {
+                this, prompt, z7::app::ChoiceReply{}, [this](z7::app::ChoicePrompt const& prompt_value) {
+                    if (choice_prompt_handler_) {
+                        return choice_prompt_handler_(prompt_value);
+                    }
                     return show_default_choice_prompt(prompt_value);
                 });
         };

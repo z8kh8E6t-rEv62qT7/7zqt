@@ -294,7 +294,7 @@ namespace z7::macos_integration::capi_internal {
                 return Z7_MI_STATUS_CANCELED;
             }
             auto const child_payload =
-                z7::app::outcome_payload_as<z7::app::OpenArchiveSessionResult>(open_child_outcome);
+                z7::app::outcome_payload_as<z7::app::OpenArchiveFromParentResult>(open_child_outcome);
             if (!child_payload.has_value() || !child_payload->ok || !child_payload->token.is_valid()) {
                 if (error_message != nullptr) {
                     *error_message = format_nested_error_message(static_cast<size_t>(i + 1),
