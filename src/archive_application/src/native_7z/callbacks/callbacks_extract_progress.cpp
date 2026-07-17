@@ -15,7 +15,7 @@ namespace z7::app {
         snap.completed_bytes = completed_bytes_;
         snap.total_files = total_files_;
         snap.completed_files = completed_files_;
-        snap.error_count = error_count_;
+        snap.error_count = initial_progress_error_count_ + error_count_;
         snap.current_path = current_path_;
         if (ratio_input_size_known_ || ratio_output_size_known_) {
             ProgressRatioInfo ratio;

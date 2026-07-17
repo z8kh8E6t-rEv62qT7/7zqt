@@ -1,16 +1,24 @@
-#include <QCryptographicHash>
-#include <QHash>
-#include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <exception>
-#include <mutex>
 #include <system_error>
 #include <thread>
 #include <utility>
 
 #include "internal.h"
 
+#if !Z7_TASK_IPC_PER_TASK_POSIX
+#include <QCryptographicHash>
+#include <QHash>
+#include <QNativeIpcKey>
+#include <QSharedMemory>
+#include <algorithm>
+#include <mutex>
+#endif
+
 namespace z7::task_ipc_runtime::task_ipc_internal {
+
+#if !Z7_TASK_IPC_PER_TASK_POSIX
     namespace {
 
         constexpr auto kNonPosixOwnerMonitorPollInterval = std::chrono::milliseconds(100);
@@ -211,19 +219,6 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                                              QStringLiteral("%1.%2").arg(session_id).arg(generation));
     }
 
-    QString task_ipc_cancel_semaphore_key_for_shm(QString const& shm_name) {
-        return hashed_task_ipc_semaphore_key(QStringLiteral("z7.taskipc.cancel.shm."), shm_name.trimmed());
-    }
-
-    QString task_ipc_cancel_semaphore_key(TaskIpcClaimedTask const& task) {
-#if defined(Q_OS_MACOS)
-        if (!task.ipc_shm_name.trimmed().isEmpty()) {
-            return task_ipc_cancel_semaphore_key_for_shm(task.ipc_shm_name);
-        }
-#endif
-        return task_ipc_cancel_semaphore_key_for_task(task.session_id, task.generation);
-    }
-
     bool ensure_task_ipc_semaphore_exists(QString const& key, QString* error_message) {
         QSystemSemaphore semaphore{QNativeIpcKey()};
         return initialize_task_ipc_semaphore(&semaphore, key, QSystemSemaphore::Create, error_message);
@@ -314,11 +309,11 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             non_posix_event_notifiers().remove(trimmed_owner);
             waiter_to_stop = non_posix_event_waiters().take(trimmed_owner);
         }
-
         if (waiter_to_stop != nullptr) {
             waiter_to_stop->stop();
         }
     }
+#endif
 
     bool start_task_ipc_cancel_notification_thread(TaskIpcClaimedTask const& task,
                                                    TaskIpcCancelNotifier notifier,
@@ -339,14 +334,62 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             return true;
         }
 
-        QString const semaphore_key = task_ipc_cancel_semaphore_key(task);
-        if (semaphore_key.trimmed().isEmpty()) {
+#if Z7_TASK_IPC_PER_TASK_POSIX
+        std::shared_ptr<PosixTaskIpcMapping> mapping = find_posix_task_mapping(task.session_id, task.generation);
+        if (mapping == nullptr
+            || mapping->raw() == nullptr
+            || mapping->cancel_semaphore() == nullptr
+            || mapping->cancel_semaphore() == SEM_FAILED) {
             if (error_message != nullptr) {
-                *error_message = QStringLiteral("Task IPC cancel semaphore key is empty.");
+                *error_message = QStringLiteral("Task IPC cancel mapping is unavailable.");
             }
             return false;
         }
+        quint32 const initial_state =
+            std::atomic_ref<quint32>(mapping->raw()->slot.state).load(std::memory_order_acquire);
+        if (initial_state == static_cast<quint32>(TaskIpcSlotState::kCompleted)
+            || initial_state == static_cast<quint32>(TaskIpcSlotState::kEmpty)) {
+            return true;
+        }
 
+        try {
+            std::thread([mapping = std::move(mapping), notifier = std::move(notifier)]() mutable {
+                for (;;) {
+                    if (::sem_wait(mapping->cancel_semaphore()) == -1) {
+                        if (errno == EINTR) {
+                            continue;
+                        }
+                        return;
+                    }
+
+                    TaskIpcPerTaskRaw* raw = mapping->raw();
+                    if (raw == nullptr) {
+                        return;
+                    }
+                    quint32 const state = std::atomic_ref<quint32>(raw->slot.state).load(std::memory_order_acquire);
+                    if (state == static_cast<quint32>(TaskIpcSlotState::kCompleted)
+                        || state == static_cast<quint32>(TaskIpcSlotState::kEmpty)) {
+                        return;
+                    }
+                    bool const canceled_local =
+                        std::atomic_ref<quint32>(raw->slot.cancel_requested).load(std::memory_order_acquire) != 0U;
+                    if (canceled_local) {
+                        try {
+                            notifier();
+                        } catch (...) {}
+                        return;
+                    }
+                }
+            }).detach();
+        } catch (std::system_error const& error) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Failed to start task IPC cancel waiter: %1")
+                                     .arg(QString::fromLocal8Bit(error.what()));
+            }
+            return false;
+        }
+#else
+        QString const semaphore_key = task_ipc_cancel_semaphore_key_for_task(task.session_id, task.generation);
         try {
             std::thread([task, semaphore_key, notifier = std::move(notifier)]() mutable {
                 QSystemSemaphore semaphore{QNativeIpcKey()};
@@ -360,14 +403,15 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                     if (!semaphore.acquire()) {
                         return;
                     }
-
                     bool canceled_local = false;
                     QString cancel_error;
                     if (!z7::task_ipc_runtime::query_task_ipc_cancel_requested(task, &canceled_local, &cancel_error)) {
                         return;
                     }
                     if (canceled_local) {
-                        notifier();
+                        try {
+                            notifier();
+                        } catch (...) {}
                         return;
                     }
                 }
@@ -379,6 +423,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             }
             return false;
         }
+#endif
         return true;
     }
 

@@ -21,7 +21,12 @@ namespace z7::ui::gui {
         z7::app::OperationResult result;
         QStringList log_lines;
         QStringList result_messages;
-        bool final_error_displayed = false;
+        // True after a structured recoverable archive-open diagnostic has
+        // been added to the progress result table.
+        bool archive_open_diagnostic_presented = false;
+        // True when the runner has already represented the final failure in a
+        // modal dialog or in the progress dialog's result messages.
+        bool final_error_presented = false;
     };
 
     class GuiTaskRunner {

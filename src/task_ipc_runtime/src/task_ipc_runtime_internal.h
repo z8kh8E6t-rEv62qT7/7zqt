@@ -2,18 +2,24 @@
 
 #include <QByteArray>
 #include <QString>
-#include <QSystemSemaphore>
 #include <QVector>
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
 
-#if defined(Q_OS_MACOS)
-#include <dispatch/dispatch.h>
+#if defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
+#define Z7_TASK_IPC_PER_TASK_POSIX 1
+#else
+#define Z7_TASK_IPC_PER_TASK_POSIX 0
+#endif
+
+#if Z7_TASK_IPC_PER_TASK_POSIX
 #include <semaphore.h>
+#else
+#include <QSystemSemaphore>
 #endif
 
 #include "task_ipc_runtime.h"
@@ -86,14 +92,17 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
     inline constexpr int kTaskIpcRequestPoolPayloadOffset =
         ((static_cast<int>(sizeof(TaskIpcRequestPoolHeaderRaw)) + 63) / 64) * 64;
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
+    inline constexpr quint16 kTaskIpcPerTaskVersion = 1;
     inline constexpr int kTaskIpcPerTaskPayloadCapacity = 1 * 1024 * 1024;
+    inline constexpr int kTaskIpcPosixNameCapacity = 64;
 
     struct alignas(64) TaskIpcPerTaskRaw {
         RobustLockRaw lock{};
         quint32 magic = 0;
         quint16 version = 0;
         quint16 reserved = 0;
+        char cancel_semaphore_name[kTaskIpcPosixNameCapacity]{};
         TaskIpcSlotRaw slot{};
         char payload[kTaskIpcPerTaskPayloadCapacity]{};
     };
@@ -153,7 +162,6 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                                                                   QString const& busy_message,
                                                                   QString* error_message);
     QString task_ipc_bootstrap_lock_wake_key();
-    QString task_ipc_per_task_lock_wake_key(QString const& shm_name);
     QString read_fixed_utf8(char const* bytes, int capacity);
     void write_fixed_utf8(QString const& value, char* out, int capacity);
     bool validate_task_ipc_owner_instance_id(QString const& owner_instance_id,
@@ -179,6 +187,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                                            qint64 now_msecs_value);
     bool publish_task_ipc_unclaimed_timeout_completion(TaskIpcSlotRaw* slot, qint64 now_msecs_value);
     bool publish_task_ipc_worker_exit_completion(TaskIpcSlotRaw* slot, qint64 now_msecs_value);
+    bool publish_task_ipc_observed_worker_exit_completion(TaskIpcSlotRaw* slot, qint64 now_msecs_value);
     bool slot_has_pending_task_ipc_events(TaskIpcSlotRaw const& slot);
     quint32 next_pending_task_ipc_event_sequence(TaskIpcSlotRaw const& slot);
     void reclaim_stale_slots(TaskIpcBootstrapRaw* raw, qint64 now_msecs_value);
@@ -204,21 +213,42 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                                         quint32 payload_size,
                                         TaskIpcPayload* out_payload,
                                         QString* error_message);
+#if !Z7_TASK_IPC_PER_TASK_POSIX
     QString non_posix_task_ipc_event_semaphore_key(QString const& owner_instance_id);
     QString task_ipc_cancel_semaphore_key_for_task(quint64 session_id, quint32 generation);
-    QString task_ipc_cancel_semaphore_key_for_shm(QString const& shm_name);
-    QString task_ipc_cancel_semaphore_key(TaskIpcClaimedTask const& task);
     bool ensure_task_ipc_semaphore_exists(QString const& key, QString* error_message);
     bool post_task_ipc_semaphore(QString const& key, QString* error_message);
     bool set_non_posix_event_notifier(QString const& owner_instance_id,
                                       TaskIpcEventNotifier notifier,
                                       QString* error_message);
     void clear_non_posix_event_notifier(QString const& owner_instance_id);
+#endif
     bool start_task_ipc_cancel_notification_thread(TaskIpcClaimedTask const& task,
                                                    TaskIpcCancelNotifier notifier,
                                                    QString* error_message);
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
+    class PosixTaskIpcPlatformMonitor {
+    public:
+        virtual ~PosixTaskIpcPlatformMonitor() = default;
+
+        virtual bool
+        start_unclaimed_timer(qint64 timeout_msecs, std::function<void()> callback, QString* error_message) = 0;
+        virtual bool
+        start_worker_exit_monitor(qint64 worker_pid, std::function<void()> callback, QString* error_message) = 0;
+        virtual void stop_unclaimed_timer() = 0;
+        virtual void stop_worker_exit_monitor() = 0;
+    };
+
+    std::unique_ptr<PosixTaskIpcPlatformMonitor> create_posix_task_ipc_platform_monitor();
+    bool preflight_posix_task_ipc_platform(QString* error_message);
+
+#if defined(Q_OS_LINUX)
+    using LinuxPidfdOpenOverride = std::function<int(qint64)>;
+    void set_linux_pidfd_open_override_for_test(LinuxPidfdOpenOverride override_function);
+    void clear_linux_pidfd_open_override_for_test();
+#endif
+
     class PosixTaskIpcMapping {
     public:
         ~PosixTaskIpcMapping();
@@ -237,61 +267,58 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         open_worker(QString const& shm_name, QString const& sem_name, QString* error_message);
 
         TaskIpcPerTaskRaw* raw() const;
-        sem_t* semaphore() const;
+        sem_t* event_semaphore() const;
+        sem_t* cancel_semaphore() const;
         QString shm_name() const;
         QString sem_name() const;
+        QString cancel_sem_name() const;
         bool start_owner_waiter(QString* error_message);
         bool start_unclaimed_timer(QString* error_message);
         bool start_worker_exit_monitor(QString* error_message);
         void stop_unclaimed_timer();
         void stop_worker_exit_monitor();
+        void unlink_names_after_claim();
         void enable_owner_notification_delivery();
 
     private:
         PosixTaskIpcMapping(QString shm_name,
                             QString sem_name,
+                            QString cancel_sem_name,
                             int fd,
                             void* mapping,
-                            sem_t* semaphore,
+                            sem_t* event_semaphore,
+                            sem_t* cancel_semaphore,
                             QString owner_instance_id,
                             bool unlink_on_destroy);
         void stop_owner_waiter();
         void notify_owner_or_defer();
-        static void unclaimed_timer_event_handler(void* context);
-        static void unclaimed_timer_cancel_handler(void* context);
-        static void worker_exit_event_handler(void* context);
-        static void worker_exit_cancel_handler(void* context);
         void handle_unclaimed_timer_event();
-        void handle_unclaimed_timer_cancel();
         void handle_worker_exit_event();
-        void handle_worker_exit_cancel();
         void owner_wait_loop();
+        void unlink_owned_names();
 
         QString shm_name_;
         QString sem_name_;
+        QString cancel_sem_name_;
         QString owner_instance_id_;
         int fd_ = -1;
         void* mapping_ = nullptr;
-        sem_t* semaphore_ = SEM_FAILED;
+        sem_t* event_semaphore_ = SEM_FAILED;
+        sem_t* cancel_semaphore_ = SEM_FAILED;
         bool unlink_on_destroy_ = false;
         bool waiter_started_ = false;
-        bool semaphore_closed_ = false;
         bool shm_unlinked_ = false;
         bool sem_unlinked_ = false;
-        dispatch_source_t unclaimed_timer_source_ = nullptr;
-        std::mutex unclaimed_timer_source_mutex_;
-        std::condition_variable unclaimed_timer_source_cv_;
-        bool unclaimed_timer_source_cancel_complete_ = false;
-        dispatch_source_t worker_exit_source_ = nullptr;
-        std::mutex worker_exit_source_mutex_;
-        std::condition_variable worker_exit_source_cv_;
-        bool worker_exit_source_cancel_complete_ = false;
+        bool cancel_sem_unlinked_ = false;
+        std::mutex unlink_mutex_;
         std::mutex owner_notification_mutex_;
         bool owner_notification_delivery_enabled_ = false;
         bool pending_owner_notification_ = false;
         std::atomic_bool stop_waiter_{false};
         std::thread waiter_thread_;
-        std::unique_ptr<QSystemSemaphore> cancel_semaphore_owner_;
+        std::unique_ptr<PosixTaskIpcPlatformMonitor> platform_monitor_;
+        std::mutex unclaimed_stop_mutex_;
+        std::mutex worker_stop_mutex_;
     };
 
     quint64 next_posix_task_session_id();
@@ -304,6 +331,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
     QString posix_worker_shm_name();
     QString posix_worker_sem_name();
     bool post_posix_task_notification(PosixTaskIpcMapping* mapping, QString* error_message);
+    bool post_posix_task_cancel_notification(PosixTaskIpcMapping* mapping, QString* error_message);
     void set_posix_event_notifier(QString const& owner_instance_id, TaskIpcEventNotifier notifier);
     void clear_posix_event_notifier(QString const& owner_instance_id);
     TaskIpcEventNotifier posix_event_notifier_for_owner(QString const& owner_instance_id);

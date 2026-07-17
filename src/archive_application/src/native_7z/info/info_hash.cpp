@@ -207,7 +207,9 @@ namespace z7::app {
                                                               std::string const& main_name,
                                                               std::string const& archive_display_path,
                                                               std::string const& password,
-                                                              OpenArchiveDiagnostics const* open_diagnostics) {
+                                                              OpenArchiveDiagnostics const* open_diagnostics,
+                                                              ReadOperationOpenDiagnosticState const&
+                                                                  open_diagnostic_state) {
         if (arc == nullptr || arc->Archive == nullptr) {
             return make_operation_failure<HashResult>(
                 ArchiveErrorDomain::kInvalidArguments, "Archive hash requires an open archive", 7);
@@ -215,7 +217,15 @@ namespace z7::app {
 
         uint64_t const total_files = hash_entry_file_count(entries);
         uint64_t const total_bytes = hash_entry_total_bytes(entries);
-        emit_hash_progress(hooks, "Hashing", true, total_bytes, 0, total_files, 0, 0, {});
+        emit_hash_progress(hooks,
+                           "Hashing",
+                           true,
+                           total_bytes,
+                           0,
+                           total_files,
+                           0,
+                           open_diagnostic_state.progress_error_count,
+                           {});
 
         CHashBundle bundle;
         if (std::optional<HashResult> configure_error = configure_hash_bundle(request, main_name, bundle);
@@ -244,7 +254,9 @@ namespace z7::app {
             total_files,
             0,
             false,
-            password);
+            password,
+            open_diagnostic_state.progress_error_count,
+            open_diagnostic_state.archive_context_reported);
         callback->set_hash_bundle(&bundle);
 
         ExtractInvocationStatus const status = invoke_archive_extract_with_callback(

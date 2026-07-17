@@ -13,10 +13,17 @@ namespace z7::app {
                                                       HRESULT result) {
         OpenArchiveDiagnostics const diagnostics =
             collect_open_archive_diagnostics(codecs, archive_link, name, result);
-        if (open_result_message_policy_ == OpenResultMessagePolicy::kOperationMessages
+        if (open_result_message_policy_ != OpenResultMessagePolicy::kSilentBrowse
             && !diagnostics.operation_message.empty()) {
-            emit_log_event(
-                hooks_, OperationStage::kRunning, OutputChannel::kStdErr, diagnostics.operation_message);
+            bool const recoverable_read_diagnostic =
+                open_result_message_policy_ == OpenResultMessagePolicy::kReadOperationMessages
+                && result == S_OK && !archive_link.Arcs.IsEmpty();
+            emit_log_event(hooks_,
+                           OperationStage::kRunning,
+                           OutputChannel::kStdErr,
+                           diagnostics.operation_message,
+                           recoverable_read_diagnostic ? OperationMessageKind::kArchiveOpenDiagnostic
+                                                       : OperationMessageKind::kGeneral);
         }
         if (!diagnostics.has_errors()) {
             return S_OK;

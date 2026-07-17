@@ -4,6 +4,8 @@ add_library(z7_task_ipc_runtime STATIC
   src/core/constants.cpp
   src/core/notifiers.cpp
   src/core/posix.cpp
+  src/core/posix_monitor_linux.cpp
+  src/core/posix_monitor_macos.cpp
   src/core/shared_memory.cpp
   src/core/slots.cpp
   src/task_ipc_runtime_internal.h

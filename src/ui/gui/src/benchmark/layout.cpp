@@ -62,6 +62,7 @@ namespace z7::ui::gui {
                 event.kind = z7::app::OperationEventKind::kLog;
                 event.stage = log.stage;
                 event.output_channel = log.channel;
+                event.message_kind = log.message_kind;
                 event.message = log.message;
                 event.benchmark_snapshot = log.benchmark_snapshot;
                 event.benchmark_summary = log.benchmark_summary;

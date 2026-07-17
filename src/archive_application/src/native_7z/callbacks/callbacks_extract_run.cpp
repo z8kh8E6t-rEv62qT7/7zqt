@@ -28,7 +28,9 @@ namespace z7::app {
                                                  std::shared_ptr<ExtractBudgetTracker> budget_tracker,
                                                  uint64_t configured_memory_limit_bytes,
                                                  bool configured_memory_limit_defined,
-                                                 std::string archive_metadata_source_path) :
+                                                 std::string archive_metadata_source_path,
+                                                 uint64_t initial_progress_error_count,
+                                                 bool archive_context_already_reported) :
         CallbackBase(cancel_requested, std::move(wait_while_paused)),
         arc_(arc),
         archive_(arc != nullptr ? arc->Archive : nullptr),
@@ -48,6 +50,8 @@ namespace z7::app {
         configured_memory_limit_bytes_(configured_memory_limit_bytes),
         configured_memory_limit_defined_(configured_memory_limit_defined && configured_memory_limit_bytes != 0),
         total_files_(total_files),
+        initial_progress_error_count_(initial_progress_error_count),
+        archive_error_path_reported_(archive_context_already_reported),
         budget_tracker_(budget_tracker != nullptr ? std::move(budget_tracker)
                                                   : std::make_shared<ExtractBudgetTracker>(std::move(budget))) {
         password_defined_ = !password_.empty();

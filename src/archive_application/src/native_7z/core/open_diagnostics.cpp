@@ -298,4 +298,25 @@ namespace z7::app {
         result.summary = describe_archive_error(result.error);
     }
 
+    ReadOperationOpenDiagnosticState publish_read_operation_open_diagnostics(
+        ArchiveBackendHooks const& hooks,
+        OpenArchiveDiagnostics const* diagnostics,
+        bool already_published) {
+        ReadOperationOpenDiagnosticState state;
+        if (diagnostics == nullptr || diagnostics->operation_message.empty()) {
+            return state;
+        }
+
+        state.progress_error_count = diagnostics->error_count;
+        state.archive_context_reported = true;
+        if (!already_published) {
+            emit_log_event(hooks,
+                           OperationStage::kRunning,
+                           OutputChannel::kStdErr,
+                           diagnostics->operation_message,
+                           OperationMessageKind::kArchiveOpenDiagnostic);
+        }
+        return state;
+    }
+
 } // namespace z7::app

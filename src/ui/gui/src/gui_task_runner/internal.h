@@ -17,6 +17,7 @@ namespace z7::ui::gui {
         QString title;
         bool test_mode = false;
         bool hash_mode = false;
+        QString redundant_test_archive_context;
         QWidget* parent = nullptr;
         z7::ui::runtime_support::TaskProgressDialogBase* dialog = nullptr;
         SharedTaskCancellation cancel_requested;

@@ -82,6 +82,7 @@ namespace z7::ui::filemanager {
                         set_current_directory(parent_path);
                     }
                 };
+                archive_options.open_failure_fallback_policy = OpenFailureFallbackPolicy::kAnyFailure;
             }
             open_archive_inside(target_file, std::move(archive_options));
         };

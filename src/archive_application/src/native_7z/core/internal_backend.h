@@ -287,11 +287,12 @@ namespace z7::app {
         HashResult run_hash_archive_entries(HashRequest const& request,
                                             ArchiveBackendHooks const& hooks,
                                             CArc const* arc,
-                                             std::vector<HashInputEntry> const& entries,
-                                             std::string const& main_name,
-                                             std::string const& archive_display_path,
-                                             std::string const& password,
-                                             OpenArchiveDiagnostics const* open_diagnostics = nullptr);
+                                            std::vector<HashInputEntry> const& entries,
+                                            std::string const& main_name,
+                                            std::string const& archive_display_path,
+                                            std::string const& password,
+                                            OpenArchiveDiagnostics const* open_diagnostics,
+                                            ReadOperationOpenDiagnosticState const& open_diagnostic_state);
 
         std::atomic<bool> cancel_requested_{false};
         std::atomic<bool> hashing_active_{false};

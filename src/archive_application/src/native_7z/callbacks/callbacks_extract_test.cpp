@@ -71,7 +71,9 @@ namespace z7::app {
                                                          uint64_t total_files,
                                                          uint64_t configured_memory_limit_bytes,
                                                          bool configured_memory_limit_defined,
-                                                         std::string initial_password) :
+                                                         std::string initial_password,
+                                                         uint64_t initial_progress_error_count,
+                                                         bool archive_context_already_reported) :
         CallbackBase(cancel_requested, std::move(wait_while_paused)),
         arc_(arc),
         archive_(arc != nullptr ? arc->Archive : nullptr),
@@ -80,8 +82,10 @@ namespace z7::app {
         configured_memory_limit_bytes_(configured_memory_limit_bytes),
         configured_memory_limit_defined_(configured_memory_limit_defined && configured_memory_limit_bytes != 0),
         total_files_(total_files),
+        initial_progress_error_count_(initial_progress_error_count),
         password_(std::move(initial_password)),
-        password_defined_(!password_.empty()) {}
+        password_defined_(!password_.empty()),
+        archive_error_path_reported_(archive_context_already_reported) {}
 
     void NativeTestExtractCallback::set_hash_bundle(CHashBundle* hash_bundle) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -471,7 +475,7 @@ namespace z7::app {
         snap.completed_bytes = completed_bytes_;
         snap.total_files = total_files_;
         snap.completed_files = completed_files_;
-        snap.error_count = error_count_;
+        snap.error_count = initial_progress_error_count_ + error_count_;
         snap.current_path = current_path_;
         if (ratio_input_size_known_ || ratio_output_size_known_) {
             ProgressRatioInfo ratio;

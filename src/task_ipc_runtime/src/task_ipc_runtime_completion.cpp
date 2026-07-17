@@ -6,6 +6,7 @@
 namespace z7::task_ipc_runtime {
     namespace {
 
+#if Z7_TASK_IPC_PER_TASK_POSIX
         TaskIpcPayload decode_posix_payload(task_ipc_internal::TaskIpcPerTaskRaw const& raw) {
             using namespace task_ipc_internal;
 
@@ -17,8 +18,7 @@ namespace z7::task_ipc_runtime {
             }
             return payload;
         }
-
-#if !defined(Q_OS_MACOS)
+#else
         TaskIpcPayload decode_non_posix_payload(QSharedMemory* request_pool_memory,
                                                 task_ipc_internal::TaskIpcRequestPoolHeaderRaw* request_pool,
                                                 task_ipc_internal::TaskIpcSlotRaw const& slot) {
@@ -100,12 +100,14 @@ namespace z7::task_ipc_runtime {
             return true;
         }
 
-#if defined(Q_OS_MACOS)
-        std::shared_ptr<PosixTaskIpcMapping> mapping =
-            PosixTaskIpcMapping::open_worker(task.ipc_shm_name, task.ipc_sem_name, error_message);
+#if Z7_TASK_IPC_PER_TASK_POSIX
+        std::shared_ptr<PosixTaskIpcMapping> mapping = find_posix_task_mapping(task.session_id, task.generation);
         if (mapping == nullptr || mapping->raw() == nullptr) {
             if (task.launcher_pid > 0 && !process_is_alive(task.launcher_pid)) {
                 return true;
+            }
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Task IPC claimed mapping is no longer registered.");
             }
             return false;
         }
@@ -114,7 +116,7 @@ namespace z7::task_ipc_runtime {
             TaskIpcPerTaskRaw* raw = mapping->raw();
             std::unique_ptr<SharedMemoryLock> lock =
                 wait_for_shared_memory_lock(&raw->lock,
-                                            task_ipc_per_task_lock_wake_key(mapping->shm_name()),
+                                            QString(),
                                             kCompletionPublishWaitMsecs,
                                             QStringLiteral("Task IPC task remained busy while publishing completion."),
                                             error_message);
@@ -135,6 +137,7 @@ namespace z7::task_ipc_runtime {
             }
             static_cast<void>(publish_task_ipc_completion_event(&slot, result_code, summary, now_msecs()));
         }
+        post_posix_task_cancel_notification(mapping.get(), nullptr);
         return post_posix_task_notification(mapping.get(), error_message);
 #else
         std::shared_ptr<QSharedMemory> bootstrap_memory;
@@ -194,10 +197,12 @@ namespace z7::task_ipc_runtime {
             return false;
         }
 
-#if defined(Q_OS_MACOS)
-        std::shared_ptr<PosixTaskIpcMapping> mapping =
-            PosixTaskIpcMapping::open_worker(task.ipc_shm_name, task.ipc_sem_name, error_message);
+#if Z7_TASK_IPC_PER_TASK_POSIX
+        std::shared_ptr<PosixTaskIpcMapping> mapping = find_posix_task_mapping(task.session_id, task.generation);
         if (mapping == nullptr || mapping->raw() == nullptr) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Task IPC claimed mapping is no longer registered.");
+            }
             return false;
         }
 
@@ -215,6 +220,7 @@ namespace z7::task_ipc_runtime {
         updated.store(now_msecs(), std::memory_order_release);
         published_event_sequence.store(kTaskIpcCompletedEventSequence, std::memory_order_release);
         state.store(static_cast<quint32>(TaskIpcSlotState::kCompleted), std::memory_order_release);
+        post_posix_task_cancel_notification(mapping.get(), nullptr);
         return post_posix_task_notification(mapping.get(), error_message);
 #else
         std::shared_ptr<QSharedMemory> bootstrap_memory;
@@ -268,14 +274,14 @@ namespace z7::task_ipc_runtime {
             return false;
         }
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         QVector<std::shared_ptr<PosixTaskIpcMapping>> const mappings = posix_task_mappings_snapshot();
         for (std::shared_ptr<PosixTaskIpcMapping> const& mapping : mappings) {
             if (mapping == nullptr || mapping->raw() == nullptr) {
                 continue;
             }
             TaskIpcPerTaskRaw* raw = mapping->raw();
-            SharedMemoryLock lock(&raw->lock, task_ipc_per_task_lock_wake_key(mapping->shm_name()));
+            SharedMemoryLock lock(&raw->lock);
             if (!lock.ok()) {
                 if (lock.busy()) {
                     continue;
@@ -373,7 +379,7 @@ namespace z7::task_ipc_runtime {
             return false;
         }
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         std::shared_ptr<PosixTaskIpcMapping> mapping = find_posix_task_mapping(event.session_id, event.generation);
         if (mapping == nullptr || mapping->raw() == nullptr) {
             return true;
@@ -382,7 +388,7 @@ namespace z7::task_ipc_runtime {
         bool should_remove_mapping = false;
         TaskIpcPerTaskRaw* raw = mapping->raw();
         {
-            SharedMemoryLock lock(&raw->lock, task_ipc_per_task_lock_wake_key(mapping->shm_name()));
+            SharedMemoryLock lock(&raw->lock);
             if (!lock.ok()) {
                 if (error_message != nullptr) {
                     *error_message = lock.busy() ? QStringLiteral("Task IPC task is busy.") : lock.error();

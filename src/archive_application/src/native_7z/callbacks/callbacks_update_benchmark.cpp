@@ -203,7 +203,13 @@ namespace z7::app {
         BenchmarkTypedSnapshot snapshot;
         snapshot.kind = BenchmarkSnapshotKind::kFrequency;
         snapshot.frequency_line = line;
-        emit_log_event(hooks_, OperationStage::kRunning, OutputChannel::kNone, line, snapshot, std::nullopt);
+        emit_log_event(hooks_,
+                       OperationStage::kRunning,
+                       OutputChannel::kNone,
+                       line,
+                       OperationMessageKind::kGeneral,
+                       snapshot,
+                       std::nullopt);
     }
 
     HRESULT NativeBenchFreqCallback::AddCpuFreq(unsigned num_threads, UInt64 freq, UInt64 usage) {
@@ -304,7 +310,13 @@ namespace z7::app {
             }
         }
 
-        emit_log_event(hooks_, OperationStage::kRunning, OutputChannel::kNone, line, typed_snapshot, typed_summary);
+        emit_log_event(hooks_,
+                       OperationStage::kRunning,
+                       OutputChannel::kNone,
+                       line,
+                       OperationMessageKind::kGeneral,
+                       typed_snapshot,
+                       typed_summary);
         if (typed_snapshot.has_value() || typed_summary.has_value()) {
             int percent = -1;
             if (typed_snapshot.has_value() && typed_snapshot->kind == BenchmarkSnapshotKind::kTotalRating) {

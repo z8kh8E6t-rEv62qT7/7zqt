@@ -122,9 +122,15 @@ void open_archive_file_inside_for_panel(int panel_index,
                                         QString const& archive_type_hint,
                                         std::optional<uint32_t> archive_index = std::nullopt);
 
+enum class OpenFailureFallbackPolicy {
+    kAnyFailure,
+    kUnsupportedFormatOnly
+};
+
 struct OpenArchiveInsideOptions {
     QString archive_type_hint;
     std::function<void()> open_failure_fallback;
+    OpenFailureFallbackPolicy open_failure_fallback_policy = OpenFailureFallbackPolicy::kAnyFailure;
     std::function<void(bool)> finished_cb;
     RunnerTaskUiMode task_ui_mode = RunnerTaskUiMode::kSilent;
 };

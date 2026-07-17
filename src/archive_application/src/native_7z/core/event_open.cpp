@@ -118,7 +118,7 @@ namespace z7::app {
         bool const capture_password_state =
             out_password_requested != nullptr || out_wrong_password != nullptr || out_password != nullptr;
         std::unique_ptr<NativeUpdateOperationCallback> open_callback;
-        if (message_policy == OpenResultMessagePolicy::kOperationMessages || capture_password_state
+        if (message_policy != OpenResultMessagePolicy::kSilentBrowse || capture_password_state
             || allow_password_prompt) {
             ArchiveBackendHooks callback_hooks = hooks;
             if (!allow_password_prompt) {
@@ -243,7 +243,7 @@ namespace z7::app {
         bool const capture_password_state =
             out_password_requested != nullptr || out_wrong_password != nullptr || out_password != nullptr;
         std::unique_ptr<NativeUpdateOperationCallback> open_callback;
-        if (message_policy == OpenResultMessagePolicy::kOperationMessages || capture_password_state
+        if (message_policy != OpenResultMessagePolicy::kSilentBrowse || capture_password_state
             || allow_password_prompt) {
             ArchiveBackendHooks callback_hooks = hooks;
             if (!allow_password_prompt) {

@@ -95,7 +95,7 @@ namespace z7::ui::filemanager {
                 !force_internal && try_external && should_always_start_externally(info.absoluteFilePath());
             if (!prefer_external) {
                 std::function<void()> failure_fallback;
-                if (!force_internal && try_external) {
+                if (!force_internal && try_external && !is_archive_file(info.absoluteFilePath())) {
                     QString const fallback_path = info.absoluteFilePath();
                     failure_fallback = [this, fallback_path]() {
                         open_path_externally_untracked(fallback_path);
@@ -104,6 +104,7 @@ namespace z7::ui::filemanager {
                 OpenArchiveInsideOptions options;
                 options.archive_type_hint = archive_type_hint;
                 options.open_failure_fallback = std::move(failure_fallback);
+                options.open_failure_fallback_policy = OpenFailureFallbackPolicy::kUnsupportedFormatOnly;
                 open_archive_inside_for_panel(active_panel_index_, info.absoluteFilePath(), std::move(options));
                 return;
             }

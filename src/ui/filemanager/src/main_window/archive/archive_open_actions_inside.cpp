@@ -148,8 +148,19 @@ namespace z7::ui::filemanager {
     void MainWindow::open_archive_inside_for_panel(int panel_index,
                                                    QString const& archive_path,
                                                    OpenArchiveInsideOptions options) {
-        auto finish_failed = [options]() {
-            if (options.open_failure_fallback) {
+        auto const failure_matches_fallback_policy =
+            [policy = options.open_failure_fallback_policy](z7::app::ArchiveErrorDomain error_domain) {
+                switch (policy) {
+                case OpenFailureFallbackPolicy::kAnyFailure:
+                    return true;
+                case OpenFailureFallbackPolicy::kUnsupportedFormatOnly:
+                    return error_domain == z7::app::ArchiveErrorDomain::kUnsupportedFormat;
+                }
+                return false;
+            };
+        auto const finish_failed = [options, failure_matches_fallback_policy](
+                                       z7::app::ArchiveErrorDomain error_domain) {
+            if (options.open_failure_fallback && failure_matches_fallback_policy(error_domain)) {
                 options.open_failure_fallback();
             }
             if (options.finished_cb) {
@@ -161,7 +172,7 @@ namespace z7::ui::filemanager {
         if (!archive_info.exists() || !archive_info.isFile()) {
             QMessageBox::warning(
                 this, z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(541)), archive_path);
-            finish_failed();
+            finish_failed(z7::app::ArchiveErrorDomain::kIo);
             return;
         }
 
@@ -169,18 +180,15 @@ namespace z7::ui::filemanager {
         QString const origin_dir = archive_info.absolutePath();
         QString const type_hint = options.archive_type_hint.trimmed();
         if (in_archive_view_for_panel(panel_index)) {
-            close_archive_view_for_panel(panel_index, [this, panel_index, source_archive, options](bool ok) mutable {
-                if (!ok) {
-                    if (options.open_failure_fallback) {
-                        options.open_failure_fallback();
+            close_archive_view_for_panel(
+                panel_index,
+                [this, panel_index, source_archive, options, finish_failed](bool ok) mutable {
+                    if (!ok) {
+                        finish_failed(z7::app::ArchiveErrorDomain::kUnknown);
+                        return;
                     }
-                    if (options.finished_cb) {
-                        options.finished_cb(false);
-                    }
-                    return;
-                }
-                open_archive_inside_for_panel(panel_index, source_archive, std::move(options));
-            });
+                    open_archive_inside_for_panel(panel_index, source_archive, std::move(options));
+                });
             return;
         }
         auto out_session_result = std::make_shared<std::optional<z7::app::OpenArchiveSessionResult>>();
@@ -192,30 +200,22 @@ namespace z7::ui::filemanager {
             [source_archive, type_hint, out_session_result](ArchiveProcessRunner* runner) {
                 return runner != nullptr && runner->start_open_from_path(source_archive, type_hint, out_session_result);
             },
-            [this, panel_index, source_archive, origin_dir, type_hint, out_session_result, options](
-                bool ok, int, int, QString const&, z7::app::OperationOutcome const&) {
+            [this, panel_index, source_archive, origin_dir, type_hint, out_session_result, options, finish_failed](
+                bool ok, int, int error_domain, QString const&, z7::app::OperationOutcome const&) {
                 if (!ok) {
-                    if (options.open_failure_fallback) {
-                        options.open_failure_fallback();
-                    }
-                    if (options.finished_cb) {
-                        options.finished_cb(false);
-                    }
+                    finish_failed(static_cast<z7::app::ArchiveErrorDomain>(error_domain));
                     return;
                 }
                 if (out_session_result == nullptr
                     || !out_session_result->has_value()
                     || !out_session_result->value().token.is_valid()) {
-                    if (options.open_failure_fallback) {
-                        options.open_failure_fallback();
-                    }
-                    if (options.finished_cb) {
-                        options.finished_cb(false);
-                    }
+                    finish_failed(z7::app::ArchiveErrorDomain::kUnknown);
                     return;
                 }
 
                 z7::app::ArchiveSessionToken const session_token = out_session_result->value().token;
+                auto const list_failure_domain = std::make_shared<z7::app::ArchiveErrorDomain>(
+                    z7::app::ArchiveErrorDomain::kUnknown);
                 bool const started = load_archive_virtual_directory_for_panel(
                     panel_index,
                     source_archive,
@@ -223,15 +223,10 @@ namespace z7::ui::filemanager {
                     origin_dir,
                     type_hint,
                     true,
-                    [this, panel_index, session_token, options](bool loaded) {
+                    [this, panel_index, session_token, options, finish_failed, list_failure_domain](bool loaded) {
                         if (!loaded) {
                             close_archive_sessions_async(QVector<z7::app::ArchiveSessionToken>{session_token});
-                            if (options.open_failure_fallback) {
-                                options.open_failure_fallback();
-                            }
-                            if (options.finished_cb) {
-                                options.finished_cb(false);
-                            }
+                            finish_failed(*list_failure_domain);
                             return;
                         }
                         panel_controller(panel_index).archive.archive_entry_from_parent.clear();
@@ -242,7 +237,9 @@ namespace z7::ui::filemanager {
                         }
                     },
                     false,
-                    {},
+                    [list_failure_domain](int error_domain, QString const&) {
+                        *list_failure_domain = static_cast<z7::app::ArchiveErrorDomain>(error_domain);
+                    },
                     session_token,
                     source_archive,
                     options.task_ui_mode);
@@ -252,10 +249,14 @@ namespace z7::ui::filemanager {
             },
             options.task_ui_mode,
             options.open_failure_fallback
-                ? std::function<bool(int, QString const&)>([](int, QString const&) { return false; })
+                ? std::function<bool(int, QString const&)>(
+                      [failure_matches_fallback_policy](int error_domain, QString const&) {
+                          return !failure_matches_fallback_policy(
+                              static_cast<z7::app::ArchiveErrorDomain>(error_domain));
+                      })
                 : std::function<bool(int, QString const&)>());
         if (!started) {
-            finish_failed();
+            finish_failed(z7::app::ArchiveErrorDomain::kBackendUnavailable);
         }
     }
 

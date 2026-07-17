@@ -1,6 +1,6 @@
 #include "internal.h"
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
 
 #include <QCoreApplication>
 #include <QHash>
@@ -12,11 +12,10 @@
 #include <exception>
 #include <fcntl.h>
 #include <mutex>
-#include <semaphore.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <system_error>
 #include <thread>
-#include <time.h>
 #include <unistd.h>
 #include <utility>
 
@@ -58,8 +57,8 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             return notifiers;
         }
 
-        QString posix_errno_message(QString const& operation) {
-            return QStringLiteral("%1 failed: %2").arg(operation, QString::fromLocal8Bit(std::strerror(errno)));
+        QString posix_errno_message(QString const& operation, int error_number = errno) {
+            return QStringLiteral("%1 failed: %2").arg(operation, QString::fromLocal8Bit(std::strerror(error_number)));
         }
 
         QString short_posix_suffix() {
@@ -72,47 +71,57 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             return name.toUtf8();
         }
 
-        bool cleanup_posix_unlink(QString const& operation,
-                                  QByteArray const& name,
-                                  QString const& display_name,
-                                  int (*unlink_fn)(char const*)) {
-            Q_UNUSED(operation);
-            Q_UNUSED(display_name);
+        bool valid_posix_name(QString const& name) {
+            QByteArray const encoded = posix_name_bytes(name.trimmed());
+            if (encoded.size() < 2 || encoded.size() >= kTaskIpcPosixNameCapacity || encoded.front() != '/') {
+                return false;
+            }
+            return encoded.indexOf('/', 1) == -1 && encoded.indexOf('\0') == -1;
+        }
+
+        bool cleanup_posix_unlink(QByteArray const& name, int (*unlink_fn)(char const*)) {
             if (name.isEmpty()) {
                 return true;
             }
             if (unlink_fn(name.constData()) == 0) {
                 return true;
             }
-            int const error_number = errno;
-            if (error_number == ENOENT) {
-                return true;
-            }
-            return false;
+            return errno == ENOENT;
         }
 
-        void cleanup_posix_munmap(void* mapping, QString const& display_name) {
-            Q_UNUSED(display_name);
-            if (mapping == nullptr || mapping == MAP_FAILED) {
-                return;
+        void cleanup_posix_munmap(void* mapping) {
+            if (mapping != nullptr && mapping != MAP_FAILED) {
+                ::munmap(mapping, sizeof(TaskIpcPerTaskRaw));
             }
-            ::munmap(mapping, sizeof(TaskIpcPerTaskRaw));
         }
 
-        void cleanup_posix_close(int fd, QString const& display_name) {
-            Q_UNUSED(display_name);
-            if (fd == -1) {
-                return;
+        void cleanup_posix_close(int fd) {
+            if (fd != -1) {
+                ::close(fd);
             }
-            ::close(fd);
         }
 
-        void cleanup_posix_sem_close(sem_t* semaphore, QString const& display_name) {
-            Q_UNUSED(display_name);
-            if (semaphore == nullptr || semaphore == SEM_FAILED) {
-                return;
+        void cleanup_posix_sem_close(sem_t* semaphore) {
+            if (semaphore != nullptr && semaphore != SEM_FAILED) {
+                ::sem_close(semaphore);
             }
-            ::sem_close(semaphore);
+        }
+
+        bool mapped_file_is_large_enough(int fd, QString* error_message) {
+            struct stat status{};
+            if (::fstat(fd, &status) == -1) {
+                if (error_message != nullptr) {
+                    *error_message = posix_errno_message(QStringLiteral("fstat"));
+                }
+                return false;
+            }
+            if (status.st_size < static_cast<off_t>(sizeof(TaskIpcPerTaskRaw))) {
+                if (error_message != nullptr) {
+                    *error_message = QStringLiteral("Task IPC per-task shared memory is truncated.");
+                }
+                return false;
+            }
+            return true;
         }
 
         class PosixEventDispatcher {
@@ -201,46 +210,38 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
 
     PosixTaskIpcMapping::PosixTaskIpcMapping(QString shm_name,
                                              QString sem_name,
+                                             QString cancel_sem_name,
                                              int fd,
                                              void* mapping,
-                                             sem_t* semaphore,
+                                             sem_t* event_semaphore,
+                                             sem_t* cancel_semaphore,
                                              QString owner_instance_id,
                                              bool unlink_on_destroy) :
         shm_name_(std::move(shm_name)),
         sem_name_(std::move(sem_name)),
+        cancel_sem_name_(std::move(cancel_sem_name)),
         owner_instance_id_(std::move(owner_instance_id)),
         fd_(fd),
         mapping_(mapping),
-        semaphore_(semaphore),
-        unlink_on_destroy_(unlink_on_destroy) {}
+        event_semaphore_(event_semaphore),
+        cancel_semaphore_(cancel_semaphore),
+        unlink_on_destroy_(unlink_on_destroy),
+        platform_monitor_(unlink_on_destroy ? create_posix_task_ipc_platform_monitor() : nullptr) {}
 
     PosixTaskIpcMapping::~PosixTaskIpcMapping() {
         stop_owner_waiter();
+        stop_unclaimed_timer();
+        stop_worker_exit_monitor();
+        unlink_owned_names();
 
-        if (mapping_ != nullptr && mapping_ != MAP_FAILED) {
-            cleanup_posix_munmap(mapping_, shm_name_);
-            mapping_ = nullptr;
-        }
-        if (fd_ != -1) {
-            cleanup_posix_close(fd_, shm_name_);
-            fd_ = -1;
-        }
-        if (!semaphore_closed_ && semaphore_ != nullptr && semaphore_ != SEM_FAILED) {
-            cleanup_posix_sem_close(semaphore_, sem_name_);
-            semaphore_ = SEM_FAILED;
-            semaphore_closed_ = true;
-        }
-        if (!unlink_on_destroy_) {
-            return;
-        }
-        QByteArray const shm_name = posix_name_bytes(shm_name_);
-        QByteArray const sem_name = posix_name_bytes(sem_name_);
-        if (!shm_unlinked_) {
-            shm_unlinked_ = cleanup_posix_unlink(QStringLiteral("shm_unlink"), shm_name, shm_name_, ::shm_unlink);
-        }
-        if (!sem_unlinked_) {
-            sem_unlinked_ = cleanup_posix_unlink(QStringLiteral("sem_unlink"), sem_name, sem_name_, ::sem_unlink);
-        }
+        cleanup_posix_sem_close(cancel_semaphore_);
+        cancel_semaphore_ = SEM_FAILED;
+        cleanup_posix_sem_close(event_semaphore_);
+        event_semaphore_ = SEM_FAILED;
+        cleanup_posix_munmap(mapping_);
+        mapping_ = nullptr;
+        cleanup_posix_close(fd_);
+        fd_ = -1;
     }
 
     std::shared_ptr<PosixTaskIpcMapping> PosixTaskIpcMapping::create_owner(QByteArray const& payload,
@@ -250,6 +251,9 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                                                                            quint64 session_id,
                                                                            quint32 generation,
                                                                            QString* error_message) {
+        if (error_message != nullptr) {
+            error_message->clear();
+        }
         if (payload.isEmpty() || payload.size() > kTaskIpcPerTaskPayloadCapacity) {
             if (error_message != nullptr) {
                 *error_message = QStringLiteral("Task IPC request payload exceeds per-task shared-memory capacity.");
@@ -261,8 +265,10 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             QString const suffix = short_posix_suffix();
             QString const shm_name = QStringLiteral("/z7-task-%1").arg(suffix);
             QString const sem_name = QStringLiteral("/z7-sem-%1").arg(suffix);
+            QString const cancel_sem_name = QStringLiteral("/z7-cancel-%1").arg(suffix);
             QByteArray const shm_name_bytes = posix_name_bytes(shm_name);
             QByteArray const sem_name_bytes = posix_name_bytes(sem_name);
+            QByteArray const cancel_sem_name_bytes = posix_name_bytes(cancel_sem_name);
 
             int fd = ::shm_open(shm_name_bytes.constData(), O_CREAT | O_EXCL | O_RDWR, 0600);
             if (fd == -1 && errno == EEXIST) {
@@ -275,48 +281,67 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                 return nullptr;
             }
 
-            auto const cleanup_shm = [&]() {
-                cleanup_posix_close(fd, shm_name);
-                fd = -1;
-                cleanup_posix_unlink(QStringLiteral("shm_unlink"), shm_name_bytes, shm_name, ::shm_unlink);
+            void* mapping = MAP_FAILED;
+            sem_t* event_semaphore = SEM_FAILED;
+            sem_t* cancel_semaphore = SEM_FAILED;
+            auto const cleanup_attempt = [&]() {
+                cleanup_posix_sem_close(cancel_semaphore);
+                cleanup_posix_sem_close(event_semaphore);
+                cleanup_posix_munmap(mapping);
+                cleanup_posix_close(fd);
+                cleanup_posix_unlink(cancel_sem_name_bytes, ::sem_unlink);
+                cleanup_posix_unlink(sem_name_bytes, ::sem_unlink);
+                cleanup_posix_unlink(shm_name_bytes, ::shm_unlink);
             };
 
             if (::ftruncate(fd, static_cast<off_t>(sizeof(TaskIpcPerTaskRaw))) == -1) {
                 if (error_message != nullptr) {
                     *error_message = posix_errno_message(QStringLiteral("ftruncate"));
                 }
-                cleanup_shm();
+                cleanup_attempt();
                 return nullptr;
             }
 
-            void* mapping = ::mmap(nullptr, sizeof(TaskIpcPerTaskRaw), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            mapping = ::mmap(nullptr, sizeof(TaskIpcPerTaskRaw), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
             if (mapping == MAP_FAILED) {
                 if (error_message != nullptr) {
                     *error_message = posix_errno_message(QStringLiteral("mmap"));
                 }
-                cleanup_shm();
+                cleanup_attempt();
                 return nullptr;
             }
 
-            sem_t* semaphore = ::sem_open(sem_name_bytes.constData(), O_CREAT | O_EXCL, 0600, 0);
-            if (semaphore == SEM_FAILED && errno == EEXIST) {
-                cleanup_posix_munmap(mapping, shm_name);
-                cleanup_shm();
-                continue;
-            }
-            if (semaphore == SEM_FAILED) {
-                if (error_message != nullptr) {
-                    *error_message = posix_errno_message(QStringLiteral("sem_open"));
+            event_semaphore = ::sem_open(sem_name_bytes.constData(), O_CREAT | O_EXCL, 0600, 0);
+            if (event_semaphore == SEM_FAILED) {
+                int const error_number = errno;
+                cleanup_attempt();
+                if (error_number == EEXIST) {
+                    continue;
                 }
-                cleanup_posix_munmap(mapping, shm_name);
-                cleanup_shm();
+                if (error_message != nullptr) {
+                    *error_message = posix_errno_message(QStringLiteral("sem_open(event)"), error_number);
+                }
+                return nullptr;
+            }
+
+            cancel_semaphore = ::sem_open(cancel_sem_name_bytes.constData(), O_CREAT | O_EXCL, 0600, 0);
+            if (cancel_semaphore == SEM_FAILED) {
+                int const error_number = errno;
+                cleanup_attempt();
+                if (error_number == EEXIST) {
+                    continue;
+                }
+                if (error_message != nullptr) {
+                    *error_message = posix_errno_message(QStringLiteral("sem_open(cancel)"), error_number);
+                }
                 return nullptr;
             }
 
             auto* raw = static_cast<TaskIpcPerTaskRaw*>(mapping);
             std::memset(raw, 0, sizeof(TaskIpcPerTaskRaw));
             raw->magic = kTaskIpcMagic;
-            raw->version = kTaskIpcVersion;
+            raw->version = kTaskIpcPerTaskVersion;
+            write_fixed_utf8(cancel_sem_name, raw->cancel_semaphore_name, kTaskIpcPosixNameCapacity);
             raw->slot.generation = generation;
             raw->slot.session_id = session_id;
             raw->slot.state = static_cast<quint32>(TaskIpcSlotState::kDispatched);
@@ -333,30 +358,15 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             write_fixed_utf8(owner_instance_id, raw->slot.owner_instance_id, kTaskIpcOwnerInstanceIdCapacity);
             std::memcpy(raw->payload, payload.constData(), static_cast<size_t>(payload.size()));
 
-            std::unique_ptr<QSystemSemaphore> cancel_semaphore_owner = std::make_unique<QSystemSemaphore>(
-                QNativeIpcKey());
-            cancel_semaphore_owner->setNativeKey(
-                QSystemSemaphore::platformSafeKey(task_ipc_cancel_semaphore_key_for_shm(shm_name)),
-                0,
-                QSystemSemaphore::Create);
-            if (cancel_semaphore_owner->error() != QSystemSemaphore::NoError) {
-                if (error_message != nullptr) {
-                    QString const detail = cancel_semaphore_owner->errorString().trimmed();
-                    *error_message = detail.isEmpty()
-                                       ? QStringLiteral("Failed to initialize task IPC cancel semaphore.")
-                                       : detail;
-                }
-                cleanup_posix_sem_close(semaphore, sem_name);
-                cleanup_posix_unlink(QStringLiteral("sem_unlink"), sem_name_bytes, sem_name, ::sem_unlink);
-                cleanup_posix_munmap(mapping, shm_name);
-                cleanup_shm();
-                return nullptr;
-            }
-
-            std::shared_ptr<PosixTaskIpcMapping> owner(
-                new PosixTaskIpcMapping(shm_name, sem_name, fd, mapping, semaphore, owner_instance_id, true));
-            owner->cancel_semaphore_owner_ = std::move(cancel_semaphore_owner);
-            return owner;
+            return std::shared_ptr<PosixTaskIpcMapping>(new PosixTaskIpcMapping(shm_name,
+                                                                                sem_name,
+                                                                                cancel_sem_name,
+                                                                                fd,
+                                                                                mapping,
+                                                                                event_semaphore,
+                                                                                cancel_semaphore,
+                                                                                owner_instance_id,
+                                                                                true));
         }
 
         if (error_message != nullptr) {
@@ -367,31 +377,28 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
 
     std::shared_ptr<PosixTaskIpcMapping>
     PosixTaskIpcMapping::open_worker(QString const& shm_name, QString const& sem_name, QString* error_message) {
+        if (error_message != nullptr) {
+            error_message->clear();
+        }
         QString const trimmed_shm = shm_name.trimmed();
         QString const trimmed_sem = sem_name.trimmed();
-        if (trimmed_shm.isEmpty() || trimmed_sem.isEmpty()) {
+        if (!valid_posix_name(trimmed_shm) || !valid_posix_name(trimmed_sem)) {
             if (error_message != nullptr) {
-                *error_message = QStringLiteral("Task IPC worker requires shm and semaphore names.");
+                *error_message = QStringLiteral("Task IPC worker requires valid shm and semaphore names.");
             }
             return nullptr;
         }
 
         QByteArray const shm_name_bytes = posix_name_bytes(trimmed_shm);
-        QByteArray const sem_name_bytes = posix_name_bytes(trimmed_sem);
-        sem_t* semaphore = ::sem_open(sem_name_bytes.constData(), 0);
-        if (semaphore == SEM_FAILED) {
-            if (error_message != nullptr) {
-                *error_message = posix_errno_message(QStringLiteral("sem_open"));
-            }
-            return nullptr;
-        }
-
         int fd = ::shm_open(shm_name_bytes.constData(), O_RDWR, 0);
         if (fd == -1) {
             if (error_message != nullptr) {
                 *error_message = posix_errno_message(QStringLiteral("shm_open"));
             }
-            cleanup_posix_sem_close(semaphore, trimmed_sem);
+            return nullptr;
+        }
+        if (!mapped_file_is_large_enough(fd, error_message)) {
+            cleanup_posix_close(fd);
             return nullptr;
         }
 
@@ -400,27 +407,60 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             if (error_message != nullptr) {
                 *error_message = posix_errno_message(QStringLiteral("mmap"));
             }
-            cleanup_posix_close(fd, trimmed_shm);
-            cleanup_posix_sem_close(semaphore, trimmed_sem);
+            cleanup_posix_close(fd);
             return nullptr;
         }
 
         auto* raw = static_cast<TaskIpcPerTaskRaw*>(mapping);
+        bool const cancel_name_terminated =
+            std::memchr(raw->cancel_semaphore_name, '\0', kTaskIpcPosixNameCapacity) != nullptr;
+        QString const cancel_sem_name =
+            cancel_name_terminated ? read_fixed_utf8(raw->cancel_semaphore_name, kTaskIpcPosixNameCapacity) : QString();
         if (raw->magic != kTaskIpcMagic
-            || raw->version != kTaskIpcVersion
+            || raw->version != kTaskIpcPerTaskVersion
             || raw->slot.request_payload_size == 0U
-            || raw->slot.request_payload_size > static_cast<quint32>(kTaskIpcPerTaskPayloadCapacity)) {
+            || raw->slot.request_payload_size > static_cast<quint32>(kTaskIpcPerTaskPayloadCapacity)
+            || !valid_posix_name(cancel_sem_name)) {
             if (error_message != nullptr) {
                 *error_message = QStringLiteral("Task IPC per-task shared memory header is invalid.");
             }
-            cleanup_posix_munmap(mapping, trimmed_shm);
-            cleanup_posix_close(fd, trimmed_shm);
-            cleanup_posix_sem_close(semaphore, trimmed_sem);
+            cleanup_posix_munmap(mapping);
+            cleanup_posix_close(fd);
             return nullptr;
         }
 
-        return std::shared_ptr<PosixTaskIpcMapping>(
-            new PosixTaskIpcMapping(trimmed_shm, trimmed_sem, fd, mapping, semaphore, QString(), false));
+        QByteArray const sem_name_bytes = posix_name_bytes(trimmed_sem);
+        sem_t* event_semaphore = ::sem_open(sem_name_bytes.constData(), 0);
+        if (event_semaphore == SEM_FAILED) {
+            if (error_message != nullptr) {
+                *error_message = posix_errno_message(QStringLiteral("sem_open(event)"));
+            }
+            cleanup_posix_munmap(mapping);
+            cleanup_posix_close(fd);
+            return nullptr;
+        }
+
+        QByteArray const cancel_sem_name_bytes = posix_name_bytes(cancel_sem_name);
+        sem_t* cancel_semaphore = ::sem_open(cancel_sem_name_bytes.constData(), 0);
+        if (cancel_semaphore == SEM_FAILED) {
+            if (error_message != nullptr) {
+                *error_message = posix_errno_message(QStringLiteral("sem_open(cancel)"));
+            }
+            cleanup_posix_sem_close(event_semaphore);
+            cleanup_posix_munmap(mapping);
+            cleanup_posix_close(fd);
+            return nullptr;
+        }
+
+        return std::shared_ptr<PosixTaskIpcMapping>(new PosixTaskIpcMapping(trimmed_shm,
+                                                                            trimmed_sem,
+                                                                            cancel_sem_name,
+                                                                            fd,
+                                                                            mapping,
+                                                                            event_semaphore,
+                                                                            cancel_semaphore,
+                                                                            QString(),
+                                                                            false));
     }
 
     TaskIpcPerTaskRaw* PosixTaskIpcMapping::raw() const {
@@ -430,8 +470,12 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         return static_cast<TaskIpcPerTaskRaw*>(mapping_);
     }
 
-    sem_t* PosixTaskIpcMapping::semaphore() const {
-        return semaphore_;
+    sem_t* PosixTaskIpcMapping::event_semaphore() const {
+        return event_semaphore_;
+    }
+
+    sem_t* PosixTaskIpcMapping::cancel_semaphore() const {
+        return cancel_semaphore_;
     }
 
     QString PosixTaskIpcMapping::shm_name() const {
@@ -442,18 +486,21 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         return sem_name_;
     }
 
+    QString PosixTaskIpcMapping::cancel_sem_name() const {
+        return cancel_sem_name_;
+    }
+
     bool PosixTaskIpcMapping::start_owner_waiter(QString* error_message) {
         if (!unlink_on_destroy_ || waiter_started_) {
             return true;
         }
-        if (semaphore_ == nullptr || semaphore_ == SEM_FAILED) {
+        if (event_semaphore_ == nullptr || event_semaphore_ == SEM_FAILED) {
             if (error_message != nullptr) {
-                *error_message = QStringLiteral("Task IPC semaphore is unavailable.");
+                *error_message = QStringLiteral("Task IPC event semaphore is unavailable.");
             }
             return false;
         }
-        TaskIpcPerTaskRaw* raw = this->raw();
-        if (raw == nullptr) {
+        if (raw() == nullptr) {
             if (error_message != nullptr) {
                 *error_message = QStringLiteral("Task IPC shared memory mapping is unavailable.");
             }
@@ -478,131 +525,85 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         if (!unlink_on_destroy_) {
             return true;
         }
-        {
-            std::lock_guard<std::mutex> lock(unclaimed_timer_source_mutex_);
-            if (unclaimed_timer_source_ != nullptr) {
-                return true;
-            }
-        }
-
-        dispatch_source_t source = dispatch_source_create(
-            DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
-        if (source == nullptr) {
+        if (platform_monitor_ == nullptr) {
             if (error_message != nullptr) {
-                *error_message = QStringLiteral("Failed to create task IPC unclaimed timer.");
+                *error_message = QStringLiteral("Task IPC platform monitor is unavailable.");
             }
             return false;
         }
-
-        dispatch_set_context(source, this);
-        dispatch_source_set_event_handler_f(source, &PosixTaskIpcMapping::unclaimed_timer_event_handler);
-        dispatch_source_set_cancel_handler_f(source, &PosixTaskIpcMapping::unclaimed_timer_cancel_handler);
-        dispatch_source_set_timer(
-            source,
-            dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(kUnclaimedDispatchedReclaimMsecs) * NSEC_PER_MSEC),
-            DISPATCH_TIME_FOREVER,
-            0);
-        {
-            std::lock_guard<std::mutex> lock(unclaimed_timer_source_mutex_);
-            unclaimed_timer_source_ = source;
-            unclaimed_timer_source_cancel_complete_ = false;
-        }
-        dispatch_resume(source);
-        return true;
+        return platform_monitor_->start_unclaimed_timer(
+            kUnclaimedDispatchedReclaimMsecs, [this]() { handle_unclaimed_timer_event(); }, error_message);
     }
 
     bool PosixTaskIpcMapping::start_worker_exit_monitor(QString* error_message) {
         if (!unlink_on_destroy_) {
             return true;
         }
-        TaskIpcPerTaskRaw* raw = this->raw();
-        if (raw == nullptr) {
+        TaskIpcPerTaskRaw* shared_raw = raw();
+        if (shared_raw == nullptr) {
             if (error_message != nullptr) {
                 *error_message = QStringLiteral("Task IPC shared memory mapping is unavailable.");
             }
             return false;
         }
-        qint64 const worker_pid_value = std::atomic_ref<qint64>(raw->slot.worker_pid).load(std::memory_order_acquire);
-        if (worker_pid_value <= 0) {
-            return true;
-        }
-        {
-            std::lock_guard<std::mutex> lock(worker_exit_source_mutex_);
-            if (worker_exit_source_ != nullptr) {
-                return true;
-            }
-        }
-
-        dispatch_source_t source =
-            dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC,
-                                   static_cast<uintptr_t>(static_cast<pid_t>(worker_pid_value)),
-                                   DISPATCH_PROC_EXIT,
-                                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
-        if (source == nullptr) {
+        qint64 const worker_pid = std::atomic_ref<qint64>(shared_raw->slot.worker_pid).load(std::memory_order_acquire);
+        if (worker_pid <= 0) {
             if (error_message != nullptr) {
-                *error_message = QStringLiteral("Failed to create task IPC worker-exit monitor.");
+                *error_message = QStringLiteral("Task IPC worker PID is invalid.");
             }
             return false;
         }
-
-        dispatch_set_context(source, this);
-        dispatch_source_set_event_handler_f(source, &PosixTaskIpcMapping::worker_exit_event_handler);
-        dispatch_source_set_cancel_handler_f(source, &PosixTaskIpcMapping::worker_exit_cancel_handler);
-        {
-            std::lock_guard<std::mutex> lock(worker_exit_source_mutex_);
-            worker_exit_source_ = source;
-            worker_exit_source_cancel_complete_ = false;
+        if (platform_monitor_ == nullptr) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Task IPC platform monitor is unavailable.");
+            }
+            return false;
         }
-        dispatch_resume(source);
-
-        if (!process_is_alive(worker_pid_value)) {
-            handle_worker_exit_event();
-        }
-        return true;
+        return platform_monitor_->start_worker_exit_monitor(
+            worker_pid, [this]() { handle_worker_exit_event(); }, error_message);
     }
 
     void PosixTaskIpcMapping::stop_unclaimed_timer() {
-        dispatch_source_t source = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(unclaimed_timer_source_mutex_);
-            source = unclaimed_timer_source_;
+        std::lock_guard<std::mutex> lock(unclaimed_stop_mutex_);
+        if (platform_monitor_ != nullptr) {
+            platform_monitor_->stop_unclaimed_timer();
         }
-        if (source == nullptr) {
-            return;
-        }
-
-        dispatch_source_cancel(source);
-        {
-            std::unique_lock<std::mutex> lock(unclaimed_timer_source_mutex_);
-            unclaimed_timer_source_cv_.wait(lock, [this]() { return unclaimed_timer_source_cancel_complete_; });
-            if (unclaimed_timer_source_ == source) {
-                unclaimed_timer_source_ = nullptr;
-            }
-            unclaimed_timer_source_cancel_complete_ = false;
-        }
-        dispatch_release(source);
     }
 
     void PosixTaskIpcMapping::stop_worker_exit_monitor() {
-        dispatch_source_t source = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(worker_exit_source_mutex_);
-            source = worker_exit_source_;
+        std::lock_guard<std::mutex> lock(worker_stop_mutex_);
+        if (platform_monitor_ != nullptr) {
+            platform_monitor_->stop_worker_exit_monitor();
         }
-        if (source == nullptr) {
+    }
+
+    void PosixTaskIpcMapping::unlink_owned_names() {
+        if (!unlink_on_destroy_) {
             return;
         }
-
-        dispatch_source_cancel(source);
-        {
-            std::unique_lock<std::mutex> lock(worker_exit_source_mutex_);
-            worker_exit_source_cv_.wait(lock, [this]() { return worker_exit_source_cancel_complete_; });
-            if (worker_exit_source_ == source) {
-                worker_exit_source_ = nullptr;
-            }
-            worker_exit_source_cancel_complete_ = false;
+        std::lock_guard<std::mutex> lock(unlink_mutex_);
+        if (!shm_unlinked_) {
+            shm_unlinked_ = cleanup_posix_unlink(posix_name_bytes(shm_name_), ::shm_unlink);
         }
-        dispatch_release(source);
+        if (!sem_unlinked_) {
+            sem_unlinked_ = cleanup_posix_unlink(posix_name_bytes(sem_name_), ::sem_unlink);
+        }
+        if (!cancel_sem_unlinked_) {
+            cancel_sem_unlinked_ = cleanup_posix_unlink(posix_name_bytes(cancel_sem_name_), ::sem_unlink);
+        }
+    }
+
+    void PosixTaskIpcMapping::unlink_names_after_claim() {
+        TaskIpcPerTaskRaw* shared_raw = raw();
+        if (!unlink_on_destroy_ || shared_raw == nullptr) {
+            return;
+        }
+        quint32 const state = std::atomic_ref<quint32>(shared_raw->slot.state).load(std::memory_order_acquire);
+        if (state == static_cast<quint32>(TaskIpcSlotState::kClaimed)
+            || state == static_cast<quint32>(TaskIpcSlotState::kCompleted)) {
+            stop_unclaimed_timer();
+            unlink_owned_names();
+        }
     }
 
     void PosixTaskIpcMapping::stop_owner_waiter() {
@@ -613,8 +614,8 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         stop_waiter_.store(true, std::memory_order_release);
         stop_unclaimed_timer();
         stop_worker_exit_monitor();
-        if (semaphore_ != nullptr && semaphore_ != SEM_FAILED) {
-            ::sem_post(semaphore_);
+        if (event_semaphore_ != nullptr && event_semaphore_ != SEM_FAILED) {
+            ::sem_post(event_semaphore_);
         }
         if (waiter_thread_.joinable()) {
             waiter_thread_.join();
@@ -652,99 +653,38 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         }
     }
 
-    void PosixTaskIpcMapping::unclaimed_timer_event_handler(void* context) {
-        auto* mapping = static_cast<PosixTaskIpcMapping*>(context);
-        if (mapping != nullptr) {
-            mapping->handle_unclaimed_timer_event();
-        }
-    }
-
-    void PosixTaskIpcMapping::unclaimed_timer_cancel_handler(void* context) {
-        auto* mapping = static_cast<PosixTaskIpcMapping*>(context);
-        if (mapping != nullptr) {
-            mapping->handle_unclaimed_timer_cancel();
-        }
-    }
-
-    void PosixTaskIpcMapping::worker_exit_event_handler(void* context) {
-        auto* mapping = static_cast<PosixTaskIpcMapping*>(context);
-        if (mapping != nullptr) {
-            mapping->handle_worker_exit_event();
-        }
-    }
-
-    void PosixTaskIpcMapping::worker_exit_cancel_handler(void* context) {
-        auto* mapping = static_cast<PosixTaskIpcMapping*>(context);
-        if (mapping != nullptr) {
-            mapping->handle_worker_exit_cancel();
-        }
-    }
-
     void PosixTaskIpcMapping::handle_unclaimed_timer_event() {
         bool should_enqueue = false;
-        TaskIpcPerTaskRaw* raw = this->raw();
-        if (raw != nullptr) {
-            SharedMemoryLock lock(&raw->lock, task_ipc_per_task_lock_wake_key(shm_name_));
+        TaskIpcPerTaskRaw* shared_raw = raw();
+        if (shared_raw != nullptr) {
+            SharedMemoryLock lock(&shared_raw->lock);
             if (lock.ok()) {
-                should_enqueue = publish_task_ipc_unclaimed_timeout_completion(&raw->slot, now_msecs());
+                should_enqueue = publish_task_ipc_unclaimed_timeout_completion(&shared_raw->slot, now_msecs());
             }
         }
         if (should_enqueue) {
             post_posix_task_notification(this, nullptr);
         }
-
-        dispatch_source_t source = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(unclaimed_timer_source_mutex_);
-            source = unclaimed_timer_source_;
-        }
-        if (source != nullptr) {
-            dispatch_source_cancel(source);
-        }
-    }
-
-    void PosixTaskIpcMapping::handle_unclaimed_timer_cancel() {
-        {
-            std::lock_guard<std::mutex> lock(unclaimed_timer_source_mutex_);
-            unclaimed_timer_source_cancel_complete_ = true;
-        }
-        unclaimed_timer_source_cv_.notify_all();
     }
 
     void PosixTaskIpcMapping::handle_worker_exit_event() {
         bool should_enqueue = false;
-        TaskIpcPerTaskRaw* raw = this->raw();
-        if (raw != nullptr) {
-            SharedMemoryLock lock(&raw->lock, task_ipc_per_task_lock_wake_key(shm_name_));
+        TaskIpcPerTaskRaw* shared_raw = raw();
+        if (shared_raw != nullptr) {
+            SharedMemoryLock lock(&shared_raw->lock);
             if (lock.ok()) {
-                should_enqueue = publish_task_ipc_worker_exit_completion(&raw->slot, now_msecs());
+                should_enqueue = publish_task_ipc_observed_worker_exit_completion(&shared_raw->slot, now_msecs());
             }
         }
         if (should_enqueue) {
+            post_posix_task_cancel_notification(this, nullptr);
             post_posix_task_notification(this, nullptr);
         }
-
-        dispatch_source_t source = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(worker_exit_source_mutex_);
-            source = worker_exit_source_;
-        }
-        if (source != nullptr) {
-            dispatch_source_cancel(source);
-        }
-    }
-
-    void PosixTaskIpcMapping::handle_worker_exit_cancel() {
-        {
-            std::lock_guard<std::mutex> lock(worker_exit_source_mutex_);
-            worker_exit_source_cancel_complete_ = true;
-        }
-        worker_exit_source_cv_.notify_all();
     }
 
     void PosixTaskIpcMapping::owner_wait_loop() {
         while (!stop_waiter_.load(std::memory_order_acquire)) {
-            if (::sem_wait(semaphore_) == -1) {
+            if (::sem_wait(event_semaphore_) == -1) {
                 if (errno == EINTR) {
                     continue;
                 }
@@ -755,6 +695,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             if (stop_waiter_.load(std::memory_order_acquire)) {
                 return;
             }
+            unlink_names_after_claim();
             notify_owner_or_defer();
         }
     }
@@ -774,14 +715,21 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         }
         static_cast<void>(posix_event_dispatcher());
         std::lock_guard<std::mutex> lock(posix_task_registry_mutex());
+        for (std::shared_ptr<PosixTaskIpcMapping> const& existing : posix_task_registry()) {
+            if (existing.get() == mapping.get()) {
+                return;
+            }
+        }
         posix_task_registry().push_back(mapping);
     }
 
     std::shared_ptr<PosixTaskIpcMapping> find_posix_task_mapping(quint64 session_id, quint32 generation) {
         std::lock_guard<std::mutex> lock(posix_task_registry_mutex());
         for (std::shared_ptr<PosixTaskIpcMapping> const& mapping : posix_task_registry()) {
-            TaskIpcPerTaskRaw const* raw = mapping == nullptr ? nullptr : mapping->raw();
-            if (raw != nullptr && raw->slot.session_id == session_id && raw->slot.generation == generation) {
+            TaskIpcPerTaskRaw const* shared_raw = mapping == nullptr ? nullptr : mapping->raw();
+            if (shared_raw != nullptr
+                && shared_raw->slot.session_id == session_id
+                && shared_raw->slot.generation == generation) {
                 return mapping;
             }
         }
@@ -824,15 +772,31 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
     }
 
     bool post_posix_task_notification(PosixTaskIpcMapping* mapping, QString* error_message) {
-        if (mapping == nullptr || mapping->semaphore() == nullptr || mapping->semaphore() == SEM_FAILED) {
+        if (mapping == nullptr || mapping->event_semaphore() == nullptr || mapping->event_semaphore() == SEM_FAILED) {
             if (error_message != nullptr) {
-                *error_message = QStringLiteral("Task IPC semaphore is unavailable.");
+                *error_message = QStringLiteral("Task IPC event semaphore is unavailable.");
             }
             return false;
         }
-        if (::sem_post(mapping->semaphore()) == -1) {
+        if (::sem_post(mapping->event_semaphore()) == -1) {
             if (error_message != nullptr) {
-                *error_message = posix_errno_message(QStringLiteral("sem_post"));
+                *error_message = posix_errno_message(QStringLiteral("sem_post(event)"));
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool post_posix_task_cancel_notification(PosixTaskIpcMapping* mapping, QString* error_message) {
+        if (mapping == nullptr || mapping->cancel_semaphore() == nullptr || mapping->cancel_semaphore() == SEM_FAILED) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Task IPC cancel semaphore is unavailable.");
+            }
+            return false;
+        }
+        if (::sem_post(mapping->cancel_semaphore()) == -1) {
+            if (error_message != nullptr) {
+                *error_message = posix_errno_message(QStringLiteral("sem_post(cancel)"));
             }
             return false;
         }

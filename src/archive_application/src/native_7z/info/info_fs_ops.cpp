@@ -449,6 +449,7 @@ namespace z7::app {
                                                              out.entries,
                                                              batch_size,
                                                              batch_cb);
+            out.listing_completed = hr == S_OK;
             if (hr != S_OK) {
                 static_cast<OperationResult&>(out) = make_operation_failure_from_hresult<OperationResult>(hr);
             } else {
@@ -476,6 +477,7 @@ namespace z7::app {
                     batch_size,
                     batch_cb,
                     &diagnostics);
+            out.listing_completed = hr == S_OK;
             static_cast<OperationResult&>(out) = hr == S_OK
                                                    ? make_operation_success<OperationResult>(
                                                          request.streaming_mode ? "batch-mode" : "Success")

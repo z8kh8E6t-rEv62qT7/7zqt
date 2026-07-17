@@ -68,7 +68,14 @@ namespace z7::app {
                                                &password,
                                                &session_state.open_diagnostics,
                                                request.filename_code_page);
-        if (hr != S_OK) {
+        CArc const* const recoverable_arc = session_state.archive_link->Arcs.IsEmpty()
+                                               ? nullptr
+                                               : session_state.archive_link->GetArc();
+        bool const recoverable_open =
+            hr == S_FALSE && !password_requested && !wrong_password
+            && session_state.open_diagnostics.has_errors() && recoverable_arc != nullptr
+            && recoverable_arc->Archive != nullptr;
+        if (hr != S_OK && !recoverable_open) {
             if (password_requested || wrong_password) {
                 static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
                     ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);

@@ -2,11 +2,14 @@
 // Role: Unified sequenced task runner for async and blocking GUI archive flows.
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
+#include <QFileInfo>
 #include <QFutureWatcher>
 #include <QMessageBox>
 #include <QPointer>
 #include <QtConcurrent/QtConcurrentRun>
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -86,6 +89,64 @@ namespace z7::ui::gui {
             return outcome.status == z7::app::OperationStatus::kWrongPassword
                 || outcome.error_domain == z7::app::ArchiveErrorDomain::kPassword
                 || outcome.error.domain == z7::app::ArchiveErrorDomain::kPassword;
+        }
+
+        QString normalized_absolute_path(QString path) {
+            path = QDir::fromNativeSeparators(path.trimmed());
+            return path.isEmpty() ? QString() : QFileInfo(path).absoluteFilePath();
+        }
+
+        void remove_redundant_test_archive_context(QStringList* messages, QString const& archive_context) {
+            if (messages == nullptr || archive_context.isEmpty()) {
+                return;
+            }
+            QString const normalized_context = normalized_absolute_path(archive_context);
+            messages->removeIf([&normalized_context](QString const& message) {
+                return !message.contains(QLatin1Char('\n'))
+                    && normalized_absolute_path(message) == normalized_context;
+            });
+        }
+
+        QStringList normalized_failure_lines(QString const& message) {
+            QString normalized = message;
+            normalized.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+            normalized.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+            QStringList lines;
+            for (QString const& line : normalized.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+                QString const trimmed = line.trimmed();
+                if (!trimmed.isEmpty()) {
+                    lines.push_back(trimmed);
+                }
+            }
+            return lines;
+        }
+
+        bool final_failure_is_fully_presented(GuiTaskRunResult const& out) {
+            if (!out.archive_open_diagnostic_presented || out.result.error.message.empty()) {
+                return false;
+            }
+
+            QStringList presented_lines;
+            for (QString const& message : out.result_messages) {
+                presented_lines.append(normalized_failure_lines(message));
+            }
+
+            QString const localized_error = z7::ui::runtime_support::localize_archive_failure_message(
+                z7::ui::archive_support::from_native_string(out.result.error.message));
+            QStringList required_lines = normalized_failure_lines(localized_error);
+            required_lines.removeIf([](QString const& line) {
+                QString header = line;
+                if (header.endsWith(QLatin1Char(':'))) {
+                    header.chop(1);
+                }
+                return header.trimmed().compare(QStringLiteral("Archive open error"), Qt::CaseInsensitive) == 0;
+            });
+            if (required_lines.isEmpty()) {
+                return false;
+            }
+            return std::all_of(required_lines.cbegin(), required_lines.cend(), [&](QString const& required) {
+                return presented_lines.contains(required);
+            });
         }
 
         z7::app::OperationOutcome make_canceled_outcome(std::string summary) {
@@ -176,6 +237,7 @@ namespace z7::ui::gui {
                 cancel_requested_(std::move(run_spec.cancel_requested)),
                 test_mode_(run_spec.test_mode),
                 hash_mode_(run_spec.hash_mode),
+                redundant_test_archive_context_(std::move(run_spec.redundant_test_archive_context)),
                 background_mode_(std::make_shared<z7::ui::common::TaskBackgroundModeController>()) {
                 if (run_spec.dialog != nullptr) {
                     dialog_ = run_spec.dialog;
@@ -339,10 +401,19 @@ namespace z7::ui::gui {
                 finished_ = true;
                 release_active_request();
                 progress_presenter_.cancel_pending();
-                z7::ui::runtime_support::TaskResultPresentation const presentation =
+                if (test_mode_) {
+                    remove_redundant_test_archive_context(
+                        &out_.result_messages, redundant_test_archive_context_);
+                }
+                z7::ui::runtime_support::TaskResultPresentation presentation =
                     z7::ui::runtime_support::classify_task_result(out_.result.ok,
                                                                   out_.result.error.domain,
                                                                   !out_.result_messages.isEmpty());
+                if (final_failure_is_fully_presented(out_)
+                    && presentation == z7::ui::runtime_support::TaskResultPresentation::kFinalErrorThenMessages) {
+                    presentation = z7::ui::runtime_support::TaskResultPresentation::kMessages;
+                    out_.final_error_presented = true;
+                }
                 bool const delayed_result_success =
                     (test_mode_ || hash_mode_) && out_.result.ok && out_.result.native_exit_code == 0;
                 bool const show_result_messages = should_show_result_messages(presentation);
@@ -499,11 +570,14 @@ namespace z7::ui::gui {
                     z7::ui::runtime_support::localize_archive_failure_message(raw_summary);
                 if (!summary.isEmpty()) {
                     QMessageBox::critical(parent, QStringLiteral("7-Zip"), summary);
-                    out_.final_error_displayed = true;
+                    out_.final_error_presented = true;
                 }
             }
 
             void show_progress_result_messages() {
+                if (test_mode_) {
+                    dialog_->set_stage(QStringLiteral("Running"));
+                }
                 dialog_->set_running(false);
                 dialog_->set_failure_result_messages(out_.result_messages);
                 dialog_->set_failure_result_mode();
@@ -547,6 +621,7 @@ namespace z7::ui::gui {
             SharedTaskCancellation cancel_requested_;
             bool test_mode_ = false;
             bool hash_mode_ = false;
+            QString redundant_test_archive_context_;
             std::shared_ptr<z7::ui::common::TaskBackgroundModeController> background_mode_;
             QMetaObject::Connection background_connection_;
             QVector<z7::app::ArchiveSessionToken> tokens_;
@@ -686,6 +761,9 @@ namespace z7::ui::gui {
                 run_spec.title.trimmed().isEmpty() ? default_member_title(run_kind) : run_spec.title.trimmed();
             run_spec.test_mode = run_kind == ArchiveMemberRunKind::kTest;
             run_spec.hash_mode = run_kind == ArchiveMemberRunKind::kHash;
+            if (run_kind == ArchiveMemberRunKind::kTest && options.nested_archive_entries.isEmpty()) {
+                run_spec.redundant_test_archive_context = options.archive_path;
+            }
             ArchiveTaskAsyncSequencer* sequence = make_sequence_or_finish(std::move(run_spec));
             if (sequence == nullptr) {
                 return;
@@ -849,6 +927,13 @@ namespace z7::ui::gui {
                                       SequencedTaskRunSpec run_spec) {
         run_spec.title = normalized_modal_title(spec, run_spec.title);
         run_spec.test_mode = std::holds_alternative<TestTaskSpec>(spec);
+        if (run_spec.test_mode) {
+            if (auto const* test_request = std::get_if<z7::app::TestRequest>(&request.payload);
+                test_request != nullptr && test_request->archive_paths.size() == 1) {
+                run_spec.redundant_test_archive_context =
+                    z7::ui::archive_support::from_native_string(test_request->archive_paths.front());
+            }
+        }
         ArchiveTaskAsyncSequencer* sequence = make_sequence_or_finish(std::move(run_spec));
         if (sequence == nullptr) {
             return;

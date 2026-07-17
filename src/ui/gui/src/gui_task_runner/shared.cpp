@@ -55,6 +55,9 @@ namespace z7::ui::gui::gui_task_runner_shared {
                                                    : log_line;
                 out->log_lines.push_back(display_log_line);
                 if (log.channel == z7::app::OutputChannel::kStdErr) {
+                    if (log.message_kind == z7::app::OperationMessageKind::kArchiveOpenDiagnostic) {
+                        out->archive_open_diagnostic_presented = true;
+                    }
                     out->result_messages.push_back(display_log_line);
                     dialog->append_failure_result_message(display_log_line);
                 }

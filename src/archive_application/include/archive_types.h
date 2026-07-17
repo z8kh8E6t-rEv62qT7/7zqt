@@ -24,6 +24,7 @@ namespace z7::app {
 
     struct OperationEvent {
         OperationEventKind kind = OperationEventKind::kLog;
+        OperationMessageKind message_kind = OperationMessageKind::kGeneral;
         OperationStage stage = OperationStage::kRunning;
         OutputChannel output_channel = OutputChannel::kNone;
         std::string message;
@@ -122,6 +123,9 @@ namespace z7::app {
 
     struct ListResult : OperationResult {
         std::vector<ArchiveListEntry> entries;
+        // True when entry enumeration itself completed, even if inherited open
+        // diagnostics make the overall operation a failure.
+        bool listing_completed = false;
     };
 
     struct ArchivePropertiesResult : OperationResult {

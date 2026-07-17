@@ -28,6 +28,11 @@ namespace z7::app {
         kProgress
     };
 
+    enum class OperationMessageKind {
+        kGeneral,
+        kArchiveOpenDiagnostic
+    };
+
     enum class OperationStage {
         kPrepare,
         kRunning,

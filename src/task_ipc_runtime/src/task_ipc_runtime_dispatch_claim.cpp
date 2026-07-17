@@ -1,14 +1,49 @@
 #include <QCoreApplication>
 #include <QProcess>
 #include <QSharedMemory>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
 #include <memory>
+#include <thread>
 #include <utility>
+
+#if !defined(Q_OS_WIN)
+#include <sys/types.h>
+#include <unistd.h>
+#endif
 
 #include "task_ipc_runtime_internal.h"
 
 namespace z7::task_ipc_runtime {
 
     namespace {
+
+#if Z7_TASK_IPC_PER_TASK_POSIX
+        bool terminate_started_task_ipc_worker(qint64 worker_pid, QProcess** out_process) {
+            if (out_process != nullptr && *out_process != nullptr) {
+                QProcess* process = *out_process;
+                process->kill();
+                bool const stopped = process->waitForFinished(5000) || process->state() == QProcess::NotRunning;
+                delete process;
+                *out_process = nullptr;
+                return stopped;
+            }
+            if (worker_pid <= 0) {
+                return true;
+            }
+            if (::kill(static_cast<pid_t>(worker_pid), SIGKILL) == -1 && errno != ESRCH) {
+                return false;
+            }
+            for (int attempt = 0; attempt < 100; ++attempt) {
+                if (!task_ipc_internal::process_is_alive(worker_pid)) {
+                    return true;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            return !task_ipc_internal::process_is_alive(worker_pid);
+        }
+#endif
 
         bool start_task_ipc_worker_process(QString const& worker_program,
                                            QStringList const& worker_args,
@@ -105,6 +140,7 @@ namespace z7::task_ipc_runtime {
                 }
                 return false;
             }
+            *out_result = TaskIpcDispatchResult{};
             if (worker_program.trimmed().isEmpty()) {
                 if (error_message != nullptr) {
                     *error_message = QStringLiteral("Task IPC worker program path is empty.");
@@ -128,13 +164,20 @@ namespace z7::task_ipc_runtime {
             }
             if (encoded_payload.size() > kTaskIpcRequestPoolSlotSize) {
                 if (error_message != nullptr) {
+#if Z7_TASK_IPC_PER_TASK_POSIX
+                    *error_message = QStringLiteral("Task IPC request payload exceeds per-task shared-memory capacity.");
+#else
                     *error_message =
                         QStringLiteral("Task IPC request payload exceeds fixed request-pool slot capacity.");
+#endif
                 }
                 return false;
             }
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
+            if (!preflight_posix_task_ipc_platform(error_message)) {
+                return false;
+            }
             quint64 const session_id = next_posix_task_session_id();
             quint32 const generation = 1U;
             std::shared_ptr<PosixTaskIpcMapping> mapping =
@@ -176,7 +219,7 @@ namespace z7::task_ipc_runtime {
                                                error_message)) {
                 remove_posix_task_mapping(mapping);
                 {
-                    SharedMemoryLock lock(&raw->lock, task_ipc_per_task_lock_wake_key(mapping->shm_name()));
+                    SharedMemoryLock lock(&raw->lock);
                     if (lock.ok()) {
                         clear_slot(&raw->slot, true);
                         raw->slot.updated_msecs = now_msecs();
@@ -184,15 +227,48 @@ namespace z7::task_ipc_runtime {
                 }
                 return false;
             }
+            if (worker_pid <= 0) {
+                static_cast<void>(terminate_started_task_ipc_worker(worker_pid, out_process));
+                remove_posix_task_mapping(mapping);
+                if (error_message != nullptr) {
+                    *error_message = QStringLiteral("Task IPC worker started without valid PID.");
+                }
+                return false;
+            }
 
+            bool worker_identity_published = false;
             {
-                SharedMemoryLock lock(&raw->lock, task_ipc_per_task_lock_wake_key(mapping->shm_name()));
+                SharedMemoryLock lock(&raw->lock);
                 if (lock.ok() && raw->slot.state == static_cast<quint32>(TaskIpcSlotState::kDispatched)) {
                     raw->slot.worker_pid = worker_pid;
                     raw->slot.updated_msecs = now_msecs();
+                    worker_identity_published = true;
                 }
             }
-            mapping->start_worker_exit_monitor(nullptr);
+            if (!worker_identity_published) {
+                bool const stopped = terminate_started_task_ipc_worker(worker_pid, out_process);
+                remove_posix_task_mapping(mapping);
+                if (error_message != nullptr) {
+                    *error_message = stopped
+                                       ? QStringLiteral("Task IPC task became unavailable while publishing worker PID.")
+                                       : QStringLiteral("Task IPC task became unavailable and its worker could not be stopped.");
+                }
+                return false;
+            }
+
+            QString monitor_error;
+            if (!mapping->start_worker_exit_monitor(&monitor_error)) {
+                bool const stopped = terminate_started_task_ipc_worker(worker_pid, out_process);
+                remove_posix_task_mapping(mapping);
+                if (error_message != nullptr) {
+                    QString const detail = monitor_error.trimmed().isEmpty()
+                                               ? QStringLiteral("Failed to start task IPC worker-exit monitor.")
+                                               : monitor_error.trimmed();
+                    *error_message = stopped ? detail
+                                             : QStringLiteral("%1 Worker rollback also failed.").arg(detail);
+                }
+                return false;
+            }
             post_posix_task_notification(mapping.get(), nullptr);
 
             out_result->session_id = session_id;
@@ -392,7 +468,7 @@ namespace z7::task_ipc_runtime {
             return false;
         }
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         std::shared_ptr<PosixTaskIpcMapping> const mapping = find_posix_task_mapping(session_id, generation);
         if (mapping == nullptr || mapping->raw() == nullptr) {
             return true;
@@ -414,7 +490,7 @@ namespace z7::task_ipc_runtime {
         std::atomic_ref<qint64> updated(slot.updated_msecs);
         cancel_requested.store(1U, std::memory_order_release);
         updated.store(now_msecs(), std::memory_order_release);
-        return post_task_ipc_semaphore(task_ipc_cancel_semaphore_key_for_shm(mapping->shm_name()), error_message);
+        return post_posix_task_cancel_notification(mapping.get(), error_message);
 #else
         std::shared_ptr<QSharedMemory> bootstrap_memory;
         if (!open_bootstrap_memory(false, &bootstrap_memory, error_message)) {
@@ -481,18 +557,20 @@ namespace z7::task_ipc_runtime {
             return false;
         }
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         std::shared_ptr<PosixTaskIpcMapping> mapping =
             PosixTaskIpcMapping::open_worker(posix_worker_shm_name(), posix_worker_sem_name(), error_message);
         if (mapping == nullptr || mapping->raw() == nullptr) {
             return false;
         }
+        register_posix_task_mapping(mapping);
 
         QByteArray payload_bytes;
         {
             TaskIpcPerTaskRaw* raw = mapping->raw();
-            SharedMemoryLock lock(&raw->lock, task_ipc_per_task_lock_wake_key(mapping->shm_name()));
+            SharedMemoryLock lock(&raw->lock);
             if (!lock.ok()) {
+                remove_posix_task_mapping(mapping);
                 if (error_message != nullptr) {
                     *error_message = lock.busy() ? QStringLiteral("Task IPC task is busy.") : lock.error();
                 }
@@ -503,6 +581,7 @@ namespace z7::task_ipc_runtime {
             if (slot.session_id != session_id
                 || slot.generation != generation
                 || slot.state != static_cast<quint32>(TaskIpcSlotState::kDispatched)) {
+                remove_posix_task_mapping(mapping);
                 if (error_message != nullptr) {
                     *error_message = QStringLiteral("Requested task IPC task is no longer available.");
                 }
@@ -532,9 +611,6 @@ namespace z7::task_ipc_runtime {
                 read_error.isEmpty() ? QStringLiteral("Invalid task IPC request payload.") : read_error;
         }
         out_task->payload = std::move(decoded_payload);
-        register_posix_task_mapping(mapping);
-        mapping->stop_unclaimed_timer();
-        mapping->start_worker_exit_monitor(nullptr);
         post_posix_task_notification(mapping.get(), nullptr);
         return true;
 #else
@@ -646,18 +722,13 @@ namespace z7::task_ipc_runtime {
             return false;
         }
 
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         std::shared_ptr<PosixTaskIpcMapping> mapping = find_posix_task_mapping(task.session_id, task.generation);
         if (mapping == nullptr || mapping->raw() == nullptr) {
-            QString open_error;
-            mapping = PosixTaskIpcMapping::open_worker(task.ipc_shm_name, task.ipc_sem_name, &open_error);
-            if (mapping == nullptr || mapping->raw() == nullptr) {
-                if (error_message != nullptr && !open_error.trimmed().isEmpty()) {
-                    *error_message = open_error;
-                }
-                return true;
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Task IPC claimed mapping is no longer registered.");
             }
-            register_posix_task_mapping(mapping);
+            return false;
         }
 
         TaskIpcSlotRaw& slot = mapping->raw()->slot;

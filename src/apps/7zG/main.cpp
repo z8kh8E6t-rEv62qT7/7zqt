@@ -88,7 +88,7 @@ namespace {
 
         bool const has_identity =
             out_session_id != nullptr && *out_session_id != 0 && out_generation != nullptr && *out_generation != 0U;
-#if defined(Q_OS_MACOS)
+#if defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
         return has_identity
             && out_shm_name != nullptr
             && !out_shm_name->isEmpty()
@@ -164,7 +164,7 @@ int main(int argc, char* argv[]) {
     if (!parse_task_ipc_identity(user_args, &session_id, &generation, &shm_name, &sem_name)) {
         return 7;
     }
-#if defined(Q_OS_MACOS)
+#if defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
     z7::task_ipc_runtime::set_task_ipc_worker_endpoint(shm_name, sem_name);
 #endif
 

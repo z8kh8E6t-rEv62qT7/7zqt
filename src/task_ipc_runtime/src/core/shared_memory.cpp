@@ -59,6 +59,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             return static_cast<quint32>(pid);
         }
 
+#if !Z7_TASK_IPC_PER_TASK_POSIX
         class LockWaiterEntry final : public std::enable_shared_from_this<LockWaiterEntry> {
         public:
             explicit LockWaiterEntry(QString wake_key) : wake_key_(std::move(wake_key)), semaphore_(QString()) {}
@@ -181,6 +182,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             }
             semaphore.release();
         }
+#endif
 
         bool try_acquire_lock(RobustLockRaw* lock, bool* out_busy, QString* out_error) {
             if (out_busy != nullptr) {
@@ -273,6 +275,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
 
     SharedMemoryLock::SharedMemoryLock(RobustLockRaw* lock, QString wake_key) :
         lock_(lock), wake_key_(std::move(wake_key)) {
+#if !Z7_TASK_IPC_PER_TASK_POSIX
         if (!wake_key_.trimmed().isEmpty()) {
             QString waiter_error;
             if (ensure_lock_waiter_entry(wake_key_, &waiter_error) == nullptr) {
@@ -280,15 +283,21 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                 return;
             }
         }
+#endif
         locked_ = try_acquire_lock(lock_, &busy_, &error_);
     }
 
     SharedMemoryLock::~SharedMemoryLock() {
         if (locked_) {
             QString ignored_error;
-            if (release_lock(lock_, &ignored_error) && !wake_key_.trimmed().isEmpty()) {
+            if (!release_lock(lock_, &ignored_error)) {
+                return;
+            }
+#if !Z7_TASK_IPC_PER_TASK_POSIX
+            if (!wake_key_.trimmed().isEmpty()) {
                 notify_task_ipc_lock_waiters(wake_key_);
             }
+#endif
         }
     }
 
@@ -368,14 +377,6 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         return hashed_task_ipc_key(QStringLiteral("z7.taskipc.lock.bootstrap."), bootstrap_key);
     }
 
-    QString task_ipc_per_task_lock_wake_key(QString const& shm_name) {
-        QString const trimmed_shm_name = shm_name.trimmed();
-        if (trimmed_shm_name.isEmpty()) {
-            return QString();
-        }
-        return hashed_task_ipc_key(QStringLiteral("z7.taskipc.lock.task."), trimmed_shm_name);
-    }
-
     std::unique_ptr<SharedMemoryLock> wait_for_shared_memory_lock(RobustLockRaw* lock,
                                                                   QString const& wake_key,
                                                                   int timeout_msecs,
@@ -391,12 +392,40 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             return nullptr;
         }
 
+        qint64 const deadline = timeout_msecs <= 0 ? now_msecs() : now_msecs() + timeout_msecs;
+#if Z7_TASK_IPC_PER_TASK_POSIX
+        Q_UNUSED(wake_key);
+        int retry_delay_msecs = 1;
+        for (;;) {
+            auto candidate = std::make_unique<SharedMemoryLock>(lock);
+            if (candidate->ok()) {
+                return candidate;
+            }
+            if (!candidate->busy()) {
+                if (error_message != nullptr) {
+                    *error_message = candidate->error();
+                }
+                return nullptr;
+            }
+
+            qint64 const remaining_msecs = deadline - now_msecs();
+            if (remaining_msecs <= 0) {
+                if (error_message != nullptr) {
+                    *error_message = busy_message.trimmed().isEmpty() ? QStringLiteral("Task IPC lock remained busy.")
+                                                                      : busy_message;
+                }
+                return nullptr;
+            }
+            int const sleep_msecs = static_cast<int>(std::min<qint64>(retry_delay_msecs, remaining_msecs));
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_msecs));
+            retry_delay_msecs = std::min(retry_delay_msecs * 2, 8);
+        }
+#else
         std::shared_ptr<LockWaiterEntry> waiter_entry = ensure_lock_waiter_entry(wake_key, error_message);
         if (waiter_entry == nullptr) {
             return nullptr;
         }
 
-        qint64 const deadline = timeout_msecs <= 0 ? now_msecs() : now_msecs() + timeout_msecs;
         quint64 observed_generation = waiter_entry->generation();
         for (;;) {
             auto candidate = std::make_unique<SharedMemoryLock>(lock, wake_key);
@@ -430,6 +459,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             }
             observed_generation = waiter_entry->generation();
         }
+#endif
     }
 
     QString read_fixed_utf8(char const* bytes, int capacity) {

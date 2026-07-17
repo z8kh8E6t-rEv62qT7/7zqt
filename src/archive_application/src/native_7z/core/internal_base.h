@@ -50,7 +50,8 @@ namespace z7::app {
 
     enum class OpenResultMessagePolicy {
         kSilentBrowse,
-        kOperationMessages
+        kOperationMessages,
+        kReadOperationMessages
     };
 
     class NativeUpdateOperationCallback;
@@ -93,6 +94,7 @@ namespace z7::app {
                         OperationStage stage,
                         OutputChannel channel,
                         std::string const& message,
+                        OperationMessageKind message_kind = OperationMessageKind::kGeneral,
                         std::optional<BenchmarkTypedSnapshot> const& benchmark_snapshot = std::nullopt,
                         std::optional<BenchmarkTypedSummary> const& benchmark_summary = std::nullopt);
     void emit_progress_event(ArchiveBackendHooks const& hooks,
@@ -138,6 +140,11 @@ namespace z7::app {
         bool has_warnings() const { return warning_count != 0; }
     };
 
+    struct ReadOperationOpenDiagnosticState {
+        uint64_t progress_error_count = 0;
+        bool archive_context_reported = false;
+    };
+
     OpenArchiveDiagnostics collect_open_archive_diagnostics(CCodecs const* codecs,
                                                              CArchiveLink const& archive_link,
                                                              wchar_t const* name,
@@ -146,6 +153,10 @@ namespace z7::app {
                                          OpenArchiveDiagnostics const& source);
     void apply_open_archive_diagnostics(OperationResult& result,
                                         OpenArchiveDiagnostics const& diagnostics);
+    ReadOperationOpenDiagnosticState publish_read_operation_open_diagnostics(
+        ArchiveBackendHooks const& hooks,
+        OpenArchiveDiagnostics const* diagnostics,
+        bool already_published);
 
     template <typename TResult>
     TResult make_operation_failure_from_open_diagnostics(OpenArchiveDiagnostics const& diagnostics) {

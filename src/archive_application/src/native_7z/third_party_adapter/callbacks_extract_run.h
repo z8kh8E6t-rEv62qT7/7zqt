@@ -40,7 +40,9 @@ namespace z7::app {
                               std::shared_ptr<ExtractBudgetTracker> budget_tracker = nullptr,
                               uint64_t configured_memory_limit_bytes = 0,
                               bool configured_memory_limit_defined = false,
-                              std::string archive_metadata_source_path = {});
+                              std::string archive_metadata_source_path = {},
+                              uint64_t initial_progress_error_count = 0,
+                              bool archive_context_already_reported = false);
         ~NativeExtractCallback();
 
         // When configured, extracted bytes are written into the caller-owned buffer
@@ -347,6 +349,7 @@ namespace z7::app {
         uint64_t total_files_ = 0;
         uint64_t completed_files_ = 0;
         uint64_t error_count_ = 0;
+        uint64_t initial_progress_error_count_ = 0;
         std::string current_path_;
         bool ratio_input_size_known_ = false;
         uint64_t ratio_input_size_ = 0;

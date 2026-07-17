@@ -155,6 +155,17 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             slot, 2, QStringLiteral("7zG worker exited before publishing completion."), now_msecs_value);
     }
 
+    bool publish_task_ipc_observed_worker_exit_completion(TaskIpcSlotRaw* slot, qint64 now_msecs_value) {
+        if (slot == nullptr
+            || slot->state != static_cast<quint32>(TaskIpcSlotState::kClaimed)
+            || slot->published_event_sequence >= kTaskIpcCompletedEventSequence
+            || slot->worker_pid <= 0) {
+            return false;
+        }
+        return publish_task_ipc_completion_event(
+            slot, 2, QStringLiteral("7zG worker exited before publishing completion."), now_msecs_value);
+    }
+
     bool slot_has_pending_task_ipc_events(TaskIpcSlotRaw const& slot) {
         return slot.acknowledged_event_sequence < slot.published_event_sequence;
     }

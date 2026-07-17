@@ -262,7 +262,7 @@ namespace z7::ui::gui {
                                              z7::app::describe_archive_error(run_result.result.error))
                                        : z7::ui::archive_support::from_native_string(run_result.result.summary);
                 if (!canceled
-                    && !run_result.final_error_displayed
+                    && !run_result.final_error_presented
                     && (presentation == z7::ui::runtime_support::TaskResultPresentation::kFinalError
                         || presentation
                             == z7::ui::runtime_support::TaskResultPresentation::kFinalErrorThenMessages)

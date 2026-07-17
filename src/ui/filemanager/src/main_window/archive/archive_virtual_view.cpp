@@ -9,6 +9,17 @@
 
 namespace z7::ui::filemanager {
 
+    namespace {
+
+        QString single_line_status_text(QString message) {
+            message.replace(QStringLiteral("\r\n"), QStringLiteral(" "));
+            message.replace(QLatin1Char('\r'), QLatin1Char(' '));
+            message.replace(QLatin1Char('\n'), QLatin1Char(' '));
+            return message.trimmed();
+        }
+
+    } // namespace
+
     QString MainWindow::archive_virtual_display_path_for_panel(int panel_index) const {
         return panel_controller(panel_index).archive_virtual_display_path();
     }
@@ -76,11 +87,15 @@ namespace z7::ui::filemanager {
              finished_cb,
              failed_cb,
              session_token](bool ok, int, int error_domain, QString const& summary, z7::app::OperationOutcome const&) {
-                if (!ok && failed_cb) {
+                bool const listing_completed = out_list_result != nullptr
+                                            && out_list_result->has_value()
+                                            && out_list_result->value().listing_completed;
+                bool const result_is_usable = ok || listing_completed;
+                if (!result_is_usable && failed_cb) {
                     failed_cb(error_domain, summary);
                 }
                 bool loaded = false;
-                if (ok && out_list_result != nullptr && out_list_result->has_value()) {
+                if (result_is_usable && out_list_result != nullptr && out_list_result->has_value()) {
                     loaded = apply_archive_list_result_for_panel(panel_index,
                                                                  source_archive,
                                                                  normalized_virtual_dir,
@@ -91,12 +106,20 @@ namespace z7::ui::filemanager {
                                                                  session_token,
                                                                  effective_display_source);
                 }
+                if (loaded && !ok) {
+                    show_transient_status_message(single_line_status_text(summary), 5000, panel_index);
+                }
                 if (finished_cb) {
                     finished_cb(loaded);
                 }
             },
             task_ui_mode,
-            [suppress_unsupported_warning](int error_domain, QString const&) {
+            [suppress_unsupported_warning, out_list_result](int error_domain, QString const&) {
+                if (out_list_result != nullptr
+                    && out_list_result->has_value()
+                    && out_list_result->value().listing_completed) {
+                    return false;
+                }
                 if (!suppress_unsupported_warning) {
                     return true;
                 }
@@ -133,7 +156,7 @@ namespace z7::ui::filemanager {
 
         QString const source_archive = QFileInfo(archive_path).absoluteFilePath();
         QString const normalized_virtual_dir = z7::ui::archive_support::normalize_virtual_dir(virtual_dir);
-        if (!list_result.ok) {
+        if (!list_result.ok && !list_result.listing_completed) {
             QString summary = z7::ui::archive_support::from_utf8_string(list_result.summary);
             if (summary.isEmpty()) {
                 summary = z7::ui::archive_support::from_utf8_string(z7::app::describe_archive_error(list_result.error));

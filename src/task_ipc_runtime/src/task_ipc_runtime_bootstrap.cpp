@@ -15,12 +15,12 @@
 namespace z7::task_ipc_runtime::task_ipc_internal {
     namespace {
 
-#if !defined(Q_OS_MACOS)
+#if !Z7_TASK_IPC_PER_TASK_POSIX
         void set_memory_native_key(QSharedMemory* memory, QString const& native_key) {
             if (memory != nullptr) {
 #ifdef Q_OS_WIN
                 memory->setNativeKey(native_key, QNativeIpcKey::Type::Windows);
-#elif !defined(Q_OS_MACOS)
+#elif !Z7_TASK_IPC_PER_TASK_POSIX
                 memory->setNativeKey(native_key, QNativeIpcKey::Type::PosixRealtime);
 #else
                 Q_UNUSED(native_key);
@@ -29,7 +29,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         }
 
         void remove_stale_named_memory(QString const& native_key) {
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
             Q_UNUSED(native_key);
 #elif !defined(Q_OS_WIN)
             QByteArray const encoded_key = native_key.toUtf8();
@@ -169,11 +169,11 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
     }
 
     bool open_bootstrap_memory(bool allow_create, std::shared_ptr<QSharedMemory>* out_memory, QString* error_message) {
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         Q_UNUSED(allow_create);
         Q_UNUSED(out_memory);
         if (error_message != nullptr) {
-            *error_message = QStringLiteral("Task IPC bootstrap shared memory is not used on macOS.");
+            *error_message = QStringLiteral("Task IPC bootstrap shared memory is not used by the per-task POSIX backend.");
         }
         return false;
 #else
@@ -235,11 +235,11 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
 
     bool
     open_request_pool_memory(bool allow_create, std::shared_ptr<QSharedMemory>* out_memory, QString* error_message) {
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         Q_UNUSED(allow_create);
         Q_UNUSED(out_memory);
         if (error_message != nullptr) {
-            *error_message = QStringLiteral("Task IPC request-pool shared memory is not used on macOS.");
+            *error_message = QStringLiteral("Task IPC request-pool shared memory is not used by the per-task POSIX backend.");
         }
         return false;
 #else
@@ -306,7 +306,7 @@ namespace z7::task_ipc_runtime {
     QString task_ipc_bootstrap_key() {
 #ifdef Q_OS_WIN
         return QStringLiteral("Local\\z7.bridge.bootstrap.v1");
-#elif defined(Q_OS_MACOS)
+#elif Z7_TASK_IPC_PER_TASK_POSIX
         return QString();
 #else
         return QStringLiteral("/z7.bridge.bootstrap.v1");
@@ -316,7 +316,7 @@ namespace z7::task_ipc_runtime {
     QString task_ipc_request_pool_key() {
 #ifdef Q_OS_WIN
         return QStringLiteral("Local\\z7.bridge.reqpool.v1");
-#elif defined(Q_OS_MACOS)
+#elif Z7_TASK_IPC_PER_TASK_POSIX
         return QString();
 #else
         return QStringLiteral("/z7.bridge.reqpool.v1");
@@ -343,8 +343,8 @@ namespace z7::task_ipc_runtime {
             error_message->clear();
         }
 
-#if defined(Q_OS_MACOS)
-        return true;
+#if Z7_TASK_IPC_PER_TASK_POSIX
+        return task_ipc_internal::preflight_posix_task_ipc_platform(error_message);
 #else
         std::shared_ptr<QSharedMemory> bootstrap_memory;
         if (!task_ipc_internal::open_bootstrap_memory(true, &bootstrap_memory, error_message)) {
@@ -357,7 +357,7 @@ namespace z7::task_ipc_runtime {
     }
 
     void set_task_ipc_worker_endpoint(QString const& shm_name, QString const& sem_name) {
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         task_ipc_internal::set_posix_worker_endpoint(shm_name, sem_name);
 #else
         Q_UNUSED(shm_name);
@@ -373,7 +373,7 @@ namespace z7::task_ipc_runtime {
                 owner_instance_id, &normalized_owner_instance_id, error_message)) {
             return false;
         }
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         task_ipc_internal::set_posix_event_notifier(normalized_owner_instance_id, std::move(notifier));
         return true;
 #else
@@ -388,7 +388,7 @@ namespace z7::task_ipc_runtime {
                 owner_instance_id, &normalized_owner_instance_id, error_message)) {
             return false;
         }
-#if defined(Q_OS_MACOS)
+#if Z7_TASK_IPC_PER_TASK_POSIX
         task_ipc_internal::clear_posix_event_notifier(normalized_owner_instance_id);
         return true;
 #else

@@ -32,6 +32,7 @@ namespace z7::app {
     struct ArchiveLog {
         OperationStage stage = OperationStage::kRunning;
         OutputChannel channel = OutputChannel::kNone;
+        OperationMessageKind message_kind = OperationMessageKind::kGeneral;
         std::string message;
         std::optional<BenchmarkTypedSnapshot> benchmark_snapshot;
         std::optional<BenchmarkTypedSummary> benchmark_summary;

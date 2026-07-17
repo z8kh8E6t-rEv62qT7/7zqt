@@ -149,7 +149,13 @@ namespace z7::app {
                                    std::function<bool()> const& wait_while_paused,
                                    std::string const& archive_display_path,
                                    UInt32 num_items,
-                                   OpenArchiveDiagnostics const* open_diagnostics) {
+                                   OpenArchiveDiagnostics const* open_diagnostics,
+                                   bool open_diagnostic_already_published) {
+            ReadOperationOpenDiagnosticState const open_diagnostic_state =
+                publish_read_operation_open_diagnostics(
+                    hooks,
+                    open_diagnostics,
+                    open_diagnostic_already_published);
             std::unordered_set<std::string> selected_entries;
             selected_entries.reserve(request.entries.size());
             std::vector<std::string> normalized_request_entries;
@@ -239,7 +245,7 @@ namespace z7::app {
                                 0,
                                 selected_total_files,
                                 0,
-                                0,
+                                open_diagnostic_state.progress_error_count,
                                 {},
                                 {});
 
@@ -256,7 +262,10 @@ namespace z7::app {
                                                            archive_display_path,
                                                            selected_total_files,
                                                            request.configured_memory_limit_bytes,
-                                                           request.configured_memory_limit_defined);
+                                                           request.configured_memory_limit_defined,
+                                                           {},
+                                                           open_diagnostic_state.progress_error_count,
+                                                           open_diagnostic_state.archive_context_reported);
             UInt32 const* indices = nullptr;
             UInt32 num_indices = static_cast<UInt32>(-1);
             if (!selected_entries.empty()) {
@@ -407,7 +416,8 @@ namespace z7::app {
                 [this]() { return this->wait_while_paused(); },
                 archive_selection_path,
                 num_items,
-                &archive_session_state(*session).open_diagnostics);
+                &archive_session_state(*session).open_diagnostics,
+                false);
             apply_open_archive_diagnostics(result, archive_session_state(*session).open_diagnostics);
             return result;
         }
@@ -416,7 +426,7 @@ namespace z7::app {
             request.archive_path,
             {},
             hooks,
-            OpenResultMessagePolicy::kOperationMessages,
+            OpenResultMessagePolicy::kReadOperationMessages,
             true,
             {},
             [&](OpenArchiveReadState const& open_state, UInt32 num_items) -> TestResult {
@@ -428,7 +438,8 @@ namespace z7::app {
                     [this]() { return this->wait_while_paused(); },
                     request.archive_path,
                     num_items,
-                    &open_state.open_diagnostics);
+                    &open_state.open_diagnostics,
+                    true);
             });
     }
 
@@ -455,6 +466,11 @@ namespace z7::app {
                 return make_operation_failure<HashResult>(
                     ArchiveErrorDomain::kInvalidArguments, "Session archive unavailable", 7);
             }
+            ReadOperationOpenDiagnosticState const open_diagnostic_state =
+                publish_read_operation_open_diagnostics(
+                    hooks,
+                    &archive_session_state(*session).open_diagnostics,
+                    false);
             UInt32 num_items = 0;
             const HRESULT num_items_hr = arc->Archive->GetNumberOfItems(&num_items);
             if (num_items_hr != S_OK) {
@@ -486,7 +502,8 @@ namespace z7::app {
                                                              single_selected_entry,
                                                              session->display_path(),
                                                              password,
-                                                             &archive_session_state(*session).open_diagnostics);
+                                                             &archive_session_state(*session).open_diagnostics,
+                                                             open_diagnostic_state);
                 if (!result.ok && result.error.domain == ArchiveErrorDomain::kPassword) {
                     session->clear_password();
                 }
@@ -494,7 +511,11 @@ namespace z7::app {
                 return result;
             }
 
-            HashResult result = run_hash_entries(request, hooks, hash_entries, single_selected_entry);
+            HashResult result = run_hash_entries(request,
+                                                 hooks,
+                                                 hash_entries,
+                                                 single_selected_entry,
+                                                 open_diagnostic_state.progress_error_count);
             apply_open_archive_diagnostics(result, archive_session_state(*session).open_diagnostics);
             return result;
         }

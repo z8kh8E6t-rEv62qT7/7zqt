@@ -296,6 +296,7 @@ namespace z7::app {
                         OperationStage stage,
                         OutputChannel channel,
                         std::string const& message,
+                        OperationMessageKind message_kind,
                         std::optional<BenchmarkTypedSnapshot> const& benchmark_snapshot,
                         std::optional<BenchmarkTypedSummary> const& benchmark_summary) {
         if (!hooks.on_event) {
@@ -304,6 +305,7 @@ namespace z7::app {
 
         OperationEvent event;
         event.kind = OperationEventKind::kLog;
+        event.message_kind = message_kind;
         event.stage = stage;
         event.output_channel = channel;
         event.message = message;

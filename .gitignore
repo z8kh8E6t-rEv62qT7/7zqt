@@ -6,3 +6,4 @@ temp/
 .idea/
 .claude/
 memo.md
+/tests/

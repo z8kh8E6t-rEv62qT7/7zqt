@@ -33,7 +33,9 @@ namespace z7::app {
                                   uint64_t total_files,
                                   uint64_t configured_memory_limit_bytes = 0,
                                   bool configured_memory_limit_defined = false,
-                                  std::string initial_password = {});
+                                  std::string initial_password = {},
+                                  uint64_t initial_progress_error_count = 0,
+                                  bool archive_context_already_reported = false);
 
         void set_hash_bundle(CHashBundle* hash_bundle);
 
@@ -102,6 +104,7 @@ namespace z7::app {
         uint64_t total_files_ = 0;
         uint64_t completed_files_ = 0;
         uint64_t error_count_ = 0;
+        uint64_t initial_progress_error_count_ = 0;
         std::string current_path_;
         bool ratio_input_size_known_ = false;
         uint64_t ratio_input_size_ = 0;

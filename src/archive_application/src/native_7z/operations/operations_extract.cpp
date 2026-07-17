@@ -386,7 +386,13 @@ namespace z7::app {
                                          std::function<bool()> wait_while_paused,
                                          std::shared_ptr<ExtractBudgetTracker> const& budget_tracker,
                                          std::vector<ExtractRollbackEntry>& request_rollback_entries,
-                                         OpenArchiveDiagnostics const* open_diagnostics) {
+                                         OpenArchiveDiagnostics const* open_diagnostics,
+                                         bool open_diagnostic_already_published) {
+            ReadOperationOpenDiagnosticState const open_diagnostic_state =
+                publish_read_operation_open_diagnostics(
+                    hooks,
+                    open_diagnostics,
+                    open_diagnostic_already_published);
             std::unordered_set<std::string> selected_entries;
             selected_entries.reserve(request.entries.size());
             for (std::string const& entry : request.entries) {
@@ -459,7 +465,7 @@ namespace z7::app {
                                 0,
                                 total_files,
                                 0,
-                                0,
+                                open_diagnostic_state.progress_error_count,
                                 {},
                                 {});
 
@@ -539,7 +545,9 @@ namespace z7::app {
                                           budget_tracker,
                                           request.configured_memory_limit_bytes,
                                           request.configured_memory_limit_defined,
-                                          archive_metadata_source_path);
+                                          archive_metadata_source_path,
+                                          open_diagnostic_state.progress_error_count,
+                                          open_diagnostic_state.archive_context_reported);
 
             UInt32 const* indices = nullptr;
             UInt32 num_indices = static_cast<UInt32>(-1);
@@ -748,7 +756,8 @@ namespace z7::app {
                     [this]() { return this->wait_while_paused(); },
                     budget_tracker,
                     request_rollback_entries,
-                    &archive_session_state(*session).open_diagnostics);
+                    &archive_session_state(*session).open_diagnostics,
+                    false);
                 if (!result.ok && result.error.domain == ArchiveErrorDomain::kPassword) {
                     session->clear_password();
                 }
@@ -759,7 +768,7 @@ namespace z7::app {
                 single_request.archive_path,
                 single_request.archive_type_hint,
                 single_hooks,
-                OpenResultMessagePolicy::kOperationMessages,
+                OpenResultMessagePolicy::kReadOperationMessages,
                 true,
                 single_request.password,
                 [&](OpenArchiveReadState const& open_state, UInt32 num_items) -> ExtractResult {
@@ -773,7 +782,8 @@ namespace z7::app {
                         [this]() { return this->wait_while_paused(); },
                         budget_tracker,
                         request_rollback_entries,
-                        &open_state.open_diagnostics);
+                        &open_state.open_diagnostics,
+                        true);
                 });
         };
 
