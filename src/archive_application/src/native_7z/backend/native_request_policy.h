@@ -97,15 +97,17 @@ namespace z7::app {
                          : Runner::ExecutionEnvelope::kDirect;
             };
             options.pauseable_flag = Runner::PauseableFlag::kUpdating;
+        } else if constexpr (std::is_same_v<TRequest, ListRequest>) {
+            options.require_codecs_when = [](TRequest const& req) {
+                return !req.session_token.has_value() || !req.session_token->is_valid();
+            };
         } else if constexpr (std::is_same_v<TRequest, AddRequest>
                              || std::is_same_v<TRequest, ExtractRequest>
                              || std::is_same_v<TRequest, TestRequest>
                              || std::is_same_v<TRequest, BenchmarkRequest>
                              || std::is_same_v<TRequest, OpenArchiveRequest>
                              || std::is_same_v<TRequest, OpenArchiveFromPathRequest>
-                             || std::is_same_v<TRequest, OpenArchiveFromParentRequest>
                              || std::is_same_v<TRequest, SetArchiveSessionFilenameCodePageRequest>
-                             || std::is_same_v<TRequest, ListRequest>
                              || std::is_same_v<TRequest, ArchivePropertiesRequest>
                              || std::is_same_v<TRequest, ArchiveCommentRequest>
                              || std::is_same_v<TRequest, GetEntryInfoRequest>) {

@@ -161,7 +161,8 @@ namespace z7::ui::filemanager {
                     // when it rejects startup, so rollback is centralized in that callback.
                     return;
                 }
-            });
+            },
+            RunnerTaskUiMode::kDelayed);
     }
 
     void MainWindow::open_archive_inside(QString const& archive_path, QString const& archive_type_hint) {
