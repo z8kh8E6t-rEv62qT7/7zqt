@@ -148,6 +148,20 @@ namespace z7::ui::filemanager {
                         invert_operable_selection_for_panel(panel_index);
                         return true;
                     }
+                    if (key_event->key() == Qt::Key_Space && modifiers == Qt::NoModifier
+                        && in_archive_view_for_panel(panel_index)) {
+                        PanelController const& panel = panel_controller(panel_index);
+                        QModelIndex const focused = panel.focused_source_index();
+                        if (focused.isValid()
+                            && !panel.model->is_parent_link_for_row(focused.row())
+                            && !panel.model->is_dir_for_row(focused.row())
+                            && try_open_archive_image_preview_for_panel(
+                                panel_index,
+                                panel.model->path_for_row(focused.row()),
+                                panel.model->archive_index_for_row(focused.row()))) {
+                            return true;
+                        }
+                    }
                     if (key_event->key() == Qt::Key_F4 && modifiers == Qt::ShiftModifier) {
                         on_create_file_requested();
                         return true;

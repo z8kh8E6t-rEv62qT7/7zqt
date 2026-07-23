@@ -153,7 +153,8 @@ namespace z7::app {
                                                CreateRequest,
                                                ArchiveCommentRequest,
                                                FilesystemCommentRequest,
-                                               GetEntryInfoRequest>;
+                                               GetEntryInfoRequest,
+                                               ReadArchiveEntryRequest>;
 
     struct ArchiveRequest {
         ArchiveRequestPayload payload;
@@ -180,7 +181,8 @@ namespace z7::app {
                                           CreateResult,
                                           ArchiveCommentResult,
                                           FilesystemCommentResult,
-                                          GetEntryInfoResult>;
+                                          GetEntryInfoResult,
+                                          ReadArchiveEntryResult>;
 
     struct OperationOutcome {
         OperationStatus status = OperationStatus::kFailed;

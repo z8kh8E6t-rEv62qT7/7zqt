@@ -70,6 +70,7 @@ if(Z7_QT_ROOT)
 endif()
 
 find_package(Qt6 ${Z7_QT_VERSION_MIN} REQUIRED COMPONENTS Core Gui Widgets Concurrent)
+include(Z7FFmpeg)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)

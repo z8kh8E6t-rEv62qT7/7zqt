@@ -59,6 +59,8 @@ namespace z7::app {
             return "comment_filesystem";
         } else if constexpr (std::is_same_v<TRequest, GetEntryInfoRequest>) {
             return "get_entry_info";
+        } else if constexpr (std::is_same_v<TRequest, ReadArchiveEntryRequest>) {
+            return "read_archive_entry";
         } else {
             return "operation";
         }
@@ -110,7 +112,8 @@ namespace z7::app {
                              || std::is_same_v<TRequest, SetArchiveSessionFilenameCodePageRequest>
                              || std::is_same_v<TRequest, ArchivePropertiesRequest>
                              || std::is_same_v<TRequest, ArchiveCommentRequest>
-                             || std::is_same_v<TRequest, GetEntryInfoRequest>) {
+                             || std::is_same_v<TRequest, GetEntryInfoRequest>
+                             || std::is_same_v<TRequest, ReadArchiveEntryRequest>) {
             options.require_codecs = true;
         }
 
@@ -141,6 +144,7 @@ namespace z7::app {
                              || std::is_same_v<TRequest, SplitRequest>
                              || std::is_same_v<TRequest, CombineRequest>
                              || std::is_same_v<TRequest, GetEntryInfoRequest>
+                             || std::is_same_v<TRequest, ReadArchiveEntryRequest>
                              || std::is_same_v<TRequest, FilesystemCommentRequest>) {
             options.execution_envelope = Runner::ExecutionEnvelope::kCancelable;
         } else if constexpr (std::is_same_v<TRequest, NavigateRequest> || std::is_same_v<TRequest, CreateRequest>) {

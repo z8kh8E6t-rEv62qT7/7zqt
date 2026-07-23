@@ -287,7 +287,7 @@ namespace z7::ui::filemanager {
         QString const archive_path = options.archive_path;
         QString const archive_display_source = plan.current_display_source();
         z7::app::ArchiveSessionToken const session_token = options.session_token;
-        return start_task_with_runner(
+        bool const started = start_task_with_runner(
             header,
             trimmed_caption,
             [options](ArchiveProcessRunner* runner) {
@@ -300,6 +300,10 @@ namespace z7::ui::filemanager {
                 }
                 reload_matching_archive_writeback_panels(archive_path, archive_display_source, session_token);
             });
+        if (started) {
+            close_archive_image_preview_for_session(session_token);
+        }
+        return started;
     }
 
     bool MainWindow::start_add_mapped_files_to_archive_preview(
@@ -331,7 +335,7 @@ namespace z7::ui::filemanager {
         QString const header = trimmed_caption;
         QString const archive_path = options.archive_path;
         QString const archive_display_source = plan.current_display_source();
-        return start_task_with_runner(
+        bool const started = start_task_with_runner(
             header,
             trimmed_caption,
             [options](ArchiveProcessRunner* runner) {
@@ -346,6 +350,10 @@ namespace z7::ui::filemanager {
                     finished_cb(ok, code, native_code, summary, outcome);
                 }
             });
+        if (started) {
+            close_archive_image_preview_for_session(session_token);
+        }
+        return started;
     }
 
     bool MainWindow::PanelController::matches_archive_writeback_target(QString const& source_archive,

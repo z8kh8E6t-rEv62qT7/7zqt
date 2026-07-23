@@ -467,6 +467,29 @@ namespace z7::ui::filemanager {
                                std::move(out_list_result));
     }
 
+    bool ArchiveProcessRunner::start_read_archive_entry(
+        z7::app::ArchiveSessionToken session_token,
+        uint32_t entry_index,
+        uint64_t max_bytes,
+        std::shared_ptr<std::optional<z7::app::ReadArchiveEntryResult>> out_result) {
+        if (!session_token.is_valid()) {
+            return finish_immediately(z7::app::make_immediate_result(
+                7, z7::app::ArchiveErrorDomain::kInvalidArguments, to_utf8_string(z7::ui::runtime_support::L(3015))));
+        }
+
+        z7::app::ReadArchiveEntryRequest request;
+        request.session_token = session_token;
+        request.entry_index = entry_index;
+        request.max_bytes = max_bytes;
+        return start_operation(QStringLiteral("ReadArchiveEntry"),
+                               QStringList{},
+                               z7::app::ArchiveRequest{std::move(request)},
+                               {},
+                               {},
+                               {},
+                               std::move(out_result));
+    }
+
     bool ArchiveProcessRunner::start_extract_in_session(z7::app::ArchiveSessionToken token,
                                                         QString const& output_dir,
                                                         OverwriteMode overwrite_mode,

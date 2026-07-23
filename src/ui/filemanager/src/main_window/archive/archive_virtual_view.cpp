@@ -5,6 +5,7 @@
 
 #include "archive_failure_messages.h"
 #include "main_window/deps.h"
+#include "main_window/image_preview/archive_image_preview_controller.h"
 #include "main_window/internal.h"
 
 namespace z7::ui::filemanager {
@@ -250,6 +251,9 @@ namespace z7::ui::filemanager {
             }
             return false;
         }
+        if (archive_image_preview_ != nullptr) {
+            archive_image_preview_->close_for_session(panel.archive.current_token);
+        }
 
         QStringList const selected_paths_snapshot =
             selected_filesystem_paths_including_parent_link_for_panel(panel_index);
@@ -491,6 +495,7 @@ namespace z7::ui::filemanager {
 
     void MainWindow::release_archive_temp_session_for_panel_close(int panel_index,
                                                                   QSharedPointer<ArchiveTempSession> const& session) {
+        abandon_archive_temp_sessions_for_panel(panel_index);
         if (archive_temp_session_referenced_outside_panel(panel_index, session)) {
             return;
         }
@@ -505,7 +510,12 @@ namespace z7::ui::filemanager {
             return;
         }
 
+        abandon_archive_temp_sessions_for_panel(panel_index);
+
         PanelController const& panel = panel_controller(panel_index);
+        if (archive_image_preview_ != nullptr) {
+            archive_image_preview_->close_for_session(panel.archive.current_token);
+        }
         QVector<z7::app::ArchiveSessionToken> tokens;
         if (panel.archive.current_token.is_valid()) {
             tokens.push_back(panel.archive.current_token);

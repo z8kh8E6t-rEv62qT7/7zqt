@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -202,6 +203,10 @@ namespace z7::app {
         // Populated only when is_directory == true; requires an index scan.
         std::optional<uint64_t> subtree_file_count;
         std::optional<uint64_t> subtree_total_size;
+    };
+
+    struct ReadArchiveEntryResult : OperationResult {
+        std::shared_ptr<const std::vector<uint8_t>> bytes;
     };
 
 } // namespace z7::app

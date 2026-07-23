@@ -328,6 +328,10 @@ namespace z7::ui::filemanager {
         overwrite_prompt_handler_ = std::move(handler);
     }
 
+    void ArchiveProcessRunner::set_password_prompt_handler(PasswordPromptHandler handler) {
+        password_prompt_handler_ = std::move(handler);
+    }
+
     void ArchiveProcessRunner::set_choice_prompt_handler(ChoicePromptHandler handler) {
         choice_prompt_handler_ = std::move(handler);
     }
@@ -355,11 +359,16 @@ namespace z7::ui::filemanager {
             prompt.archive_path = password_prompt_archive_path(*active_request_, outcome);
             prompt.reason = "wrong_password";
             prompt.reason_kind = z7::app::PasswordPromptReason::kWrongPassword;
-            QWidget* parent = nullptr;
-            if (prompt_parent_provider_) {
-                parent = prompt_parent_provider_();
+            z7::app::PasswordReply reply;
+            if (password_prompt_handler_) {
+                reply = password_prompt_handler_(prompt);
+            } else {
+                QWidget* parent = nullptr;
+                if (prompt_parent_provider_) {
+                    parent = prompt_parent_provider_();
+                }
+                reply = show_default_password_prompt(parent, prompt);
             }
-            z7::app::PasswordReply const reply = show_default_password_prompt(parent, prompt);
             if (reply.kind != z7::app::PasswordReplyKind::kProvide) {
                 finalize_outcome(make_canceled_outcome("Operation canceled."));
                 return;
@@ -402,6 +411,13 @@ namespace z7::ui::filemanager {
                 pending_parent_session_result_->reset();
             }
         }
+        if (pending_read_entry_result_) {
+            if (auto const read_result = z7::app::outcome_payload_as<z7::app::ReadArchiveEntryResult>(outcome)) {
+                *pending_read_entry_result_ = *read_result;
+            } else {
+                pending_read_entry_result_->reset();
+            }
+        }
 
         bool const canceled =
             outcome.status == z7::app::OperationStatus::kCanceled || z7::app::is_operation_canceled(last_result_.error);
@@ -416,6 +432,7 @@ namespace z7::ui::filemanager {
         pending_list_result_.reset();
         pending_session_result_.reset();
         pending_parent_session_result_.reset();
+        pending_read_entry_result_.reset();
         active_request_.reset();
         active_targets_.clear();
         retry_next_password_.reset();
@@ -431,7 +448,8 @@ namespace z7::ui::filemanager {
         z7::app::ArchiveRequest request,
         std::shared_ptr<std::optional<z7::app::ListResult>> out_list_result,
         std::shared_ptr<std::optional<z7::app::OpenArchiveSessionResult>> out_session_result,
-        std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>> out_parent_session_result) {
+        std::shared_ptr<std::optional<z7::app::OpenArchiveFromParentResult>> out_parent_session_result,
+        std::shared_ptr<std::optional<z7::app::ReadArchiveEntryResult>> out_read_entry_result) {
         if (running_) {
             return false;
         }
@@ -445,6 +463,7 @@ namespace z7::ui::filemanager {
         pending_list_result_ = std::move(out_list_result);
         pending_session_result_ = std::move(out_session_result);
         pending_parent_session_result_ = std::move(out_parent_session_result);
+        pending_read_entry_result_ = std::move(out_read_entry_result);
         z7::ui::runtime_support::apply_configured_large_pages_mode();
 
         return start_active_request_attempt();
@@ -480,11 +499,16 @@ namespace z7::ui::filemanager {
                         return retry_reply;
                     }
 
-                    QWidget* parent = nullptr;
-                    if (prompt_parent_provider_) {
-                        parent = prompt_parent_provider_();
+                    z7::app::PasswordReply reply;
+                    if (password_prompt_handler_) {
+                        reply = password_prompt_handler_(prompt_value);
+                    } else {
+                        QWidget* parent = nullptr;
+                        if (prompt_parent_provider_) {
+                            parent = prompt_parent_provider_();
+                        }
+                        reply = show_default_password_prompt(parent, prompt_value);
                     }
-                    z7::app::PasswordReply reply = show_default_password_prompt(parent, prompt_value);
                     password_prompt_canceled_ = reply.kind != z7::app::PasswordReplyKind::kProvide;
                     return reply;
                 });

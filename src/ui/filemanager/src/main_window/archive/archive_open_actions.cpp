@@ -181,22 +181,9 @@ namespace z7::ui::filemanager {
 
     } // namespace
 
-    QSharedPointer<QTemporaryDir> MainWindow::create_temporary_directory_with_prefix(QString const& prefix,
-                                                                                     QString const& failure_caption) {
-        QString const normalized_root = QDir::cleanPath(QDir::tempPath());
-        if (normalized_root.trimmed().isEmpty()) {
-            QMessageBox::warning(this, failure_caption, QStringLiteral("Failed to create temporary directory."));
-            return {};
-        }
-
-        QDir root_dir(normalized_root);
-        if (!root_dir.exists() && !root_dir.mkpath(QStringLiteral("."))) {
-            QMessageBox::warning(this, failure_caption, QStringLiteral("Failed to create temporary directory."));
-            return {};
-        }
-
-        QString const pattern = root_dir.filePath(prefix);
-        QSharedPointer<QTemporaryDir> const temp_dir(new QTemporaryDir(pattern));
+    QSharedPointer<OwnedTemporaryDirectory>
+    MainWindow::create_temporary_directory_with_prefix(QString const& prefix, QString const& failure_caption) {
+        QSharedPointer<OwnedTemporaryDirectory> const temp_dir(new OwnedTemporaryDirectory(prefix));
         if (temp_dir == nullptr || !temp_dir->isValid()) {
             QMessageBox::warning(this, failure_caption, QStringLiteral("Failed to create temporary directory."));
             return {};
@@ -204,12 +191,14 @@ namespace z7::ui::filemanager {
         return temp_dir;
     }
 
-    QSharedPointer<QTemporaryDir> MainWindow::create_archive_open_temporary_directory(QString const& failure_caption) {
-        return create_temporary_directory_with_prefix(QStringLiteral("7zO_XXXXXX"), failure_caption);
+    QSharedPointer<OwnedTemporaryDirectory>
+    MainWindow::create_archive_open_temporary_directory(QString const& failure_caption) {
+        return create_temporary_directory_with_prefix(QStringLiteral("7zO"), failure_caption);
     }
 
-    QSharedPointer<QTemporaryDir> MainWindow::create_archive_drag_temporary_directory(QString const& failure_caption) {
-        return create_temporary_directory_with_prefix(QStringLiteral("7zE_XXXXXX"), failure_caption);
+    QSharedPointer<OwnedTemporaryDirectory>
+    MainWindow::create_archive_drag_temporary_directory(QString const& failure_caption) {
+        return create_temporary_directory_with_prefix(QStringLiteral("7zE"), failure_caption);
     }
 
     void MainWindow::materialize_archive_drag_entries_for_panel(
@@ -242,7 +231,7 @@ namespace z7::ui::filemanager {
             return;
         }
 
-        QSharedPointer<QTemporaryDir> const temp_dir = create_archive_drag_temporary_directory(
+        QSharedPointer<OwnedTemporaryDirectory> const temp_dir = create_archive_drag_temporary_directory(
             z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(540)));
         if (temp_dir == nullptr || !temp_dir->isValid()) {
             finish({}, QStringLiteral("Failed to allocate temporary directory for drag-out."));
@@ -271,7 +260,7 @@ namespace z7::ui::filemanager {
 
         struct DragMaterializationTask final : public std::enable_shared_from_this<DragMaterializationTask> {
             QPointer<MainWindow> owner;
-            QSharedPointer<QTemporaryDir> temp_dir;
+            QSharedPointer<OwnedTemporaryDirectory> temp_dir;
             QStringList normalized_entries;
             QString archive_path;
             QString archive_type_hint;

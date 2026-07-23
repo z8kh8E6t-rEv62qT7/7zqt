@@ -81,6 +81,14 @@
         "failed_launch": "Failed to launch Open outside.",
         "failed_launch_for_paths": "Failed to launch Open outside for:\n{0}",
         "no_external_paths": "No external paths available for Open outside."
+      },
+      "image_preview": {
+        "previous": "Previous",
+        "next": "Next",
+        "loading": "Loading…",
+        "read_failed": "Unable to read this image from the archive.",
+        "decode_failed": "Unable to decode this image.",
+        "animation_too_large": "Animation exceeds 256 MiB; showing the first frame only."
       }
     },
     "navigation": {

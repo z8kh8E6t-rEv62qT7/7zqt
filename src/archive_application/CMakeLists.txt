@@ -61,6 +61,7 @@ set(Z7_NATIVE_7Z_SOURCES
   "src/native_7z/session/session_registry.cpp"
   "src/native_7z/session/session_parent_item_replace.cpp"
   "src/native_7z/session/session_registry_open_parent.cpp"
+  "src/native_7z/session/session_registry_read_entry.cpp"
   "src/native_7z/session/session_registry_open_path.cpp")
 
 set(Z7_APP_LOGIC_SOURCES

@@ -22,6 +22,7 @@
 #include <QSystemSemaphore>
 #endif
 
+#include "native_process_qt.h"
 #include "task_ipc_runtime.h"
 
 class QSharedMemory;
@@ -234,10 +235,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
 
         virtual bool
         start_unclaimed_timer(qint64 timeout_msecs, std::function<void()> callback, QString* error_message) = 0;
-        virtual bool
-        start_worker_exit_monitor(qint64 worker_pid, std::function<void()> callback, QString* error_message) = 0;
         virtual void stop_unclaimed_timer() = 0;
-        virtual void stop_worker_exit_monitor() = 0;
     };
 
     std::unique_ptr<PosixTaskIpcPlatformMonitor> create_posix_task_ipc_platform_monitor();
@@ -317,6 +315,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         std::atomic_bool stop_waiter_{false};
         std::thread waiter_thread_;
         std::unique_ptr<PosixTaskIpcPlatformMonitor> platform_monitor_;
+        std::unique_ptr<z7::platform::qt::NativeProcessExitMonitor> worker_exit_monitor_;
         std::mutex unclaimed_stop_mutex_;
         std::mutex worker_stop_mutex_;
     };

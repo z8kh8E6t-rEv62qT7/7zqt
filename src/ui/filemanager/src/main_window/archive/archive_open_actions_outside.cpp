@@ -200,7 +200,7 @@ namespace z7::ui::filemanager {
             return;
         }
 
-        QSharedPointer<QTemporaryDir> const temp_dir = create_archive_open_temporary_directory(
+        QSharedPointer<OwnedTemporaryDirectory> const temp_dir = create_archive_open_temporary_directory(
             z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(540)));
         if (temp_dir == nullptr) {
             return;

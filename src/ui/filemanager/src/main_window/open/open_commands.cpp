@@ -76,13 +76,16 @@ namespace z7::ui::filemanager {
                                                        QStringList const& targets,
                                                        QString const& working_dir,
                                                        QString* error_message,
-                                                       bool controlled_process,
-                                                       QProcess** started_process) {
+                                                       qint64* started_pid,
+                                                       QString* started_program) {
         if (error_message != nullptr) {
             error_message->clear();
         }
-        if (started_process != nullptr) {
-            *started_process = nullptr;
+        if (started_pid != nullptr) {
+            *started_pid = 0;
+        }
+        if (started_program != nullptr) {
+            started_program->clear();
         }
         if (targets.isEmpty()) {
             return true;
@@ -105,29 +108,20 @@ namespace z7::ui::filemanager {
         }
         args.append(targets);
 
-        if (controlled_process) {
-            QProcess* process = new QProcess(this);
-            process->setWorkingDirectory(working_dir);
-            process->start(command.program, args);
-            if (!process->waitForStarted(5000)) {
-                if (error_message != nullptr) {
-                    *error_message = lang_or(264);
-                }
-                process->deleteLater();
-                return false;
-            }
-            if (started_process != nullptr) {
-                *started_process = process;
-            }
-            return true;
-        }
-
         qint64 pid = 0;
         bool const started = external_command_launcher_ != nullptr
                                ? external_command_launcher_(command.program, args, working_dir, &pid)
                                : QProcess::startDetached(command.program, args, working_dir, &pid);
         if (!started && error_message != nullptr) {
             *error_message = lang_or(264);
+        }
+        if (started) {
+            if (started_pid != nullptr) {
+                *started_pid = pid;
+            }
+            if (started_program != nullptr) {
+                *started_program = command.program;
+            }
         }
         return started;
     }
@@ -150,8 +144,9 @@ namespace z7::ui::filemanager {
         QString const archive_path = panel.archive.source_archive;
         QString const archive_type_hint = panel.archive.type_hint.trimmed();
         z7::app::ArchiveSessionToken const session_token = panel.archive.current_token;
-        ArchiveWritebackPlan const writeback_plan = build_archive_writeback_plan_for_panel(active_panel_index_);
-        QSharedPointer<QTemporaryDir> const temp_dir = create_archive_open_temporary_directory(caption);
+        int const source_panel_index = active_panel_index_;
+        ArchiveWritebackPlan const writeback_plan = build_archive_writeback_plan_for_panel(source_panel_index);
+        QSharedPointer<OwnedTemporaryDirectory> const temp_dir = create_archive_open_temporary_directory(caption);
         if (temp_dir == nullptr) {
             return;
         }
@@ -171,6 +166,7 @@ namespace z7::ui::filemanager {
              archive_path,
              archive_type_hint,
              session_token,
+             source_panel_index,
              writeback_plan,
              command_line,
              caption](bool ok, int, int, QString const&, z7::app::OperationOutcome const&) {
@@ -192,29 +188,22 @@ namespace z7::ui::filemanager {
                 session->archive_display_source = writeback_plan.current_display_source();
                 session->archive_type_hint = archive_type_hint;
                 session->session_token = session_token;
+                session->source_panel_index = source_panel_index;
                 session->command_caption = caption;
                 session->file_snapshots = snapshots;
 
-                QProcess* process = nullptr;
+                qint64 launcher_pid = 0;
+                QString launcher_program;
                 QString error_message;
                 if (!run_external_command_with_targets(
-                        command_line, targets, temp_dir->path(), &error_message, true, &process)) {
+                        command_line, targets, temp_dir->path(), &error_message, &launcher_pid, &launcher_program)) {
                     if (!error_message.trimmed().isEmpty()) {
                         QMessageBox::warning(this, caption, error_message);
                     }
                     return;
                 }
-                session->process = process;
                 retain_archive_temp_session(session);
-                QObject::connect(
-                    process,
-                    qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-                    this,
-                    [this, session](int, QProcess::ExitStatus) { on_archive_temp_session_process_finished(session); });
-                if (process->state() == QProcess::NotRunning) {
-                    QTimer::singleShot(
-                        0, this, [this, session]() { on_archive_temp_session_process_finished(session); });
-                }
+                begin_archive_temp_session_process_tracking(session, launcher_pid, launcher_program, temp_dir->path());
             });
     }
 

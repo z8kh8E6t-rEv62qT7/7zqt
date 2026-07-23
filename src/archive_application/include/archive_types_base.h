@@ -334,4 +334,12 @@ namespace z7::app {
         std::string entry_path;
     };
 
+    // Reads one archive entry into memory. Callers must provide a live session,
+    // the native archive item index, and a non-zero byte budget.
+    struct ReadArchiveEntryRequest {
+        ArchiveSessionToken session_token;
+        uint32_t entry_index = 0;
+        uint64_t max_bytes = 0;
+    };
+
 } // namespace z7::app

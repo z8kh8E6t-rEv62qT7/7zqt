@@ -553,14 +553,38 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
             }
             return false;
         }
-        if (platform_monitor_ == nullptr) {
+        z7::platform::qt::NativeProcessSnapshot const snapshot = z7::platform::qt::native_process_snapshot();
+        if (!snapshot.ok) {
             if (error_message != nullptr) {
-                *error_message = QStringLiteral("Task IPC platform monitor is unavailable.");
+                *error_message = snapshot.error_message;
             }
             return false;
         }
-        return platform_monitor_->start_worker_exit_monitor(
-            worker_pid, [this]() { handle_worker_exit_event(); }, error_message);
+        z7::platform::qt::NativeProcessInfo const* process = snapshot.find_pid(worker_pid);
+        if (process == nullptr) {
+            handle_worker_exit_event();
+            return true;
+        }
+
+        QString monitor_error;
+        std::unique_ptr<z7::platform::qt::NativeProcessExitMonitor> monitor =
+            z7::platform::qt::NativeProcessExitMonitor::create(
+                process->identity, [this]() { handle_worker_exit_event(); }, &monitor_error);
+        if (monitor == nullptr) {
+            z7::platform::qt::NativeProcessSnapshot const after = z7::platform::qt::native_process_snapshot();
+            if (after.ok && after.find(process->identity) == nullptr) {
+                handle_worker_exit_event();
+                return true;
+            }
+            if (error_message != nullptr) {
+                *error_message = monitor_error;
+            }
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(worker_stop_mutex_);
+        worker_exit_monitor_ = std::move(monitor);
+        return true;
     }
 
     void PosixTaskIpcMapping::stop_unclaimed_timer() {
@@ -571,9 +595,13 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
     }
 
     void PosixTaskIpcMapping::stop_worker_exit_monitor() {
-        std::lock_guard<std::mutex> lock(worker_stop_mutex_);
-        if (platform_monitor_ != nullptr) {
-            platform_monitor_->stop_worker_exit_monitor();
+        std::unique_ptr<z7::platform::qt::NativeProcessExitMonitor> monitor;
+        {
+            std::lock_guard<std::mutex> lock(worker_stop_mutex_);
+            monitor = std::move(worker_exit_monitor_);
+        }
+        if (monitor != nullptr) {
+            monitor->cancel();
         }
     }
 

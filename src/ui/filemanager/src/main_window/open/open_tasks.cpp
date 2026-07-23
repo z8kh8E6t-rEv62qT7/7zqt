@@ -2,6 +2,7 @@
 // Role: Extract/test/hash/refresh and filesystem navigation actions.
 
 #include "main_window/deps.h"
+#include "main_window/image_preview/archive_image_preview_controller.h"
 #include "main_window/internal.h"
 
 namespace z7::ui::filemanager {
@@ -317,6 +318,9 @@ namespace z7::ui::filemanager {
     }
 
     void MainWindow::on_refresh_requested() {
+        if (archive_image_preview_ != nullptr && in_archive_view_for_panel(active_panel_index_)) {
+            archive_image_preview_->close_for_session(active_panel_controller().archive.current_token);
+        }
         if (refresh_directory_for_panel(active_panel_index_)) {
             update_status();
         }

@@ -86,8 +86,9 @@ namespace z7::app {
     };
 
     // Writes extracted data into a caller-owned buffer up to max_size.
-    // Returns E_OUTOFMEMORY once the limit is exceeded, which signals the
-    // caller to abandon the in-memory strategy and fall back to a temp file.
+    // Returns E_OUTOFMEMORY once the limit is exceeded. Callers decide whether
+    // that is a terminal budget error or whether another output strategy is
+    // permitted.
     class NativeBufferOutStream final : public ISequentialOutStream {
     public:
         NativeBufferOutStream(std::vector<uint8_t>& sink, size_t max_size);

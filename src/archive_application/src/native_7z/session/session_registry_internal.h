@@ -185,6 +185,16 @@ namespace z7::app {
 
     std::string archive_item_path_for_matching(CArc const& arc, UInt32 index);
 
+    std::optional<uint64_t> archive_declared_entry_size(CArc const& arc, UInt32 index);
+
+    ExtractInvocationStatus extract_archive_session_entry_to_stream(
+        ArchiveOpenSession& session,
+        UInt32 entry_index,
+        ISequentialOutStream* output_stream,
+        ArchiveBackendHooks const& hooks,
+        std::atomic<bool>* cancel_requested,
+        std::function<bool()> wait_while_paused);
+
     std::optional<OperationResult> validate_archive_session_parent_item(ArchiveOpenSession const& session,
                                                                         CArc const& parent_arc,
                                                                         UInt32* out_index);

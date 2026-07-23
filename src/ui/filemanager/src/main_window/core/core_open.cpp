@@ -2,6 +2,7 @@
 // Role: Focus resolution and open dispatch logic.
 
 #include "main_window/deps.h"
+#include "main_window/image_preview/archive_image_preview_controller.h"
 #include "main_window/internal.h"
 
 namespace z7::ui::filemanager {
@@ -71,6 +72,57 @@ namespace z7::ui::filemanager {
             target.single_entry_is_dir = false;
         }
         return target;
+    }
+
+    bool MainWindow::try_open_archive_image_preview_for_panel(
+        int panel_index,
+        QString const& entry_path,
+        std::optional<uint32_t> archive_index) {
+        if (archive_image_preview_ == nullptr
+            || !archive_index.has_value()
+            || !ArchiveImagePreviewController::is_image_candidate(entry_path)
+            || !in_archive_view_for_panel(panel_index)) {
+            return false;
+        }
+        PanelController const& panel = panel_controller(panel_index);
+        if (panel.model == nullptr || panel.proxy == nullptr || !panel.archive.current_token.is_valid()) {
+            return false;
+        }
+
+        std::vector<ArchiveImagePreviewEntry> entries;
+        std::optional<size_t> current_position;
+        int const row_count = panel.proxy->rowCount();
+        entries.reserve(static_cast<size_t>(qMax(0, row_count)));
+        QString const normalized_current = z7::ui::archive_support::normalize_virtual_dir(entry_path);
+        for (int proxy_row = 0; proxy_row < row_count; ++proxy_row) {
+            QModelIndex const proxy_index = panel.proxy->index(proxy_row, DirectoryListModel::kNameColumn);
+            QModelIndex const source_index = panel.proxy->mapToSource(proxy_index);
+            if (!source_index.isValid() || panel.model->is_parent_link_for_row(source_index.row())
+                || panel.model->is_dir_for_row(source_index.row())) {
+                continue;
+            }
+            QString const candidate =
+                z7::ui::archive_support::normalize_virtual_dir(panel.model->path_for_row(source_index.row()));
+            std::optional<uint32_t> const candidate_index = panel.model->archive_index_for_row(source_index.row());
+            if (!candidate_index.has_value() || !ArchiveImagePreviewController::is_image_candidate(candidate)) {
+                continue;
+            }
+            if (*candidate_index == *archive_index && candidate == normalized_current) {
+                current_position = entries.size();
+            }
+            entries.push_back(ArchiveImagePreviewEntry{candidate, *candidate_index});
+        }
+        if (!current_position.has_value()) {
+            return false;
+        }
+        archive_image_preview_->open(panel.archive.current_token, std::move(entries), *current_position);
+        return true;
+    }
+
+    void MainWindow::close_archive_image_preview_for_session(z7::app::ArchiveSessionToken session_token) {
+        if (archive_image_preview_ != nullptr && session_token.is_valid()) {
+            archive_image_preview_->close_for_session(session_token);
+        }
     }
 
     void
@@ -217,6 +269,17 @@ namespace z7::ui::filemanager {
                                                      {},
                                                      panel.archive.current_token,
                                                      panel.archive_display_source());
+            return;
+        }
+
+        if (ArchiveImagePreviewController::is_image_candidate(selection.single_entry_path)) {
+            if (try_open_archive_image_preview_for_panel(active_panel_index_,
+                                                         selection.single_entry_path,
+                                                         selection.single_entry_archive_index)) {
+                return;
+            }
+            show_transient_status_message(
+                z7::ui::runtime_support::J(QStringLiteral("ui.archive.image_preview.read_failed")), 5000);
             return;
         }
 

@@ -13,12 +13,14 @@
 #include <QStringList>
 #include <QVector>
 #include <array>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <vector>
 
 #include "archive_process_runner.h"
 #include "display_settings.h"
+#include "native_process_qt.h"
 
 class QAction;
 class QActionGroup;
@@ -38,7 +40,6 @@ class QProcess;
 class QSplitter;
 class QStackedWidget;
 class QStatusBar;
-class QTemporaryDir;
 class QTimer;
 class QToolBar;
 class QToolButton;
@@ -47,10 +48,12 @@ class QTreeView;
 namespace z7::ui::filemanager {
 
     class ArchiveProcessRunner;
+    class ArchiveImagePreviewController;
     class OptionsDialog;
     class TaskProgressDialog;
     class DirectoryListModel;
     class DragAwareStructuredListView;
+    class OwnedTemporaryDirectory;
     struct DropTargetInfo;
     struct DragExecutionReport;
 

@@ -166,6 +166,8 @@ namespace z7::app {
         FilesystemCommentResult comment_filesystem(FilesystemCommentRequest const& request,
                                                    ArchiveBackendHooks const& hooks = {});
         GetEntryInfoResult get_entry_info(GetEntryInfoRequest const& request, ArchiveBackendHooks const& hooks = {});
+        ReadArchiveEntryResult read_archive_entry(ReadArchiveEntryRequest const& request,
+                                                  ArchiveBackendHooks const& hooks = {});
 
         void cancel() override;
         bool supports_pause() const override;

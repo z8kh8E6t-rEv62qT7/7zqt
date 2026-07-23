@@ -30,6 +30,7 @@ namespace z7::app {
     std::optional<OperationResult> validate_request(ListRequest const& request);
     std::optional<OperationResult> validate_request(ArchivePropertiesRequest const& request);
     std::optional<OperationResult> validate_request(GetEntryInfoRequest const& request);
+    std::optional<OperationResult> validate_request(ReadArchiveEntryRequest const& request);
     std::optional<OperationResult> validate_request(NavigateRequest const& request);
     std::optional<OperationResult> validate_request(CopyRequest const& request);
     std::optional<OperationResult> validate_request(MoveRequest const& request);

@@ -423,7 +423,7 @@ namespace z7::ui::filemanager {
         QString const archive_path = panel.archive.source_archive;
         QString const archive_display_source = panel.archive_display_source();
         z7::app::ArchiveSessionToken const session_token = panel.archive.current_token;
-        return start_task_with_runner(
+        bool const started = start_task_with_runner(
             QStringLiteral("%1: %2").arg(title, QDir::toNativeSeparators(archive_path)),
             title,
             [archive_path, session_token, normalized_entry, normalized_name, entry_is_dir](
@@ -446,6 +446,10 @@ namespace z7::ui::filemanager {
                     }
                 }
             });
+        if (started) {
+            close_archive_image_preview_for_session(session_token);
+        }
+        return started;
     }
 
     void MainWindow::on_copy_to_requested() {
@@ -540,7 +544,7 @@ namespace z7::ui::filemanager {
 
             QString const archive_path = active_panel_controller().archive.source_archive;
             z7::app::ArchiveSessionToken const session_token = active_panel_controller().archive.current_token;
-            start_task_with_runner(
+            bool const started = start_task_with_runner(
                 QStringLiteral("%1: %2").arg(z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(6106)),
                                              archive_path),
                 z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(6106)),
@@ -565,6 +569,9 @@ namespace z7::ui::filemanager {
                                                              session_token,
                                                              panel.archive_display_source());
                 });
+            if (started) {
+                close_archive_image_preview_for_session(session_token);
+            }
             return;
         }
 
@@ -883,7 +890,8 @@ namespace z7::ui::filemanager {
             }
         }
 
-        QSharedPointer<QTemporaryDir> const temp_dir = create_archive_open_temporary_directory(operation_caption);
+        QSharedPointer<OwnedTemporaryDirectory> const temp_dir =
+            create_archive_open_temporary_directory(operation_caption);
         if (temp_dir == nullptr) {
             return;
         }
@@ -950,7 +958,7 @@ namespace z7::ui::filemanager {
 
                         QTimer::singleShot(
                             0, this, [this, archive_path, archive_display_source, delete_entries, session_token]() {
-                                start_task_with_runner(
+                                bool const started = start_task_with_runner(
                                     QStringLiteral("%1: %2").arg(
                                         z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(6106)),
                                         archive_path),
@@ -968,6 +976,9 @@ namespace z7::ui::filemanager {
                                         reload_matching_archive_writeback_panels(
                                             archive_path, archive_display_source, session_token);
                                     });
+                                if (started) {
+                                    close_archive_image_preview_for_session(session_token);
+                                }
                             });
                     });
                 if (!add_started) {
@@ -1078,7 +1089,7 @@ namespace z7::ui::filemanager {
                 }
 
                 QTimer::singleShot(0, this, [this, panel_index, archive_path, delete_entries, session_token]() {
-                    start_task_with_runner(
+                    bool const started = start_task_with_runner(
                         QStringLiteral("%1: %2").arg(
                             z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(6106)), archive_path),
                         z7::ui::runtime_support::strip_mnemonic(z7::ui::runtime_support::L(6106)),
@@ -1104,6 +1115,9 @@ namespace z7::ui::filemanager {
                                                                      session_token,
                                                                      panel.archive_display_source());
                         });
+                    if (started) {
+                        close_archive_image_preview_for_session(session_token);
+                    }
                 });
             });
     }

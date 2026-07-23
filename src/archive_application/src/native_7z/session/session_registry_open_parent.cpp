@@ -29,18 +29,6 @@ namespace z7::app {
             return shift < total_bits ? ram_size >> shift : 0;
         }
 
-        std::optional<uint64_t> declared_entry_size(CArc const& arc, UInt32 index) {
-            NWindows::NCOM::CPropVariant value;
-            if (arc.Archive->GetProperty(index, kpidSize, &value) != S_OK) {
-                return std::nullopt;
-            }
-            UInt64 converted = 0;
-            if (!ConvertPropVariantToUInt64(value, converted)) {
-                return std::nullopt;
-            }
-            return static_cast<uint64_t>(converted);
-        }
-
         size_t nested_memory_cap(std::optional<uint64_t> declared_size, size_t file_limit) {
             uint64_t const base = declared_size.value_or(static_cast<uint64_t>(file_limit));
             uint64_t const size_max = static_cast<uint64_t>(std::numeric_limits<size_t>::max());
@@ -63,43 +51,6 @@ namespace z7::app {
             CMyComPtr<ISequentialInStream> seq;
             CMyComPtr<IInStream> seekable;
         };
-
-        ExtractInvocationStatus extract_entry_to_stream(ArchiveOpenSession& parent,
-                                                        UInt32 entry_index,
-                                                        std::string const& password,
-                                                        ISequentialOutStream* output_stream,
-                                                        ArchiveBackendHooks const& hooks,
-                                                        std::atomic<bool>* cancel_requested,
-                                                        std::function<bool()> wait_while_paused) {
-            CArchiveLink& link = archive_session_link(parent);
-            CArc const* arc = link.GetArc();
-            if (arc == nullptr || arc->Archive == nullptr) {
-                ExtractInvocationStatus status;
-                status.hresult = E_FAIL;
-                return status;
-            }
-
-            ArchiveBackendHooks const parent_hooks = make_session_password_hooks(parent, hooks);
-            auto* callback = new NativeExtractCallback(arc,
-                                                       std::filesystem::path{},
-                                                       parent_hooks,
-                                                       cancel_requested,
-                                                       std::move(wait_while_paused),
-                                                       parent.display_path(),
-                                                       {},
-                                                       OverwriteMode::kOverwrite,
-                                                       ExtractPathMode::kFullPaths,
-                                                       std::string{},
-                                                       {},
-                                                       password,
-                                                       ExtractZoneIdMode::kNone,
-                                                       false,
-                                                       1);
-            callback->set_single_item_output_stream(output_stream);
-
-            UInt32 const indices[1] = {entry_index};
-            return invoke_archive_extract_with_callback(arc->Archive, indices, 1, /*test_mode=*/false, callback);
-        }
 
         // Try to obtain a seekable IInStream for `entry_index` from the parent
         // archive via IInArchiveGetStream. Returns S_OK with populated holder on
@@ -146,6 +97,56 @@ namespace z7::app {
         }
 
     } // namespace
+
+    std::optional<uint64_t> archive_declared_entry_size(CArc const& arc, UInt32 index) {
+        NWindows::NCOM::CPropVariant value;
+        if (arc.Archive->GetProperty(index, kpidSize, &value) != S_OK) {
+            return std::nullopt;
+        }
+        UInt64 converted = 0;
+        if (!ConvertPropVariantToUInt64(value, converted)) {
+            return std::nullopt;
+        }
+        return static_cast<uint64_t>(converted);
+    }
+
+    ExtractInvocationStatus extract_archive_session_entry_to_stream(
+        ArchiveOpenSession& session,
+        UInt32 entry_index,
+        ISequentialOutStream* output_stream,
+        ArchiveBackendHooks const& hooks,
+        std::atomic<bool>* cancel_requested,
+        std::function<bool()> wait_while_paused) {
+        CArchiveLink& link = archive_session_link(session);
+        CArc const* arc = link.GetArc();
+        if (arc == nullptr || arc->Archive == nullptr) {
+            ExtractInvocationStatus status;
+            status.hresult = E_FAIL;
+            return status;
+        }
+
+        ArchiveBackendHooks const session_hooks = make_session_password_hooks(session, hooks);
+        std::string const password = session.password_defined() ? session.password() : std::string{};
+        auto* callback = new NativeExtractCallback(arc,
+                                                   std::filesystem::path{},
+                                                   session_hooks,
+                                                   cancel_requested,
+                                                   std::move(wait_while_paused),
+                                                   session.display_path(),
+                                                   {},
+                                                   OverwriteMode::kOverwrite,
+                                                   ExtractPathMode::kFullPaths,
+                                                   std::string{},
+                                                   {},
+                                                   password,
+                                                   ExtractZoneIdMode::kNone,
+                                                   false,
+                                                   1);
+        callback->set_single_item_output_stream(output_stream);
+
+        UInt32 const indices[1] = {entry_index};
+        return invoke_archive_extract_with_callback(arc->Archive, indices, 1, /*test_mode=*/false, callback);
+    }
 
     struct ArchiveExternalFileLease::State {
         std::filesystem::path directory;
@@ -281,9 +282,6 @@ namespace z7::app {
         ArchiveOpenSessionNativeAccess::set_parent_entry_index(*child, resolved_index);
         reset_archive_session_open_state(*child);
         ArchiveOpenSessionState& child_state = archive_session_state(*child);
-        std::string const parent_extraction_password =
-            parent->password_defined() ? parent->password() : std::string{};
-
         auto finalize_success = [&](OpenArchiveSessionResult::Strategy used) {
             OpenArchiveDiagnostics inherited = archive_session_state(*parent).open_diagnostics;
             append_open_archive_diagnostics(inherited, child_state.open_diagnostics);
@@ -384,20 +382,19 @@ namespace z7::app {
         size_t const file_limit = request.size_budget != 0
                                     ? request.size_budget
                                     : compute_nested_open_budget(child->depth());
-        std::optional<uint64_t> const declared_size = declared_entry_size(*parent_arc, resolved_index);
+        std::optional<uint64_t> const declared_size = archive_declared_entry_size(*parent_arc, resolved_index);
         bool const prefer_file = declared_size.has_value()
                               && *declared_size > static_cast<uint64_t>(file_limit);
         size_t const memory_cap = nested_memory_cap(declared_size, file_limit);
 
         CMyComPtr<NativeSpillableOutStream> output;
         output.Attach(new NativeSpillableOutStream(memory_cap, resolved_entry_path, prefer_file));
-        ExtractInvocationStatus const extract_status = extract_entry_to_stream(*parent,
-                                                                               resolved_index,
-                                                                               parent_extraction_password,
-                                                                               output.Interface(),
-                                                                               hooks,
-                                                                               cancel_requested,
-                                                                               wait_while_paused);
+        ExtractInvocationStatus const extract_status = extract_archive_session_entry_to_stream(*parent,
+                                                                                                resolved_index,
+                                                                                                output.Interface(),
+                                                                                                hooks,
+                                                                                                cancel_requested,
+                                                                                                wait_while_paused);
         if (extract_status.password_requested || extract_status.wrong_password) {
             static_cast<OperationResult&>(result) = make_operation_failure<OperationResult>(
                 ArchiveErrorDomain::kPassword, "Password required or incorrect", 2);

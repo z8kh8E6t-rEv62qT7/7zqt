@@ -2,6 +2,7 @@
 // Role: MainWindow constructor and launcher default wiring.
 
 #include "main_window/deps.h"
+#include "main_window/image_preview/archive_image_preview_controller.h"
 #include "main_window/internal.h"
 
 namespace z7::ui::filemanager {
@@ -18,6 +19,7 @@ namespace z7::ui::filemanager {
         external_opener_ = &default_external_opener;
         backend_capabilities_ = ArchiveProcessRunner::query_backend_capabilities();
         setup_ui();
+        archive_image_preview_ = std::make_unique<ArchiveImagePreviewController>(this);
         load_folder_history();
         restore_panel_paths_from_settings();
         restore_main_window_geometry();
@@ -31,6 +33,7 @@ namespace z7::ui::filemanager {
     }
 
     MainWindow::~MainWindow() {
+        archive_image_preview_.reset();
         close_archive_sessions_for_shutdown(run_shutdown_cleanup_once());
         if (!task_ipc_owner_instance_id_.trimmed().isEmpty()) {
             z7::task_ipc_runtime::clear_task_ipc_event_notifier(task_ipc_owner_instance_id_, nullptr);

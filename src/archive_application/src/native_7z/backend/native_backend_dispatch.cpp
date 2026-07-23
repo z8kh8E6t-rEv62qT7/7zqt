@@ -110,6 +110,9 @@ namespace z7::app {
                     } else if constexpr (std::is_same_v<Request, GetEntryInfoRequest>) {
                         return invoke_typed_backend<Request, GetEntryInfoResult>(
                             *this, callbacks, typed_request, &NativeArchiveBackend::get_entry_info);
+                    } else if constexpr (std::is_same_v<Request, ReadArchiveEntryRequest>) {
+                        return invoke_typed_backend<Request, ReadArchiveEntryResult>(
+                            *this, callbacks, typed_request, &NativeArchiveBackend::read_archive_entry);
                     } else {
                         static_assert(sizeof(Request) == 0, "Unhandled archive request type");
                     }

@@ -51,11 +51,11 @@
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStorageInfo>
 #include <QStyleOptionViewItem>
 #include <QTableWidget>
-#include <QTemporaryDir>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -74,6 +74,8 @@
 #include "drag_drop/drag_aware_views.h"
 #include "drag_drop_policy_qt.h"
 #include "filemanager_task_progress_dialog.h"
+#include "main_window/archive/owned_temporary_directory.h"
+#include "native_process_qt.h"
 #include "official_lang_catalog.h"
 #include "options_dialog.h"
 #include "portable_settings.h"

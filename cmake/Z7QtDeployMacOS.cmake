@@ -458,6 +458,88 @@ if(Z7_MACOS_DEPLOY_RUNNER)
       "${Z7_MACOS_DEPLOY_APP_CONTENTS}")
   endfunction()
 
+  function(_z7_macos_deploy_verify_no_external_loads)
+    _z7_macos_deploy_find_required_program(
+      Z7_OTOOL_EXECUTABLE
+      otool)
+
+    file(GLOB_RECURSE _z7_macos_deploy_bundle_files
+      LIST_DIRECTORIES false
+      "${Z7_MACOS_DEPLOY_APP_CONTENTS}/*")
+    foreach(_z7_macos_deploy_bundle_file IN LISTS _z7_macos_deploy_bundle_files)
+      _z7_macos_deploy_is_sfx_module(
+        _z7_macos_deploy_skip_external_load_check
+        "${_z7_macos_deploy_bundle_file}")
+      if(_z7_macos_deploy_skip_external_load_check)
+        continue()
+      endif()
+
+      execute_process(
+        COMMAND
+          "${Z7_OTOOL_EXECUTABLE}"
+          -L
+          "${_z7_macos_deploy_bundle_file}"
+        RESULT_VARIABLE _z7_macos_deploy_otool_result
+        OUTPUT_VARIABLE _z7_macos_deploy_otool_output
+        ERROR_QUIET)
+      if(NOT _z7_macos_deploy_otool_result EQUAL 0)
+        continue()
+      endif()
+
+      execute_process(
+        COMMAND
+          "${Z7_OTOOL_EXECUTABLE}"
+          -D
+          "${_z7_macos_deploy_bundle_file}"
+        RESULT_VARIABLE _z7_macos_deploy_id_result
+        OUTPUT_VARIABLE _z7_macos_deploy_id_output
+        ERROR_QUIET)
+      set(_z7_macos_deploy_install_id "")
+      if(_z7_macos_deploy_id_result EQUAL 0)
+        string(REPLACE "\n" ";" _z7_macos_deploy_id_lines
+          "${_z7_macos_deploy_id_output}")
+        list(FILTER _z7_macos_deploy_id_lines EXCLUDE REGEX "^$")
+        list(LENGTH _z7_macos_deploy_id_lines _z7_macos_deploy_id_count)
+        if(_z7_macos_deploy_id_count GREATER 1)
+          list(GET _z7_macos_deploy_id_lines 1 _z7_macos_deploy_install_id)
+          string(STRIP
+            "${_z7_macos_deploy_install_id}"
+            _z7_macos_deploy_install_id)
+        endif()
+      endif()
+
+      string(REPLACE "\n" ";" _z7_macos_deploy_otool_lines
+        "${_z7_macos_deploy_otool_output}")
+      foreach(_z7_macos_deploy_otool_line IN LISTS _z7_macos_deploy_otool_lines)
+        string(STRIP
+          "${_z7_macos_deploy_otool_line}"
+          _z7_macos_deploy_otool_line)
+        if(_z7_macos_deploy_otool_line STREQUAL "" OR
+           _z7_macos_deploy_otool_line MATCHES ":$" OR
+           NOT _z7_macos_deploy_otool_line MATCHES
+             " \\(compatibility version ")
+          continue()
+        endif()
+
+        string(REGEX REPLACE
+          " \\(.*$"
+          ""
+          _z7_macos_deploy_load
+          "${_z7_macos_deploy_otool_line}")
+        if(NOT _z7_macos_deploy_load STREQUAL
+             _z7_macos_deploy_install_id AND
+           IS_ABSOLUTE "${_z7_macos_deploy_load}" AND
+           NOT _z7_macos_deploy_load MATCHES "^/usr/lib/" AND
+           NOT _z7_macos_deploy_load MATCHES "^/System/Library/")
+          message(FATAL_ERROR
+            "Deployed binary has an external absolute load:\n"
+            "  binary: ${_z7_macos_deploy_bundle_file}\n"
+            "  load: ${_z7_macos_deploy_load}")
+        endif()
+      endforeach()
+    endforeach()
+  endfunction()
+
   _z7_macos_deploy_require(Z7_MACDEPLOYQT_EXECUTABLE)
   _z7_macos_deploy_require(Z7_CODESIGN_EXECUTABLE)
   _z7_macos_deploy_require(Z7_MACOS_DEPLOY_APP)
@@ -507,6 +589,8 @@ if(Z7_MACOS_DEPLOY_RUNNER)
     _z7_macos_deploy_verify_sfx_absolute_loads()
     _z7_macos_deploy_verify_llvm_runtime()
   endif()
+
+  _z7_macos_deploy_verify_no_external_loads()
 
   _z7_macos_deploy_run_process(
     "codesign"
@@ -577,6 +661,10 @@ list(REMOVE_DUPLICATES _z7_macos_deploy_qt_lib_hints)
 set(_z7_macos_deploy_macdeployqt_libpaths
   "$<TARGET_FILE_DIR:z7_shared_runtime>"
   "$<TARGET_FILE_DIR:z7_third_party>")
+if(Z7_FFMPEG_LIBRARY_DIR)
+  list(APPEND _z7_macos_deploy_macdeployqt_libpaths
+    "${Z7_FFMPEG_LIBRARY_DIR}")
+endif()
 foreach(_z7_macos_deploy_qt_lib_hint IN LISTS _z7_macos_deploy_qt_lib_hints)
   if(EXISTS "${_z7_macos_deploy_qt_lib_hint}")
     list(APPEND _z7_macos_deploy_macdeployqt_libpaths

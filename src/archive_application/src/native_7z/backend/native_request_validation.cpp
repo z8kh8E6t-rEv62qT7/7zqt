@@ -377,6 +377,17 @@ namespace z7::app {
         return std::nullopt;
     }
 
+    std::optional<OperationResult> validate_request(ReadArchiveEntryRequest const& request) {
+        constexpr uint64_t kMaximumReadBytes = 128ull * 1024ull * 1024ull;
+        if (!request.session_token.is_valid()) {
+            return invalid_request("ReadArchiveEntry requires valid session token");
+        }
+        if (request.max_bytes == 0 || request.max_bytes > kMaximumReadBytes) {
+            return invalid_request("ReadArchiveEntry max_bytes must be between 1 and 134217728");
+        }
+        return std::nullopt;
+    }
+
     std::optional<OperationResult> validate_request(NavigateRequest const& request) {
         if (request.to_path.empty()) {
             return invalid_request("Navigate request requires destination path");

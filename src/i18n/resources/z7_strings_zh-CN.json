@@ -81,6 +81,14 @@
         "failed_launch": "无法启动外部打开。",
         "failed_launch_for_paths": "无法启动外部打开：\n{0}",
         "no_external_paths": "没有可用于外部打开的路径。"
+      },
+      "image_preview": {
+        "previous": "上一个",
+        "next": "下一个",
+        "loading": "正在加载…",
+        "read_failed": "无法从压缩包读取此图片。",
+        "decode_failed": "无法解码此图片。",
+        "animation_too_large": "动画超过 256 MiB，仅显示首帧。"
       }
     },
     "navigation": {

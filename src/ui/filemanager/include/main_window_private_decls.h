@@ -107,10 +107,10 @@ void reload_archive_virtual_directories_serially(QVector<int> panel_indexes,
 void close_archive_view_for_panel(int panel_index, std::function<void(bool)> const& finished_cb = {});
 void close_archive_sessions_async(QVector<z7::app::ArchiveSessionToken> tokens,
                                   std::function<void(bool)> const& finished_cb = {});
-QSharedPointer<QTemporaryDir> create_temporary_directory_with_prefix(QString const& prefix,
-                                                                     QString const& failure_caption);
-QSharedPointer<QTemporaryDir> create_archive_open_temporary_directory(QString const& failure_caption);
-QSharedPointer<QTemporaryDir> create_archive_drag_temporary_directory(QString const& failure_caption);
+QSharedPointer<OwnedTemporaryDirectory> create_temporary_directory_with_prefix(QString const& prefix,
+                                                                               QString const& failure_caption);
+QSharedPointer<OwnedTemporaryDirectory> create_archive_open_temporary_directory(QString const& failure_caption);
+QSharedPointer<OwnedTemporaryDirectory> create_archive_drag_temporary_directory(QString const& failure_caption);
 void materialize_archive_drag_entries_for_panel(
     int panel_index,
     QStringList const& entries,
@@ -154,6 +154,10 @@ struct ArchiveOpenSelectionTarget {
 bool activate_archive_parent_link_for_panel(int panel_index, QModelIndex const& view_index = QModelIndex());
 void activate_panel_selection(Qt::KeyboardModifiers modifiers);
 void open_selected_archive_entries(bool try_internal);
+bool try_open_archive_image_preview_for_panel(int panel_index,
+                                              QString const& entry_path,
+                                              std::optional<uint32_t> archive_index);
+void close_archive_image_preview_for_session(z7::app::ArchiveSessionToken session_token);
 void open_selected_filesystem_paths_including_parent_link(bool try_internal);
 ArchiveOpenSelectionTarget resolve_archive_open_selection_target(int panel_index) const;
 void open_focused_item_as_internal(QString const& archive_type_hint = QString());
@@ -255,31 +259,42 @@ struct StartupOpenTargetOptions {
 void open_startup_target(QString const& path, QString const& archive_type_hint = QString());
 void open_startup_target(QString const& path, StartupOpenTargetOptions options);
 
-struct NativeProcessSnapshotEntry {
-    quint32 process_id = 0;
-    quint32 parent_process_id = 0;
-    quint64 start_time_token = 0;
+private:
+struct TrackedNativeProcess {
+    z7::platform::qt::NativeProcessIdentity identity;
+    std::unique_ptr<z7::platform::qt::NativeProcessExitMonitor> monitor;
 };
 
-private:
 struct ArchiveTempSession {
     ArchiveTempSessionPurpose purpose = ArchiveTempSessionPurpose::kViewEdit;
-    QSharedPointer<QTemporaryDir> temp_dir;
+    QSharedPointer<OwnedTemporaryDirectory> temp_dir;
     std::optional<z7::app::ArchiveExternalFileLease> external_file_lease;
     QString archive_path;
     QString archive_display_source;
     QString archive_type_hint;
     z7::app::ArchiveSessionToken session_token;
+    int source_panel_index = -1;
     QString command_caption;
     QVector<ArchiveTempFileSnapshot> file_snapshots;
     QStringList extracted_paths;
     QVector<QPointer<QProcess>> tracked_processes;
-    QPointer<QProcess> process;
 #if defined(Q_OS_WIN)
     QVector<void*> tracked_process_handles;
 #endif
     int pending_open_outside_trackers = 0;
     OpenOutsideCleanupPolicy open_outside_cleanup_policy = OpenOutsideCleanupPolicy::kRetainUntilClose;
+    std::vector<TrackedNativeProcess> tracked_native_processes;
+    QVector<z7::platform::qt::NativeProcessIdentity> known_native_processes;
+    z7::platform::qt::NativeProcessIdentity launcher_identity;
+    qint64 launcher_pid = 0;
+    qint64 launcher_process_group_id = 0;
+    QString launcher_executable_path;
+    QString launcher_executable_name;
+    std::chrono::steady_clock::time_point launch_started_at;
+    bool launcher_exit_observed = false;
+    bool quick_handoff_checked = false;
+    bool tracking_unresolved = false;
+    bool writeback_abandoned = false;
     bool process_finished_handled = false;
 };
 
@@ -317,6 +332,18 @@ void restore_archive_writeback_plan_for_panel(int panel_index,
                                               std::function<void(bool)> const& finished_cb = {});
 void retain_archive_temp_session(QSharedPointer<ArchiveTempSession> const& session);
 void release_archive_temp_session(QSharedPointer<ArchiveTempSession> const& session);
+void preserve_archive_temp_session(QSharedPointer<ArchiveTempSession> const& session);
+void abandon_archive_temp_sessions_for_panel(int panel_index);
+void begin_archive_temp_session_process_tracking(QSharedPointer<ArchiveTempSession> const& session,
+                                                 qint64 launcher_pid,
+                                                 QString const& launcher_program,
+                                                 QString const& working_dir);
+bool track_archive_temp_session_process(QSharedPointer<ArchiveTempSession> const& session,
+                                        z7::platform::qt::NativeProcessInfo const& process);
+void on_archive_temp_session_native_process_finished(QSharedPointer<ArchiveTempSession> const& session,
+                                                     z7::platform::qt::NativeProcessIdentity identity);
+void resolve_archive_temp_session_process_exit(QSharedPointer<ArchiveTempSession> const& session,
+                                               z7::platform::qt::NativeProcessIdentity exited_identity);
 void launch_archive_temp_session_outside(QSharedPointer<ArchiveTempSession> const& session,
                                          QStringList const& paths,
                                          QString const& working_dir);
@@ -676,8 +703,8 @@ bool run_external_command_with_targets(QString const& command_line,
                                        QStringList const& targets,
                                        QString const& working_dir,
                                        QString* error_message = nullptr,
-                                       bool controlled_process = false,
-                                       QProcess** started_process = nullptr);
+                                       qint64* started_pid = nullptr,
+                                       QString* started_program = nullptr);
 bool resolve_diff_targets(QString* path1, QString* path2) const;
 
 struct SevenZipMenuState {
@@ -803,6 +830,7 @@ QVector<QMenu*> encoding_region_menus_;
 QAction *options_action_ = nullptr, *benchmark_action_ = nullptr, *benchmark2_action_ = nullptr,
         *temp_files_action_ = nullptr, *contents_action_ = nullptr, *about_action_ = nullptr;
 QVector<std::shared_ptr<RunningTaskContext>> active_runner_tasks_;
+std::unique_ptr<ArchiveImagePreviewController> archive_image_preview_;
 QTimer* auto_refresh_timer_ = nullptr;
 bool confirm_delete_ = true;
 QStringList path_history_;

@@ -26,6 +26,8 @@ set(Z7_UI_FILEMANAGER_MAIN_WINDOW_SOURCES
   src/main_window/actions/action_tasks.cpp
   src/main_window/actions/task.cpp
   src/main_window/archive/archive_open_actions_tracking_platform.cpp
+  src/main_window/archive/owned_temporary_directory.h
+  src/main_window/archive/owned_temporary_directory.cpp
   src/main_window/archive/archive_open_actions.cpp
   src/main_window/archive/archive_open_actions_inside.cpp
   src/main_window/archive/archive_open_actions_outside.cpp
@@ -49,6 +51,12 @@ set(Z7_UI_FILEMANAGER_MAIN_WINDOW_SOURCES
   src/main_window/drag_drop/drop_logic.h
   src/main_window/drag_drop/drop_logic.cpp
   src/main_window/drag_drop/drop_logic_decision.cpp
+  src/main_window/image_preview/ffmpeg_image_decoder.h
+  src/main_window/image_preview/ffmpeg_image_decoder.cpp
+  src/main_window/image_preview/archive_image_preview_window.h
+  src/main_window/image_preview/archive_image_preview_window.cpp
+  src/main_window/image_preview/archive_image_preview_controller.h
+  src/main_window/image_preview/archive_image_preview_controller.cpp
   src/main_window/model/model.h
   src/main_window/model/directory_list_model_data.cpp
   src/main_window/model/directory_list_model_render.cpp
@@ -127,6 +135,7 @@ function(z7_filemanager_configure_object_target target_name)
       Qt6::Core
       Qt6::Concurrent
       Qt6::Widgets
+      PkgConfig::Z7_FFMPEG
       z7_shell_integration_menu
       z7_platform_qt
       z7_task_ipc_runtime)
@@ -188,12 +197,13 @@ target_link_libraries(z7_ui_filemanager
     z7_ui_archive_support
     z7_ui_runtime_support
     z7_ui_widgets
+    z7_platform_qt
     Qt6::Core
     Qt6::Concurrent
     Qt6::Widgets
   PRIVATE
+    PkgConfig::Z7_FFMPEG
     z7_shell_integration_menu
-    z7_platform_qt
     z7_task_ipc_runtime)
 
 if(APPLE AND TARGET z7_macos_integration_core)

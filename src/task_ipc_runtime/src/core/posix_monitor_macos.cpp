@@ -2,6 +2,7 @@
 
 #if defined(Q_OS_MACOS)
 
+#include <QCoreApplication>
 #include <condition_variable>
 #include <cstdint>
 #include <dispatch/dispatch.h>
@@ -13,10 +14,7 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
 
         class MacPosixTaskIpcPlatformMonitor final : public PosixTaskIpcPlatformMonitor {
         public:
-            ~MacPosixTaskIpcPlatformMonitor() override {
-                stop_unclaimed_timer();
-                stop_worker_exit_monitor();
-            }
+            ~MacPosixTaskIpcPlatformMonitor() override { stop_unclaimed_timer(); }
 
             bool start_unclaimed_timer(qint64 timeout_msecs,
                                        std::function<void()> callback,
@@ -24,8 +22,8 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                 if (error_message != nullptr) {
                     error_message->clear();
                 }
-                std::lock_guard<std::mutex> lock(unclaimed_mutex_);
-                if (unclaimed_source_ != nullptr) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (source_ != nullptr) {
                     return true;
                 }
 
@@ -38,12 +36,12 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                     return false;
                 }
 
-                unclaimed_callback_ = std::move(callback);
-                unclaimed_cancel_complete_ = false;
-                unclaimed_source_ = source;
+                callback_ = std::move(callback);
+                cancel_complete_ = false;
+                source_ = source;
                 dispatch_set_context(source, this);
-                dispatch_source_set_event_handler_f(source, &MacPosixTaskIpcPlatformMonitor::unclaimed_event);
-                dispatch_source_set_cancel_handler_f(source, &MacPosixTaskIpcPlatformMonitor::unclaimed_cancel);
+                dispatch_source_set_event_handler_f(source, &MacPosixTaskIpcPlatformMonitor::timer_event);
+                dispatch_source_set_cancel_handler_f(source, &MacPosixTaskIpcPlatformMonitor::timer_cancel);
                 dispatch_source_set_timer(
                     source,
                     dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(timeout_msecs) * NSEC_PER_MSEC),
@@ -53,57 +51,11 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                 return true;
             }
 
-            bool start_worker_exit_monitor(qint64 worker_pid,
-                                           std::function<void()> callback,
-                                           QString* error_message) override {
-                if (error_message != nullptr) {
-                    error_message->clear();
-                }
-                if (worker_pid <= 0) {
-                    if (error_message != nullptr) {
-                        *error_message = QStringLiteral("Task IPC worker PID is invalid.");
-                    }
-                    return false;
-                }
-
-                {
-                    std::lock_guard<std::mutex> lock(worker_mutex_);
-                    if (worker_source_ != nullptr) {
-                        return true;
-                    }
-
-                    dispatch_source_t source =
-                        dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC,
-                                               static_cast<uintptr_t>(static_cast<pid_t>(worker_pid)),
-                                               DISPATCH_PROC_EXIT,
-                                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-                    if (source == nullptr) {
-                        if (error_message != nullptr) {
-                            *error_message = QStringLiteral("Failed to create task IPC worker-exit monitor.");
-                        }
-                        return false;
-                    }
-
-                    worker_callback_ = std::move(callback);
-                    worker_cancel_complete_ = false;
-                    worker_source_ = source;
-                    dispatch_set_context(source, this);
-                    dispatch_source_set_event_handler_f(source, &MacPosixTaskIpcPlatformMonitor::worker_event);
-                    dispatch_source_set_cancel_handler_f(source, &MacPosixTaskIpcPlatformMonitor::worker_cancel);
-                    dispatch_resume(source);
-                }
-
-                if (!process_is_alive(worker_pid)) {
-                    handle_worker_event();
-                }
-                return true;
-            }
-
             void stop_unclaimed_timer() override {
                 dispatch_source_t source = nullptr;
                 {
-                    std::lock_guard<std::mutex> lock(unclaimed_mutex_);
-                    source = unclaimed_source_;
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    source = source_;
                 }
                 if (source == nullptr) {
                     return;
@@ -111,84 +63,44 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
 
                 dispatch_source_cancel(source);
                 {
-                    std::unique_lock<std::mutex> lock(unclaimed_mutex_);
-                    unclaimed_cv_.wait(lock, [this]() { return unclaimed_cancel_complete_; });
-                    if (unclaimed_source_ == source) {
-                        unclaimed_source_ = nullptr;
+                    std::unique_lock<std::mutex> lock(mutex_);
+                    condition_.wait(lock, [this]() { return cancel_complete_; });
+                    if (source_ == source) {
+                        source_ = nullptr;
                     }
-                    unclaimed_cancel_complete_ = false;
-                    unclaimed_callback_ = {};
-                }
-                dispatch_release(source);
-            }
-
-            void stop_worker_exit_monitor() override {
-                dispatch_source_t source = nullptr;
-                {
-                    std::lock_guard<std::mutex> lock(worker_mutex_);
-                    source = worker_source_;
-                }
-                if (source == nullptr) {
-                    return;
-                }
-
-                dispatch_source_cancel(source);
-                {
-                    std::unique_lock<std::mutex> lock(worker_mutex_);
-                    worker_cv_.wait(lock, [this]() { return worker_cancel_complete_; });
-                    if (worker_source_ == source) {
-                        worker_source_ = nullptr;
-                    }
-                    worker_cancel_complete_ = false;
-                    worker_callback_ = {};
+                    cancel_complete_ = false;
+                    callback_ = {};
                 }
                 dispatch_release(source);
             }
 
         private:
-            static void unclaimed_event(void* context) {
+            static void timer_event(void* context) {
                 auto* self = static_cast<MacPosixTaskIpcPlatformMonitor*>(context);
                 if (self != nullptr) {
-                    self->handle_unclaimed_event();
+                    self->handle_event();
                 }
             }
 
-            static void unclaimed_cancel(void* context) {
+            static void timer_cancel(void* context) {
                 auto* self = static_cast<MacPosixTaskIpcPlatformMonitor*>(context);
-                if (self != nullptr) {
-                    {
-                        std::lock_guard<std::mutex> lock(self->unclaimed_mutex_);
-                        self->unclaimed_cancel_complete_ = true;
-                    }
-                    self->unclaimed_cv_.notify_all();
+                if (self == nullptr) {
+                    return;
                 }
+                {
+                    std::lock_guard<std::mutex> lock(self->mutex_);
+                    self->cancel_complete_ = true;
+                }
+                self->condition_.notify_all();
             }
 
-            static void worker_event(void* context) {
-                auto* self = static_cast<MacPosixTaskIpcPlatformMonitor*>(context);
-                if (self != nullptr) {
-                    self->handle_worker_event();
-                }
-            }
-
-            static void worker_cancel(void* context) {
-                auto* self = static_cast<MacPosixTaskIpcPlatformMonitor*>(context);
-                if (self != nullptr) {
-                    {
-                        std::lock_guard<std::mutex> lock(self->worker_mutex_);
-                        self->worker_cancel_complete_ = true;
-                    }
-                    self->worker_cv_.notify_all();
-                }
-            }
-
-            void handle_unclaimed_event() {
+            void handle_event() {
                 std::function<void()> callback;
                 dispatch_source_t source = nullptr;
                 {
-                    std::lock_guard<std::mutex> lock(unclaimed_mutex_);
-                    callback = unclaimed_callback_;
-                    source = unclaimed_source_;
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    callback = callback_;
+                    source = source_;
                 }
                 if (source != nullptr) {
                     dispatch_source_cancel(source);
@@ -198,33 +110,11 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
                 }
             }
 
-            void handle_worker_event() {
-                std::function<void()> callback;
-                dispatch_source_t source = nullptr;
-                {
-                    std::lock_guard<std::mutex> lock(worker_mutex_);
-                    callback = worker_callback_;
-                    source = worker_source_;
-                }
-                if (source != nullptr) {
-                    dispatch_source_cancel(source);
-                }
-                if (callback) {
-                    callback();
-                }
-            }
-
-            std::mutex unclaimed_mutex_;
-            std::condition_variable unclaimed_cv_;
-            dispatch_source_t unclaimed_source_ = nullptr;
-            std::function<void()> unclaimed_callback_;
-            bool unclaimed_cancel_complete_ = false;
-
-            std::mutex worker_mutex_;
-            std::condition_variable worker_cv_;
-            dispatch_source_t worker_source_ = nullptr;
-            std::function<void()> worker_callback_;
-            bool worker_cancel_complete_ = false;
+            std::mutex mutex_;
+            std::condition_variable condition_;
+            dispatch_source_t source_ = nullptr;
+            std::function<void()> callback_;
+            bool cancel_complete_ = false;
         };
 
     } // namespace
@@ -237,6 +127,22 @@ namespace z7::task_ipc_runtime::task_ipc_internal {
         if (error_message != nullptr) {
             error_message->clear();
         }
+        qint64 const current_pid = static_cast<qint64>(QCoreApplication::applicationPid());
+        z7::platform::qt::NativeProcessSnapshot const snapshot = z7::platform::qt::native_process_snapshot();
+        z7::platform::qt::NativeProcessInfo const* process = snapshot.ok ? snapshot.find_pid(current_pid) : nullptr;
+        if (process == nullptr) {
+            if (error_message != nullptr) {
+                *error_message =
+                    snapshot.ok ? QStringLiteral("Cannot inspect the current process.") : snapshot.error_message;
+            }
+            return false;
+        }
+        std::unique_ptr<z7::platform::qt::NativeProcessExitMonitor> monitor =
+            z7::platform::qt::NativeProcessExitMonitor::create(process->identity, []() {}, error_message);
+        if (monitor == nullptr) {
+            return false;
+        }
+        monitor->cancel();
         return true;
     }
 

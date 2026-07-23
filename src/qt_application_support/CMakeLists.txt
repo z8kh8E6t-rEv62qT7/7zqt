@@ -2,6 +2,7 @@ add_library(z7_platform_qt STATIC
   include/app_startup_qt.h
   include/drag_drop_policy_qt.h
   include/filemanager_instance_launcher.h
+  include/native_process_qt.h
   include/portable_settings.h
   include/settings_store_qt.h
   src/settings_store_qt.cpp
@@ -10,7 +11,18 @@ add_library(z7_platform_qt STATIC
   src/app_startup_qt.cpp
   src/drag_drop_policy_qt.cpp
   src/filemanager_instance_launcher.cpp
+  src/native_process_qt.cpp
 )
+
+if(APPLE)
+  target_sources(z7_platform_qt PRIVATE src/native_process_qt_macos.cpp)
+elseif(WIN32)
+  target_sources(z7_platform_qt PRIVATE src/native_process_qt_windows.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_sources(z7_platform_qt PRIVATE src/native_process_qt_linux.cpp)
+else()
+  target_sources(z7_platform_qt PRIVATE src/native_process_qt_unsupported.cpp)
+endif()
 
 add_library(z7::platform_qt ALIAS z7_platform_qt)
 
